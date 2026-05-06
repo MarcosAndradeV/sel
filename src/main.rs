@@ -4,6 +4,8 @@ use lex_just_parse::parser::*;
 use lex_just_parse::try_parse;
 
 use std::collections::HashMap;
+use std::env::args;
+use std::fs;
 use std::io::Write as _;
 use std::io::stdin;
 use std::io::stdout;
@@ -18,7 +20,6 @@ pub struct Env {
 }
 
 impl Env {
-    #[allow(unused)]
     fn new(parent: Option<Rc<RefCell<Env>>>) -> Self {
         Self {
             bindings: HashMap::new(),
@@ -55,8 +56,16 @@ impl Env {
 fn main() -> Result<()> {
     let env = Rc::new(RefCell::new(Env::default()));
     sel_core::load(env.clone());
-    println!("Welcome to the Sel Scheme repl. (Use `quit` to exit)");
-    repl("sel> ", env)
+    let mut args = args().skip(1).rev();
+    if let Some(arg) = args.next() {
+        let src = fs::read_to_string(arg)?;
+        let program = format!("(begin {src})");
+        let ast = read(&program)?;
+        eval(ast, env).map(|_|())
+    } else {
+        println!("Welcome to the Sel Scheme repl. (Use `quit` to exit)");
+        repl("sel> ", env)
+    }
 }
 
 fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<()> {
@@ -196,8 +205,7 @@ enum Value {
     Boolean(bool),
     Symbol(String),
     List(Vec<Value>),
-    NativeFunction(fn(Vec<Value>) -> Result<Value>),
-    #[allow(unused)]
+    NativeFunction(fn(Vec<Value>, Rc<RefCell<Env>>) -> Result<Value>),
     Closure {
         params: Vec<String>,
         body: Ast,
@@ -462,7 +470,7 @@ fn eval(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Value> {
             }
 
             match func_val {
-                Value::NativeFunction(f) => f(args),
+                Value::NativeFunction(f) => f(args, env),
                 Value::Closure {
                     params,
                     body,
@@ -516,7 +524,7 @@ mod sel_core {
 
     use crate::{Env, Value};
 
-    pub fn sum(args: Vec<Value>) -> Result<Value> {
+    pub fn sum(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         let mut int_sum = 0;
         let mut float_sum = 0.0;
         let mut is_float = false;
@@ -524,7 +532,11 @@ mod sel_core {
         for arg in args {
             match arg {
                 Value::Integer(i) => {
-                    if is_float { float_sum += i as f64; } else { int_sum += i; }
+                    if is_float {
+                        float_sum += i as f64;
+                    } else {
+                        int_sum += i;
+                    }
                 }
                 Value::Float(f) => {
                     if !is_float {
@@ -537,29 +549,46 @@ mod sel_core {
                 _ => anyhow::bail!("Invalid argument to +: expected number"),
             }
         }
-        if is_float { Ok(Value::Float(float_sum)) } else { Ok(Value::Integer(int_sum)) }
+        if is_float {
+            Ok(Value::Float(float_sum))
+        } else {
+            Ok(Value::Integer(int_sum))
+        }
     }
 
-    pub fn sub(args: Vec<Value>) -> Result<Value> {
-        if args.is_empty() { anyhow::bail!("Expected at least 1 argument to -"); }
+    pub fn sub(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.is_empty() {
+            anyhow::bail!("Expected at least 1 argument to -");
+        }
         let mut is_float = false;
         let mut int_val = 0;
         let mut float_val = 0.0;
 
         match args[0] {
             Value::Integer(i) => int_val = i,
-            Value::Float(f) => { is_float = true; float_val = f; }
+            Value::Float(f) => {
+                is_float = true;
+                float_val = f;
+            }
             _ => anyhow::bail!("Invalid argument to -: expected number"),
         }
 
         if args.len() == 1 {
-            return if is_float { Ok(Value::Float(-float_val)) } else { Ok(Value::Integer(-int_val)) };
+            return if is_float {
+                Ok(Value::Float(-float_val))
+            } else {
+                Ok(Value::Integer(-int_val))
+            };
         }
 
         for arg in args.into_iter().skip(1) {
             match arg {
                 Value::Integer(i) => {
-                    if is_float { float_val -= i as f64; } else { int_val -= i; }
+                    if is_float {
+                        float_val -= i as f64;
+                    } else {
+                        int_val -= i;
+                    }
                 }
                 Value::Float(f) => {
                     if !is_float {
@@ -572,10 +601,14 @@ mod sel_core {
                 _ => anyhow::bail!("Invalid argument to -: expected number"),
             }
         }
-        if is_float { Ok(Value::Float(float_val)) } else { Ok(Value::Integer(int_val)) }
+        if is_float {
+            Ok(Value::Float(float_val))
+        } else {
+            Ok(Value::Integer(int_val))
+        }
     }
 
-    pub fn mul(args: Vec<Value>) -> Result<Value> {
+    pub fn mul(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         let mut int_val = 1;
         let mut float_val = 1.0;
         let mut is_float = false;
@@ -583,7 +616,11 @@ mod sel_core {
         for arg in args {
             match arg {
                 Value::Integer(i) => {
-                    if is_float { float_val *= i as f64; } else { int_val *= i; }
+                    if is_float {
+                        float_val *= i as f64;
+                    } else {
+                        int_val *= i;
+                    }
                 }
                 Value::Float(f) => {
                     if !is_float {
@@ -596,12 +633,18 @@ mod sel_core {
                 _ => anyhow::bail!("Invalid argument to *: expected number"),
             }
         }
-        if is_float { Ok(Value::Float(float_val)) } else { Ok(Value::Integer(int_val)) }
+        if is_float {
+            Ok(Value::Float(float_val))
+        } else {
+            Ok(Value::Integer(int_val))
+        }
     }
 
-    pub fn div(args: Vec<Value>) -> Result<Value> {
-        if args.is_empty() { anyhow::bail!("Expected at least 1 argument to /"); }
-        
+    pub fn div(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.is_empty() {
+            anyhow::bail!("Expected at least 1 argument to /");
+        }
+
         if args.len() == 1 {
             match args[0] {
                 Value::Integer(i) => return Ok(Value::Float(1.0 / i as f64)),
@@ -626,8 +669,10 @@ mod sel_core {
         Ok(Value::Float(float_val))
     }
 
-    pub fn modulo(args: Vec<Value>) -> Result<Value> {
-        if args.len() != 2 { anyhow::bail!("modulo requires exactly 2 arguments"); }
+    pub fn modulo(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.len() != 2 {
+            anyhow::bail!("modulo requires exactly 2 arguments");
+        }
         let a = match args[0] {
             Value::Integer(i) => i,
             _ => anyhow::bail!("modulo requires integer"),
@@ -640,7 +685,9 @@ mod sel_core {
     }
 
     fn compare_nums(args: Vec<Value>, op: fn(f64, f64) -> bool) -> Result<Value> {
-        if args.len() < 2 { anyhow::bail!("comparison requires at least 2 arguments"); }
+        if args.len() < 2 {
+            anyhow::bail!("comparison requires at least 2 arguments");
+        }
         let mut prev = match args[0] {
             Value::Integer(i) => i as f64,
             Value::Float(f) => f,
@@ -660,18 +707,30 @@ mod sel_core {
         Ok(Value::Boolean(true))
     }
 
-    pub fn num_eq(args: Vec<Value>) -> Result<Value> { compare_nums(args, |a, b| a == b) }
-    pub fn num_lt(args: Vec<Value>) -> Result<Value> { compare_nums(args, |a, b| a < b) }
-    pub fn num_gt(args: Vec<Value>) -> Result<Value> { compare_nums(args, |a, b| a > b) }
-    pub fn num_lte(args: Vec<Value>) -> Result<Value> { compare_nums(args, |a, b| a <= b) }
-    pub fn num_gte(args: Vec<Value>) -> Result<Value> { compare_nums(args, |a, b| a >= b) }
+    pub fn num_eq(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        compare_nums(args, |a, b| a == b)
+    }
+    pub fn num_lt(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        compare_nums(args, |a, b| a < b)
+    }
+    pub fn num_gt(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        compare_nums(args, |a, b| a > b)
+    }
+    pub fn num_lte(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        compare_nums(args, |a, b| a <= b)
+    }
+    pub fn num_gte(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        compare_nums(args, |a, b| a >= b)
+    }
 
-    pub fn cons(mut args: Vec<Value>) -> Result<Value> {
-        if args.len() != 2 { anyhow::bail!("cons requires exactly 2 arguments"); }
+    pub fn cons(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.len() != 2 {
+            anyhow::bail!("cons requires exactly 2 arguments");
+        }
         let tail = args.pop().unwrap();
         let head = args.pop().unwrap();
         match tail {
-            Value::List(mut l) => {
+            Value::List(l) => {
                 let mut new_l = vec![head];
                 new_l.extend(l);
                 Ok(Value::List(new_l))
@@ -681,30 +740,42 @@ mod sel_core {
         }
     }
 
-    pub fn car(mut args: Vec<Value>) -> Result<Value> {
-        if args.len() != 1 { anyhow::bail!("car requires exactly 1 argument"); }
+    pub fn car(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.len() != 1 {
+            anyhow::bail!("car requires exactly 1 argument");
+        }
         match args.pop().unwrap() {
             Value::List(mut l) => {
-                if l.is_empty() { anyhow::bail!("car on empty list"); }
+                if l.is_empty() {
+                    anyhow::bail!("car on empty list");
+                }
                 Ok(l.remove(0))
             }
             _ => anyhow::bail!("car requires a list"),
         }
     }
 
-    pub fn cdr(mut args: Vec<Value>) -> Result<Value> {
-        if args.len() != 1 { anyhow::bail!("cdr requires exactly 1 argument"); }
+    pub fn cdr(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.len() != 1 {
+            anyhow::bail!("cdr requires exactly 1 argument");
+        }
         match args.pop().unwrap() {
             Value::List(mut l) => {
-                if l.is_empty() { anyhow::bail!("cdr on empty list"); }
+                if l.is_empty() {
+                    anyhow::bail!("cdr on empty list");
+                }
                 l.remove(0);
-                Ok(if l.is_empty() { Value::Nil } else { Value::List(l) })
+                Ok(if l.is_empty() {
+                    Value::Nil
+                } else {
+                    Value::List(l)
+                })
             }
             _ => anyhow::bail!("cdr requires a list"),
         }
     }
 
-    pub fn list(args: Vec<Value>) -> Result<Value> {
+    pub fn list(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.is_empty() {
             Ok(Value::Nil)
         } else {
@@ -712,40 +783,58 @@ mod sel_core {
         }
     }
 
-    pub fn is_null(args: Vec<Value>) -> Result<Value> {
-        if args.len() != 1 { anyhow::bail!("null? requires exactly 1 argument"); }
+    pub fn is_null(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.len() != 1 {
+            anyhow::bail!("isnull requires exactly 1 argument");
+        }
         match &args[0] {
             Value::Nil => Ok(Value::Boolean(true)),
             Value::List(l) if l.is_empty() => Ok(Value::Boolean(true)),
             _ => Ok(Value::Boolean(false)),
         }
     }
-    
-    pub fn is_pair(args: Vec<Value>) -> Result<Value> {
-        if args.len() != 1 { anyhow::bail!("pair? requires exactly 1 argument"); }
+
+    pub fn is_pair(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.len() != 1 {
+            anyhow::bail!("ispair requires exactly 1 argument");
+        }
         match &args[0] {
             Value::List(l) if !l.is_empty() => Ok(Value::Boolean(true)),
             _ => Ok(Value::Boolean(false)),
         }
     }
 
-    pub fn is_number(args: Vec<Value>) -> Result<Value> {
-        if args.len() != 1 { anyhow::bail!("number? requires exactly 1 argument"); }
-        Ok(Value::Boolean(matches!(args[0], Value::Integer(_) | Value::Float(_))))
+    pub fn is_number(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.len() != 1 {
+            anyhow::bail!("isnumber requires exactly 1 argument");
+        }
+        Ok(Value::Boolean(matches!(
+            args[0],
+            Value::Integer(_) | Value::Float(_)
+        )))
     }
 
-    pub fn is_string(args: Vec<Value>) -> Result<Value> {
-        if args.len() != 1 { anyhow::bail!("string? requires exactly 1 argument"); }
+    pub fn is_string(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.len() != 1 {
+            anyhow::bail!("isstring requires exactly 1 argument");
+        }
         Ok(Value::Boolean(matches!(args[0], Value::String(_))))
     }
 
-    pub fn is_procedure(args: Vec<Value>) -> Result<Value> {
-        if args.len() != 1 { anyhow::bail!("procedure? requires exactly 1 argument"); }
-        Ok(Value::Boolean(matches!(args[0], Value::NativeFunction(_) | Value::Closure { .. })))
+    pub fn is_procedure(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.len() != 1 {
+            anyhow::bail!("isprocedure requires exactly 1 argument");
+        }
+        Ok(Value::Boolean(matches!(
+            args[0],
+            Value::NativeFunction(_) | Value::Closure { .. }
+        )))
     }
-    
-    pub fn not(args: Vec<Value>) -> Result<Value> {
-        if args.len() != 1 { anyhow::bail!("not requires exactly 1 argument"); }
+
+    pub fn not(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.len() != 1 {
+            anyhow::bail!("not requires exactly 1 argument");
+        }
         match args[0] {
             Value::Boolean(false) => Ok(Value::Boolean(true)),
             _ => Ok(Value::Boolean(false)),
@@ -758,25 +847,28 @@ mod sel_core {
         e.insert(String::from("-"), Value::NativeFunction(sub));
         e.insert(String::from("*"), Value::NativeFunction(mul));
         e.insert(String::from("/"), Value::NativeFunction(div));
-        e.insert(String::from("modulo"), Value::NativeFunction(modulo));
-        
+        e.insert(String::from("mod"), Value::NativeFunction(modulo));
+
         e.insert(String::from("="), Value::NativeFunction(num_eq));
         e.insert(String::from("<"), Value::NativeFunction(num_lt));
         e.insert(String::from(">"), Value::NativeFunction(num_gt));
         e.insert(String::from("<="), Value::NativeFunction(num_lte));
         e.insert(String::from(">="), Value::NativeFunction(num_gte));
-        
+
         e.insert(String::from("cons"), Value::NativeFunction(cons));
         e.insert(String::from("car"), Value::NativeFunction(car));
         e.insert(String::from("cdr"), Value::NativeFunction(cdr));
         e.insert(String::from("list"), Value::NativeFunction(list));
-        
-        e.insert(String::from("null?"), Value::NativeFunction(is_null));
-        e.insert(String::from("pair?"), Value::NativeFunction(is_pair));
-        e.insert(String::from("number?"), Value::NativeFunction(is_number));
-        e.insert(String::from("string?"), Value::NativeFunction(is_string));
-        e.insert(String::from("procedure?"), Value::NativeFunction(is_procedure));
-        
+
+        e.insert(String::from("isnull"), Value::NativeFunction(is_null));
+        e.insert(String::from("ispair"), Value::NativeFunction(is_pair));
+        e.insert(String::from("isnumber"), Value::NativeFunction(is_number));
+        e.insert(String::from("isstring"), Value::NativeFunction(is_string));
+        e.insert(
+            String::from("isprocedure"),
+            Value::NativeFunction(is_procedure),
+        );
+
         e.insert(String::from("not"), Value::NativeFunction(not));
     }
 }
