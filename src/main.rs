@@ -224,7 +224,7 @@ fn ast_to_value(ast: Ast) -> Value {
         Ast::List(l) => Value::List(l.into_iter().map(ast_to_value).collect()),
         Ast::Define(_) => Value::Symbol("define".to_string()),
         Ast::Let(_) => Value::Symbol("let".to_string()),
-        Ast::Set(_) => Value::Symbol("set!".to_string()),
+        Ast::Set(_) => Value::Symbol("set".to_string()),
     }
 }
 
@@ -247,7 +247,7 @@ impl std::fmt::Display for Ast {
         match self {
             Ast::Define(_) => write!(f, "define"),
             Ast::Let(_) => write!(f, "let"),
-            Ast::Set(_) => write!(f, "set!"),
+            Ast::Set(_) => write!(f, "set"),
             Ast::Nil => todo!(),
             Ast::Atom(_) => todo!(),
             Ast::Integer(_) => todo!(),
@@ -794,9 +794,9 @@ mod sel_core {
         }
     }
 
-    pub fn is_pair(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+    pub fn is_list(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
-            anyhow::bail!("ispair requires exactly 1 argument");
+            anyhow::bail!("islist requires exactly 1 argument");
         }
         match &args[0] {
             Value::List(l) if !l.is_empty() => Ok(Value::Boolean(true)),
@@ -821,9 +821,9 @@ mod sel_core {
         Ok(Value::Boolean(matches!(args[0], Value::String(_))))
     }
 
-    pub fn is_procedure(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+    pub fn is_function(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
-            anyhow::bail!("isprocedure requires exactly 1 argument");
+            anyhow::bail!("isfunction requires exactly 1 argument");
         }
         Ok(Value::Boolean(matches!(
             args[0],
@@ -861,12 +861,12 @@ mod sel_core {
         e.insert(String::from("list"), Value::NativeFunction(list));
 
         e.insert(String::from("isnull"), Value::NativeFunction(is_null));
-        e.insert(String::from("ispair"), Value::NativeFunction(is_pair));
+        e.insert(String::from("islist"), Value::NativeFunction(is_list));
         e.insert(String::from("isnumber"), Value::NativeFunction(is_number));
         e.insert(String::from("isstring"), Value::NativeFunction(is_string));
         e.insert(
-            String::from("isprocedure"),
-            Value::NativeFunction(is_procedure),
+            String::from("isfunction"),
+            Value::NativeFunction(is_function),
         );
 
         e.insert(String::from("not"), Value::NativeFunction(not));
