@@ -4,7 +4,6 @@ use lex_just_parse::parser::*;
 use lex_just_parse::try_parse;
 
 use std::collections::HashMap;
-use std::env::args;
 use std::fs;
 use std::io::Write as _;
 use std::io::stdin;
@@ -56,13 +55,28 @@ impl Env {
 fn main() -> Result<()> {
     let env = Rc::new(RefCell::new(Env::default()));
     sel_core::load(env.clone());
-    let mut args = args().skip(1).rev();
-    if let Some(arg) = args.next() {
-        let src = fs::read_to_string(arg)?;
+    
+    let mut args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 {
+        let script_path = args.remove(1);
+        
+        let scheme_args = args.into_iter().skip(1).map(Value::String).collect();
+        env.borrow_mut().insert("sys_args".to_string(), Value::List(scheme_args));
+
+        let mut src = fs::read_to_string(script_path)?;
+        if src.starts_with("#!") {
+            if let Some(newline_idx) = src.find('\n') {
+                src = src[newline_idx + 1..].to_string();
+            } else {
+                src = String::new();
+            }
+        }
+
         let program = format!("(begin {src})");
         let ast = read(&program)?;
         eval(ast, env).map(|_|())
     } else {
+        env.borrow_mut().insert("sys_args".to_string(), Value::List(vec![]));
         println!("Welcome to the Sel Scheme repl. (Use `quit` to exit)");
         repl("sel> ", env)
     }
@@ -495,21 +509,29 @@ fn eval(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Value> {
     }
 }
 
-fn format_value(val: &Value) -> String {
+fn format_value_internal(val: &Value, display: bool) -> String {
     match val {
         Value::Nil => "nil".to_string(),
         Value::Integer(i) => i.to_string(),
         Value::Float(f) => f.to_string(),
-        Value::String(s) => format!("\"{}\"", s),
+        Value::String(s) => if display { s.clone() } else { format!("\"{}\"", s) },
         Value::Boolean(b) => (if *b { "#t" } else { "#f" }).to_string(),
         Value::Symbol(s) => s.clone(),
         Value::NativeFunction(_) => "<native-function>".to_string(),
         Value::Closure { .. } => "<closure>".to_string(),
         Value::List(l) => {
-            let items: Vec<String> = l.iter().map(format_value).collect();
+            let items: Vec<String> = l.iter().map(|v| format_value_internal(v, display)).collect();
             format!("({})", items.join(" "))
         }
     }
+}
+
+fn format_value(val: &Value) -> String {
+    format_value_internal(val, false)
+}
+
+fn display_value(val: &Value) -> String {
+    format_value_internal(val, true)
 }
 
 fn print(val: Value) -> Result<()> {
@@ -841,6 +863,22 @@ mod sel_core {
         }
     }
 
+    pub fn print_func(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        for arg in args {
+            print!("{} ", crate::format_value(&arg));
+        }
+        println!();
+        Ok(Value::Nil)
+    }
+
+    pub fn display_func(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        for arg in args {
+            print!("{} ", crate::display_value(&arg));
+        }
+        println!();
+        Ok(Value::Nil)
+    }
+
     pub fn load(env: Rc<RefCell<Env>>) {
         let mut e = env.borrow_mut();
         e.insert(String::from("+"), Value::NativeFunction(sum));
@@ -870,5 +908,7 @@ mod sel_core {
         );
 
         e.insert(String::from("not"), Value::NativeFunction(not));
+        e.insert(String::from("print"), Value::NativeFunction(print_func));
+        e.insert(String::from("display"), Value::NativeFunction(display_func));
     }
 }
