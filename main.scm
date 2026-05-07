@@ -1,5 +1,5 @@
 (define map (lambda (f xs)
-    (if (islist xs)
+    (if (list? xs)
         (cons (f (car xs)) (map f (cdr xs)))
         nil)
 ))

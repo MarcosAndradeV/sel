@@ -1,8 +1,4 @@
 use anyhow::Result;
-use lex_just_parse::lexer::*;
-use lex_just_parse::parser::*;
-use lex_just_parse::try_parse;
-
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write as _;
@@ -11,6 +7,8 @@ use std::io::stdout;
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::iter::Peekable;
+use std::str::Chars;
 
 #[derive(Debug, Default)]
 pub struct Env {
@@ -55,11 +53,11 @@ impl Env {
 fn main() -> Result<()> {
     let env = Rc::new(RefCell::new(Env::default()));
     sel_core::load(env.clone());
-    
+
     let mut args: Vec<String> = std::env::args().collect();
     if args.len() > 1 {
         let script_path = args.remove(1);
-        
+
         let scheme_args = args.into_iter().skip(1).map(Value::String).collect();
         env.borrow_mut().insert("sys_args".to_string(), Value::List(scheme_args));
 
@@ -105,109 +103,252 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<()> {
     Ok(())
 }
 
-fn read(line: &str) -> Result<Ast> {
-    let mut lex = Lexer::new(line);
-    parse_ast(&mut lex)
-        .success()
-        .map_err(|(lex, error)| anyhow::anyhow!("{}: {}", lex.peek().loc, error.to_string()))
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Loc {
+    pub line: usize,
+    pub col: usize,
 }
 
-fn parse_ast<'lex>(lex: RefLexer) -> Parser<Ast, anyhow::Error> {
-    let ptoken = lex.peek();
-    match ptoken.kind {
-        TokenKind::OpenParen => {
-            let (lex, seq) = try_parse!(parse_sequence(
-                lex,
-                TokenKind::OpenParen,
-                TokenKind::CloseParen,
-                None,
-                parse_ast
-            ));
-            return Parser::Success(lex, Ast::List(seq));
+impl std::fmt::Display for Loc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.line, self.col)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TokenKind {
+    OpenParen,
+    CloseParen,
+    Quote,
+    QuasiQuote,
+    Unquote,
+    UnquoteSplicing,
+    String,
+    Identifier,
+    Number,
+    Boolean,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Token {
+    pub kind: TokenKind,
+    pub source: String,
+    pub loc: Loc,
+}
+
+impl Token {
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+}
+
+pub struct Lexer<'a> {
+    chars: Peekable<Chars<'a>>,
+    line: usize,
+    col: usize,
+}
+
+impl<'a> Lexer<'a> {
+    pub fn new(input: &'a str) -> Self {
+        Self {
+            chars: input.chars().peekable(),
+            line: 1,
+            col: 1,
         }
-        TokenKind::Int(base) => {
-            let token = lex.next();
-            return Parser::Success(
-                lex,
-                Ast::Integer(i64::from_str_radix(token.source(), base.radix()).unwrap()),
-            );
+    }
+
+    fn advance(&mut self) -> Option<char> {
+        let c = self.chars.next()?;
+        if c == '\n' {
+            self.line += 1;
+            self.col = 1;
+        } else {
+            self.col += 1;
         }
-        TokenKind::RealNumber => {
-            let token = lex.next();
-            return Parser::Success(lex, Ast::Float(token.source().parse().unwrap()));
-        }
-        TokenKind::StringLiteral => {
-            let token = lex.next();
-            return Parser::Success(lex, Ast::String(token.unescape()));
-        }
-        TokenKind::Directive if ptoken.source() == "#t" => {
-            lex.next();
-            return Parser::Success(lex, Ast::Boolean(true));
-        }
-        TokenKind::Directive if ptoken.source() == "#f" => {
-            lex.next();
-            return Parser::Success(lex, Ast::Boolean(false));
-        }
-        TokenKind::Identifier if ptoken.source() == "nil" => {
-            lex.next();
-            return Parser::Success(lex, Ast::Nil);
-        }
-        TokenKind::Identifier if ptoken.source() == "define" => {
-            let loc = lex.next().loc;
-            return Parser::Success(lex, Ast::Define(loc));
-        }
-        TokenKind::Identifier if ptoken.source() == "let" => {
-            let loc = lex.next().loc;
-            return Parser::Success(lex, Ast::Let(loc));
-        }
-        TokenKind::Identifier if ptoken.source() == "set" => {
-            let token = lex.next();
-            if lex.peek().kind == TokenKind::Bang {
-                lex.next();
-                return Parser::Success(lex, Ast::Set(token.loc));
+        Some(c)
+    }
+
+    fn peek(&mut self) -> Option<&char> {
+        self.chars.peek()
+    }
+
+    fn skip_whitespace_and_comments(&mut self) {
+        while let Some(&c) = self.peek() {
+            if c.is_whitespace() {
+                self.advance();
+            } else if c == ';' {
+                while let Some(ch) = self.advance() {
+                    if ch == '\n' { break; }
+                }
             } else {
-                return Parser::Success(lex, Ast::Atom(token));
+                break;
             }
         }
-        _ => {
-            let token = lex.next();
-            return Parser::Success(lex, Ast::Atom(token));
+    }
+
+    pub fn next_token(&mut self) -> Result<Option<Token>> {
+        self.skip_whitespace_and_comments();
+
+        let start_loc = Loc { line: self.line, col: self.col };
+        let Some(&c) = self.peek() else {
+            return Ok(None);
+        };
+
+        match c {
+            '(' => { self.advance(); Ok(Some(Token { kind: TokenKind::OpenParen, source: "(".into(), loc: start_loc })) }
+            ')' => { self.advance(); Ok(Some(Token { kind: TokenKind::CloseParen, source: ")".into(), loc: start_loc })) }
+            '\'' => { self.advance(); Ok(Some(Token { kind: TokenKind::Quote, source: "'".into(), loc: start_loc })) }
+            '`' => { self.advance(); Ok(Some(Token { kind: TokenKind::QuasiQuote, source: "`".into(), loc: start_loc })) }
+            '~' => {
+                self.advance();
+                if let Some(&'@') = self.peek() {
+                    self.advance();
+                    Ok(Some(Token { kind: TokenKind::UnquoteSplicing, source: "~@".into(), loc: start_loc }))
+                } else {
+                    Ok(Some(Token { kind: TokenKind::Unquote, source: "~".into(), loc: start_loc }))
+                }
+            }
+            '"' => {
+                self.advance();
+                let mut string = String::new();
+                while let Some(&ch) = self.peek() {
+                    if ch == '"' {
+                        self.advance();
+                        break;
+                    }
+                    if ch == '\\' {
+                        self.advance();
+                        if let Some(escaped) = self.advance() {
+                            match escaped {
+                                'n' => string.push('\n'),
+                                't' => string.push('\t'),
+                                'r' => string.push('\r'),
+                                '\\' => string.push('\\'),
+                                '"' => string.push('"'),
+                                _ => string.push(escaped),
+                            }
+                        } else {
+                            anyhow::bail!("{}: Unterminated string escape", start_loc);
+                        }
+                    } else {
+                        string.push(self.advance().unwrap());
+                    }
+                }
+                Ok(Some(Token { kind: TokenKind::String, source: string, loc: start_loc }))
+            }
+            '#' => {
+                self.advance();
+                if let Some(&c2) = self.peek() {
+                    if c2 == 't' || c2 == 'f' {
+                        self.advance();
+                        return Ok(Some(Token { kind: TokenKind::Boolean, source: format!("#{}", c2), loc: start_loc }));
+                    }
+                }
+                anyhow::bail!("{}: Invalid character following #", start_loc);
+            }
+            _ => {
+                let mut ident = String::new();
+                while let Some(&ch) = self.peek() {
+                    if ch.is_whitespace() || "()\"'`,;".contains(ch) {
+                        break;
+                    }
+                    ident.push(self.advance().unwrap());
+                }
+                if ident.is_empty() {
+                    anyhow::bail!("{}: Unexpected character '{}'", start_loc, self.advance().unwrap());
+                }
+
+                if ident.parse::<i64>().is_ok() || ident.parse::<f64>().is_ok() {
+                    Ok(Some(Token { kind: TokenKind::Number, source: ident, loc: start_loc }))
+                } else {
+                    Ok(Some(Token { kind: TokenKind::Identifier, source: ident, loc: start_loc }))
+                }
+            }
         }
     }
 }
 
-fn parse_sequence<'lex, F, T>(
-    mut lex: RefLexer,
-    start: TokenKind,
-    stop: TokenKind,
-    separator: Option<TokenKind>,
-    mut parser_fn: F,
-) -> Parser<Vec<T>, anyhow::Error>
-where
-    F: FnMut(RefLexer) -> Parser<T, anyhow::Error>,
-{
-    let mut sequence = Vec::new();
-    let token = lex.next();
-    if token.kind != start {
-        return Parser::Fail(
-            lex,
-            anyhow::anyhow!("expected {:?}, found {:?}", start, token.kind),
-        );
+fn read(line: &str) -> Result<Ast> {
+    let mut lex = Lexer::new(line);
+    let mut tokens = Vec::new();
+    while let Some(t) = lex.next_token()? {
+        tokens.push(t);
     }
-    loop {
-        let token = lex.peek();
-        if token.kind == stop {
-            lex.next();
-            break;
+    let mut pos = 0;
+    parse_expr(&tokens, &mut pos)
+}
+
+fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
+    if *pos >= tokens.len() {
+        anyhow::bail!("Unexpected EOF");
+    }
+    let t = &tokens[*pos];
+    *pos += 1;
+
+    match t.kind {
+        TokenKind::OpenParen => {
+            let mut list = Vec::new();
+            while *pos < tokens.len() && tokens[*pos].kind != TokenKind::CloseParen {
+                list.push(parse_expr(tokens, pos)?);
+            }
+            if *pos >= tokens.len() {
+                anyhow::bail!("{}: Missing closing parenthesis", t.loc);
+            }
+            *pos += 1; // consume ')'
+            Ok(Ast::List(list))
         }
-        let (l, expr) = try_parse!(parser_fn(lex));
-        lex = l;
-        sequence.push(expr);
-        if separator.is_some_and(|sep| sep == lex.peek().kind) {
-            lex.next();
+        TokenKind::CloseParen => {
+            anyhow::bail!("{}: Unexpected closing parenthesis", t.loc);
+        }
+        TokenKind::Quote => {
+            let expr = parse_expr(tokens, pos)?;
+            Ok(Ast::List(vec![
+                Ast::Atom(Token { kind: TokenKind::Identifier, source: "quote".into(), loc: t.loc.clone() }),
+                expr
+            ]))
+        }
+        TokenKind::QuasiQuote => {
+            let expr = parse_expr(tokens, pos)?;
+            Ok(Ast::List(vec![
+                Ast::Atom(Token { kind: TokenKind::Identifier, source: "quasiquote".into(), loc: t.loc.clone() }),
+                expr
+            ]))
+        }
+        TokenKind::Unquote => {
+            let expr = parse_expr(tokens, pos)?;
+            Ok(Ast::List(vec![
+                Ast::Atom(Token { kind: TokenKind::Identifier, source: "unquote".into(), loc: t.loc.clone() }),
+                expr
+            ]))
+        }
+        TokenKind::UnquoteSplicing => {
+            let expr = parse_expr(tokens, pos)?;
+            Ok(Ast::List(vec![
+                Ast::Atom(Token { kind: TokenKind::Identifier, source: "unquote-splicing".into(), loc: t.loc.clone() }),
+                expr
+            ]))
+        }
+        TokenKind::String => Ok(Ast::String(t.source.clone())),
+        TokenKind::Boolean => Ok(Ast::Boolean(t.source == "#t")),
+        TokenKind::Number => {
+            if let Ok(i) = t.source.parse::<i64>() {
+                Ok(Ast::Integer(i))
+            } else if let Ok(f) = t.source.parse::<f64>() {
+                Ok(Ast::Float(f))
+            } else {
+                anyhow::bail!("{}: Invalid number format", t.loc)
+            }
+        }
+        TokenKind::Identifier => {
+            match t.source.as_str() {
+                "nil" => Ok(Ast::Nil),
+                "define" => Ok(Ast::Define(t.loc.clone())),
+                "let" => Ok(Ast::Let(t.loc.clone())),
+                "set" | "set!" => Ok(Ast::Set(t.loc.clone())),
+                _ => Ok(Ast::Atom(t.clone())),
+            }
         }
     }
-    Parser::Success(lex, sequence)
 }
 
 #[derive(Debug, Clone)]
@@ -270,6 +411,49 @@ impl std::fmt::Display for Ast {
             Ast::Boolean(_) => todo!(),
             Ast::List(_) => todo!(),
         }
+    }
+}
+
+fn eval_quasiquote(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Value> {
+    match ast {
+        Ast::List(mut list) => {
+            if !list.is_empty() {
+                if let Ast::Atom(t) = &list[0] {
+                    if t.source() == "unquote" {
+                        if list.len() != 2 {
+                            anyhow::bail!("{}: unquote takes exactly 1 argument", t.loc);
+                        }
+                        return eval(list.pop().unwrap(), env);
+                    } else if t.source() == "unquote-splicing" {
+                        anyhow::bail!("{}: unquote-splicing invalid at top level of quasiquote", t.loc);
+                    }
+                }
+            }
+            let mut result = Vec::new();
+            for item in list {
+                if let Ast::List(mut sublist) = item.clone() {
+                    if !sublist.is_empty() {
+                        if let Ast::Atom(t) = sublist[0].clone() {
+                            if t.source() == "unquote-splicing" {
+                                if sublist.len() != 2 {
+                                    anyhow::bail!("{}: unquote-splicing takes exactly 1 argument", t.loc);
+                                }
+                                let val = eval(sublist.pop().unwrap(), env.clone())?;
+                                match val {
+                                    Value::List(items) => result.extend(items),
+                                    Value::Nil => {},
+                                    _ => anyhow::bail!("{}: unquote-splicing requires a list", t.loc),
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                }
+                result.push(eval_quasiquote(item, env.clone())?);
+            }
+            Ok(Value::List(result))
+        }
+        _ => Ok(ast_to_value(ast)),
     }
 }
 
@@ -403,11 +587,11 @@ fn eval(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Value> {
                         let body = if body_asts.len() == 1 {
                             body_asts.pop().unwrap()
                         } else {
-                            let mut begin_list = vec![Ast::Atom(Token::new(
-                                lex_just_parse::lexer::TokenKind::Identifier,
-                                token.loc,
-                                "begin".to_string(),
-                            ))];
+                            let mut begin_list = vec![Ast::Atom(Token {
+                                kind: TokenKind::Identifier,
+                                loc: token.loc.clone(),
+                                source: "begin".to_string(),
+                            })];
                             begin_list.extend(body_asts);
                             Ast::List(begin_list)
                         };
@@ -445,6 +629,12 @@ fn eval(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Value> {
                             .next()
                             .ok_or_else(|| anyhow::anyhow!("Expected expression in quote"))?;
                         return Ok(ast_to_value(expr));
+                    }
+                    "quasiquote" => {
+                        let expr = iter
+                            .next()
+                            .ok_or_else(|| anyhow::anyhow!("Expected expression in quasiquote"))?;
+                        return eval_quasiquote(expr, env);
                     }
                     "begin" => {
                         let mut last_val = Value::Nil;
@@ -805,9 +995,9 @@ mod sel_core {
         }
     }
 
-    pub fn is_null(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+    pub fn is_nil(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
-            anyhow::bail!("isnull requires exactly 1 argument");
+            anyhow::bail!("nil? requires exactly 1 argument");
         }
         match &args[0] {
             Value::Nil => Ok(Value::Boolean(true)),
@@ -898,12 +1088,12 @@ mod sel_core {
         e.insert(String::from("cdr"), Value::NativeFunction(cdr));
         e.insert(String::from("list"), Value::NativeFunction(list));
 
-        e.insert(String::from("isnull"), Value::NativeFunction(is_null));
-        e.insert(String::from("islist"), Value::NativeFunction(is_list));
-        e.insert(String::from("isnumber"), Value::NativeFunction(is_number));
-        e.insert(String::from("isstring"), Value::NativeFunction(is_string));
+        e.insert(String::from("nil?"), Value::NativeFunction(is_nil));
+        e.insert(String::from("list?"), Value::NativeFunction(is_list));
+        e.insert(String::from("number?"), Value::NativeFunction(is_number));
+        e.insert(String::from("string?"), Value::NativeFunction(is_string));
         e.insert(
-            String::from("isfunction"),
+            String::from("function?"),
             Value::NativeFunction(is_function),
         );
 

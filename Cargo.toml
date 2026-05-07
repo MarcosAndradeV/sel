@@ -5,4 +5,4 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.102"
-lex-just-parse = "0.1.1"
+
