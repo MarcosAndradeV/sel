@@ -1,9 +1,7 @@
 use anyhow::Result;
+use rustyline::error::ReadlineError;
 use std::collections::HashMap;
-use std::fs;
-use std::io::Write as _;
-use std::io::stdin;
-use std::io::stdout;
+use std::{env, fs};
 
 use std::cell::RefCell;
 use std::iter::Peekable;
@@ -83,42 +81,58 @@ fn main() -> Result<()> {
 }
 
 fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<()> {
-    let mut line_buffer = String::new();
+    let sel_path = env::home_dir().unwrap_or_default().join(".sel");
+    fs::create_dir_all(&sel_path)?;
+    let hist_path = sel_path.join("history");
+    let mut rl = rustyline::DefaultEditor::new()?;
+    if rl.load_history(&hist_path).is_err() {
+        println!("No previous history.");
+    }
     loop {
-        line_buffer.clear();
-        print!("{prompt}");
-        stdout().flush()?;
-        stdin().read_line(&mut line_buffer)?;
-        let line = line_buffer.trim();
+        match rl.readline(prompt) {
+            Ok(line) => {
+                let line = line.trim();
+                rl.add_history_entry(line)?;
+                match line {
+                    "" => continue,
+                    "quit" => break,
+                    _ => (),
+                }
 
-        match line {
-            "" => continue,
-            "quit" => break,
-            _ => (),
-        }
-
-        let ast = match read(line) {
-            Ok(ast) => ast,
-            Err(e) => {
-                println!("Error: {e}");
-                stdout().flush()?;
-                continue;
+                let ast = match read(line) {
+                    Ok(ast) => ast,
+                    Err(e) => {
+                        println!("Error: {e}");
+                        continue;
+                    }
+                };
+                let val = match eval(ast, env.clone()) {
+                    Ok(val) => val,
+                    Err(e) => {
+                        println!("Error: {e}");
+                        continue;
+                    }
+                };
+                if let Err(e) = print(val) {
+                    println!("Error: {e}");
+                    continue;
+                }
             }
-        };
-        let val = match eval(ast, env.clone()) {
-            Ok(val) => val,
-            Err(e) => {
-                println!("Error: {e}");
-                stdout().flush()?;
-                continue;
+            Err(ReadlineError::Interrupted) => {
+                println!("CTRL-C");
+                break;
             }
-        };
-        if let Err(e) = print(val) {
-            println!("Error: {e}");
-            stdout().flush()?;
-            continue;
+            Err(ReadlineError::Eof) => {
+                println!("CTRL-D");
+                break;
+            }
+            Err(err) => {
+                println!("Error: {:?}", err);
+                break;
+            }
         }
     }
+    rl.save_history(&hist_path)?;
     Ok(())
 }
 
@@ -146,6 +160,7 @@ pub enum TokenKind {
     Identifier,
     Number,
     Boolean,
+    Ampersand,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -232,6 +247,14 @@ impl<'a> Lexer<'a> {
                 Ok(Some(Token {
                     kind: TokenKind::CloseParen,
                     source: ")".into(),
+                    loc: start_loc,
+                }))
+            }
+            '&' => {
+                self.advance();
+                Ok(Some(Token {
+                    kind: TokenKind::Ampersand,
+                    source: "&".into(),
                     loc: start_loc,
                 }))
             }
@@ -391,6 +414,12 @@ fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
                 expr,
             ]))
         }
+        TokenKind::Ampersand => {
+            if let Ast::Atom(s) = parse_expr(tokens, pos)? {
+                return Ok(Ast::Bind(s));
+            }
+            anyhow::bail!("{}: Expected identifier", t.loc);
+        }
         TokenKind::QuasiQuote => {
             let expr = parse_expr(tokens, pos)?;
             Ok(Ast::List(vec![
@@ -456,7 +485,7 @@ enum Value {
     List(Vec<Value>),
     NativeFunction(fn(Vec<Value>, Rc<RefCell<Env>>) -> Result<Value>),
     Closure {
-        params: Vec<String>,
+        params: Vec<Ast>,
         body: Ast,
         env: Rc<RefCell<Env>>,
     },
@@ -474,6 +503,7 @@ fn ast_to_value(ast: Ast) -> Value {
         Ast::Define(_) => Value::Symbol("define".to_string()),
         Ast::Let(_) => Value::Symbol("let".to_string()),
         Ast::Set(_) => Value::Symbol("set!".to_string()),
+        Ast::Bind(_) => Value::Symbol("&".to_string()),
     }
 }
 
@@ -482,6 +512,7 @@ enum Ast {
     Define(Loc),
     Let(Loc),
     Set(Loc),
+    Bind(Token),
     Nil,
     Atom(Token),
     Integer(i64),
@@ -497,13 +528,14 @@ impl std::fmt::Display for Ast {
             Ast::Define(_) => write!(f, "define"),
             Ast::Let(_) => write!(f, "let"),
             Ast::Set(_) => write!(f, "set"),
-            Ast::Nil => todo!(),
-            Ast::Atom(_) => todo!(),
-            Ast::Integer(_) => todo!(),
-            Ast::Float(_) => todo!(),
-            Ast::String(_) => todo!(),
-            Ast::Boolean(_) => todo!(),
-            Ast::List(_) => todo!(),
+            Ast::Nil => write!(f, "nil"),
+            Ast::Atom(a) => write!(f, "{}", a.source()),
+            Ast::Integer(i) => write!(f, "{i}"),
+            Ast::Float(n) => write!(f, "{n}"),
+            Ast::String(s) => write!(f, "{s}"),
+            Ast::Boolean(s) => write!(f, "{s}"),
+            Ast::List(_) => write!(f, "<list>"),
+            Ast::Bind(_) => write!(f, "&"),
         }
     }
 }
@@ -568,7 +600,7 @@ fn eval(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Value> {
                 anyhow::bail!("{}: Undefined bind `{}`", token.loc, token.source());
             }
         }
-        Ast::Define(loc) | Ast::Let(loc) | Ast::Set(loc) => {
+        Ast::Define(loc) | Ast::Let(loc) | Ast::Set(loc) | Ast::Bind(Token { loc, .. }) => {
             anyhow::bail!("{}: Unexpected `{}`.", loc, ast);
         }
         Ast::Nil => Ok(Value::Nil),
@@ -668,8 +700,8 @@ fn eval(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Value> {
                         match params_ast {
                             Ast::List(p) => {
                                 for param in p {
-                                    if let Ast::Atom(t) = param {
-                                        params.push(t.source);
+                                    if matches!(param, Ast::Atom(_) | Ast::Bind(_)) {
+                                        params.push(param);
                                     } else {
                                         anyhow::bail!("Expected identifier in lambda parameters");
                                     }
@@ -782,16 +814,28 @@ fn eval(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Value> {
                     body,
                     env: closure_env,
                 } => {
-                    if params.len() != args.len() {
-                        anyhow::bail!(
-                            "Arity mismatch: expected {} args, got {}",
-                            params.len(),
-                            args.len()
-                        );
-                    }
                     let mut call_env = Env::new(Some(closure_env.clone()));
-                    for (param, arg) in params.into_iter().zip(args) {
-                        call_env.insert(param, arg);
+                    let mut params = params.into_iter();
+                    let mut args = args.into_iter();
+                    loop {
+                        match params.next() {
+                            Some(Ast::Bind(b)) => {
+                                let mut rest = Vec::new();
+                                for arg in args {
+                                    rest.push(arg);
+                                }
+                                call_env.insert(b.source, Value::List(rest));
+                                break;
+                            }
+                            Some(Ast::Atom(t)) => {
+                                if let Some(arg) = args.next() {
+                                    call_env.insert(t.source, arg);
+                                } else {
+                                    anyhow::bail!("Arity mismatch");
+                                }
+                            }
+                            _ => break,
+                        }
                     }
                     eval(body, Rc::new(RefCell::new(call_env)))
                 }
@@ -1118,6 +1162,26 @@ mod sel_core {
         }
     }
 
+    pub fn count(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.len() != 1 {
+            anyhow::bail!("count requires exactly 1 argument");
+        }
+        match args.pop().unwrap() {
+            Value::List(l) => Ok(Value::Integer(l.len() as _)),
+            _ => anyhow::bail!("count requires a list"),
+        }
+    }
+
+    pub fn empty(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.len() != 1 {
+            anyhow::bail!("empty requires exactly 1 argument");
+        }
+        match args.pop().unwrap() {
+            Value::List(l) => Ok(Value::Boolean(l.is_empty())),
+            _ => anyhow::bail!("empty requires a list"),
+        }
+    }
+
     pub fn list(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.is_empty() {
             Ok(Value::Nil)
@@ -1216,11 +1280,11 @@ mod sel_core {
 
         e.insert(String::from("cons"), Value::NativeFunction(cons));
         e.insert(String::from("car"), Value::NativeFunction(car));
-        e.insert(String::from("first"), Value::NativeFunction(car));
         e.insert(String::from("cdr"), Value::NativeFunction(cdr));
-        e.insert(String::from("rest"), Value::NativeFunction(cdr));
         e.insert(String::from("nth"), Value::NativeFunction(nth));
+        e.insert(String::from("count"), Value::NativeFunction(count));
         e.insert(String::from("list"), Value::NativeFunction(list));
+        e.insert(String::from("empty?"), Value::NativeFunction(empty));
 
         e.insert(String::from("nil?"), Value::NativeFunction(is_nil));
         e.insert(String::from("list?"), Value::NativeFunction(is_list));

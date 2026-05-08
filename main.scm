@@ -1,10 +1,3 @@
-(define map (lambda (f xs)
-    (if (list? xs)
-        (cons (f (car xs)) (map f (cdr xs)))
-        nil)
-))
+(define map (lambda (f xs) (if (nil? xs) nil (cons (f (car xs)) (map f (cdr xs))))))
 
-(define square (lambda (x)
-    (* x x)))
-
-(print (map square (list 2 4 6)))
+(display (map (lambda (x) (* x x)) '(2 4 6)))
