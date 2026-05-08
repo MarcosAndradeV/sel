@@ -1,0 +1,8 @@
+(print (if #t 1 2))
+(print (if #f 1 2))
+(print (begin (define x 10) (+ x 5)))
+(print (let ((y 20)) (+ y 10)))
+(print (and #t #t #t))
+(print (and #t #f #t))
+(print (or #f #f #t))
+(print (or #f #f #f))

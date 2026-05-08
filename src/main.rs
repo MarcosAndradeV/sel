@@ -1,16 +1,53 @@
 use anyhow::Result;
 use rustyline::error::ReadlineError;
-use std::collections::HashMap;
-use std::{env, fs};
-
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::iter::Peekable;
 use std::rc::Rc;
 use std::str::Chars;
+use std::{env, fs};
+
+thread_local! {
+    static SYMBOLS: RefCell<SymbolTable> = RefCell::new(SymbolTable::default());
+}
+
+#[derive(Default)]
+struct SymbolTable {
+    map: HashMap<String, u32>,
+    vec: Vec<String>,
+}
+
+impl SymbolTable {
+    fn intern(&mut self, name: &str) -> u32 {
+        if let Some(&id) = self.map.get(name) {
+            id
+        } else {
+            let id = self.vec.len() as u32;
+            self.map.insert(name.to_string(), id);
+            self.vec.push(name.to_string());
+            id
+        }
+    }
+
+    fn lookup(&self, id: u32) -> String {
+        self.vec
+            .get(id as usize)
+            .cloned()
+            .unwrap_or_else(|| format!("id:{}", id))
+    }
+}
+
+pub fn intern(name: &str) -> u32 {
+    SYMBOLS.with(|s| s.borrow_mut().intern(name))
+}
+
+pub fn lookup(id: u32) -> String {
+    SYMBOLS.with(|s| s.borrow().lookup(id))
+}
 
 #[derive(Debug, Default)]
 pub struct Env {
-    bindings: HashMap<String, Value>,
+    bindings: HashMap<u32, Value>,
     parent: Option<Rc<RefCell<Env>>>,
 }
 
@@ -22,26 +59,26 @@ impl Env {
         }
     }
 
-    fn get(&self, name: &str) -> Option<Value> {
-        if let Some(val) = self.bindings.get(name) {
+    fn get(&self, id: u32) -> Option<Value> {
+        if let Some(val) = self.bindings.get(&id) {
             Some(val.clone())
         } else if let Some(parent) = &self.parent {
-            parent.borrow().get(name)
+            parent.borrow().get(id)
         } else {
             None
         }
     }
 
-    fn insert(&mut self, name: String, val: Value) {
-        self.bindings.insert(name, val);
+    fn insert(&mut self, id: u32, val: Value) {
+        self.bindings.insert(id, val);
     }
 
-    fn set(&mut self, name: &str, val: Value) -> bool {
-        if self.bindings.contains_key(name) {
-            self.bindings.insert(name.to_string(), val);
+    fn set(&mut self, id: u32, val: Value) -> bool {
+        if self.bindings.contains_key(&id) {
+            self.bindings.insert(id, val);
             true
         } else if let Some(parent) = &self.parent {
-            parent.borrow_mut().set(name, val)
+            parent.borrow_mut().set(id, val)
         } else {
             false
         }
@@ -58,7 +95,7 @@ fn main() -> Result<()> {
 
         let scheme_args = args.into_iter().skip(1).map(Value::String).collect();
         env.borrow_mut()
-            .insert("*args*".to_string(), Value::List(scheme_args));
+            .insert(intern("*args*"), Value::List(scheme_args));
 
         let mut src = fs::read_to_string(script_path)?;
         if src.starts_with("#!") {
@@ -74,7 +111,7 @@ fn main() -> Result<()> {
         eval(ast, env).map(|_| ())
     } else {
         env.borrow_mut()
-            .insert("*args*".to_string(), Value::List(vec![]));
+            .insert(intern("*args*"), Value::List(vec![]));
         println!("Welcome to the Sel Scheme repl. (Use `quit` to exit)");
         repl("sel> ", env)
     }
@@ -389,69 +426,31 @@ fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
     *pos += 1;
 
     match t.kind {
-        TokenKind::OpenParen => {
-            let mut list = Vec::new();
-            while *pos < tokens.len() && tokens[*pos].kind != TokenKind::CloseParen {
-                list.push(parse_expr(tokens, pos)?);
-            }
-            if *pos >= tokens.len() {
-                anyhow::bail!("{}: Missing closing parenthesis", t.loc);
-            }
-            *pos += 1; // consume ')'
-            Ok(Ast::List(list))
-        }
+        TokenKind::OpenParen => parse_list(tokens, pos, t),
         TokenKind::CloseParen => {
             anyhow::bail!("{}: Unexpected closing parenthesis", t.loc);
         }
         TokenKind::Quote => {
             let expr = parse_expr(tokens, pos)?;
-            Ok(Ast::List(vec![
-                Ast::Atom(Token {
-                    kind: TokenKind::Identifier,
-                    source: "quote".into(),
-                    loc: t.loc.clone(),
-                }),
-                expr,
-            ]))
+            Ok(Ast::Quote(t.loc.clone(), Box::new(expr)))
         }
         TokenKind::Ampersand => {
-            if let Ast::Atom(s) = parse_expr(tokens, pos)? {
-                return Ok(Ast::Bind(s));
+            if let Ast::Symbol(_, id) = parse_expr(tokens, pos)? {
+                return Ok(Ast::Bind(id));
             }
-            anyhow::bail!("{}: Expected identifier", t.loc);
+            anyhow::bail!("{}: Expected identifier after &", t.loc);
         }
         TokenKind::QuasiQuote => {
             let expr = parse_expr(tokens, pos)?;
-            Ok(Ast::List(vec![
-                Ast::Atom(Token {
-                    kind: TokenKind::Identifier,
-                    source: "quasiquote".into(),
-                    loc: t.loc.clone(),
-                }),
-                expr,
-            ]))
+            Ok(Ast::Quasiquote(t.loc.clone(), Box::new(expr)))
         }
         TokenKind::Unquote => {
             let expr = parse_expr(tokens, pos)?;
-            Ok(Ast::List(vec![
-                Ast::Atom(Token {
-                    kind: TokenKind::Identifier,
-                    source: "unquote".into(),
-                    loc: t.loc.clone(),
-                }),
-                expr,
-            ]))
+            Ok(Ast::Unquote(t.loc.clone(), Box::new(expr)))
         }
         TokenKind::UnquoteSplicing => {
             let expr = parse_expr(tokens, pos)?;
-            Ok(Ast::List(vec![
-                Ast::Atom(Token {
-                    kind: TokenKind::Identifier,
-                    source: "unquote-splicing".into(),
-                    loc: t.loc.clone(),
-                }),
-                expr,
-            ]))
+            Ok(Ast::UnquoteSplicing(t.loc.clone(), Box::new(expr)))
         }
         TokenKind::String => Ok(Ast::String(t.source.clone())),
         TokenKind::Boolean => Ok(Ast::Boolean(t.source == "#t")),
@@ -466,11 +465,154 @@ fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
         }
         TokenKind::Identifier => match t.source.as_str() {
             "nil" => Ok(Ast::Nil),
-            "define" => Ok(Ast::Define(t.loc.clone())),
-            "let" => Ok(Ast::Let(t.loc.clone())),
-            "set!" => Ok(Ast::Set(t.loc.clone())),
-            _ => Ok(Ast::Atom(t.clone())),
+            _ => Ok(Ast::Symbol(t.loc, intern(&t.source))),
         },
+    }
+}
+
+fn parse_list(tokens: &[Token], pos: &mut usize, open_token: &Token) -> Result<Ast> {
+    let mut list = Vec::new();
+    while *pos < tokens.len() && tokens[*pos].kind != TokenKind::CloseParen {
+        list.push(parse_expr(tokens, pos)?);
+    }
+    if *pos >= tokens.len() {
+        anyhow::bail!("{}: Missing closing parenthesis", open_token.loc);
+    }
+    *pos += 1; // consume ')'
+
+    if list.is_empty() {
+        return Ok(Ast::Nil);
+    }
+
+    if let Some(Ast::Symbol(loc, id)) = list.first().cloned() {
+        match lookup(id).as_str() {
+            "if" => {
+                let mut iter = list.into_iter().skip(1);
+                let cond = iter
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("{}: Missing condition in if", loc))?;
+                let true_branch = iter
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("{}: Missing true branch in if", loc))?;
+                let false_branch = iter.next();
+                Ok(Ast::If(
+                    loc,
+                    Box::new(cond),
+                    Box::new(true_branch),
+                    false_branch.map(Box::new),
+                ))
+            }
+            "lambda" => {
+                let mut iter = list.into_iter().skip(1);
+                let params_ast = iter
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("{}: Missing parameters in lambda", loc))?;
+                let mut params = Vec::new();
+                match params_ast {
+                    Ast::List(p) => {
+                        for param in p {
+                            if let Ast::Symbol(_, id) = param {
+                                params.push(id);
+                            } else if let Ast::Bind(id) = param {
+                                params.push(id);
+                            } else {
+                                anyhow::bail!("{}: Expected identifier in lambda parameters", loc);
+                            }
+                        }
+                    }
+                    Ast::Nil => {}
+                    _ => anyhow::bail!("{}: Expected parameter list in lambda", loc),
+                }
+                let body = iter.collect();
+                Ok(Ast::Lambda(loc, params, body))
+            }
+            "begin" => {
+                let iter = list.into_iter().skip(1);
+                Ok(Ast::Begin(loc, iter.collect()))
+            }
+            "define" => {
+                let mut iter = list.into_iter().skip(1);
+                let name_ast = iter
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("{}: Expected identifier in define", loc))?;
+                let value_ast = iter
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("{}: Expected expression in define", loc))?;
+                let Ast::Symbol(_, name_id) = name_ast else {
+                    anyhow::bail!("{}: Expected identifier in define", loc);
+                };
+                Ok(Ast::Define(loc, name_id, Box::new(value_ast)))
+            }
+            "set!" => {
+                let mut iter = list.into_iter().skip(1);
+                let name_ast = iter
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("{}: Expected identifier in set!", loc))?;
+                let value_ast = iter
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("{}: Expected expression in set!", loc))?;
+                let Ast::Symbol(_, name_id) = name_ast else {
+                    anyhow::bail!("{}: Expected identifier in set!", loc);
+                };
+                Ok(Ast::Set(loc, name_id, Box::new(value_ast)))
+            }
+            "let" => {
+                let mut iter = list.into_iter().skip(1);
+                let bindings_ast = iter
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("{}: Expected bindings in let", loc))?;
+                let mut bindings = Vec::new();
+                match bindings_ast {
+                    Ast::List(b) => {
+                        for bind in b {
+                            if let Ast::List(mut pair) = bind {
+                                if pair.len() != 2 {
+                                    anyhow::bail!("{}: Invalid binding pair in let", loc);
+                                }
+                                let val = pair.pop().unwrap();
+                                let name = pair.pop().unwrap();
+                                if let Ast::Symbol(_, name_id) = name {
+                                    bindings.push((name_id, val));
+                                } else {
+                                    anyhow::bail!("{}: Expected identifier in let binding", loc);
+                                }
+                            } else {
+                                anyhow::bail!("{}: Expected binding pair in let", loc);
+                            }
+                        }
+                    }
+                    Ast::Nil => {}
+                    _ => anyhow::bail!("{}: Expected bindings list in let", loc),
+                }
+                let body = iter.collect();
+                Ok(Ast::Let(loc, bindings, body))
+            }
+            "quote" => {
+                let mut iter = list.into_iter().skip(1);
+                let expr = iter
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("{}: Expected expression in quote", loc))?;
+                Ok(Ast::Quote(loc, Box::new(expr)))
+            }
+            "quasiquote" => {
+                let mut iter = list.into_iter().skip(1);
+                let expr = iter.next().ok_or_else(|| {
+                    anyhow::anyhow!("{}: Expected expression in quasiquote", loc)
+                })?;
+                Ok(Ast::Quasiquote(loc, Box::new(expr)))
+            }
+            "and" => {
+                let iter = list.into_iter().skip(1);
+                Ok(Ast::And(loc, iter.collect()))
+            }
+            "or" => {
+                let iter = list.into_iter().skip(1);
+                Ok(Ast::Or(loc, iter.collect()))
+            }
+            _ => Ok(Ast::List(list)),
+        }
+    } else {
+        Ok(Ast::List(list))
     }
 }
 
@@ -481,14 +623,64 @@ enum Value {
     Float(f64),
     String(String),
     Boolean(bool),
-    Symbol(String),
+    Symbol(u32),
     List(Vec<Value>),
     NativeFunction(fn(Vec<Value>, Rc<RefCell<Env>>) -> Result<Value>),
     Closure {
-        params: Vec<Ast>,
+        params: Vec<u32>,
         body: Ast,
         env: Rc<RefCell<Env>>,
     },
+}
+
+fn format_value_internal(val: &Value, display: bool) -> String {
+    match val {
+        Value::Nil => "()".to_string(),
+        Value::Integer(i) => i.to_string(),
+        Value::Float(f) => f.to_string(),
+        Value::String(s) => {
+            if display {
+                s.clone()
+            } else {
+                format!("\"{}\"", s)
+            }
+        }
+        Value::Boolean(b) => {
+            if *b {
+                "#t".to_string()
+            } else {
+                "#f".to_string()
+            }
+        }
+        Value::Symbol(id) => lookup(*id),
+        Value::List(l) => {
+            let mut s = String::from("(");
+            for (i, v) in l.iter().enumerate() {
+                if i > 0 {
+                    s.push(' ');
+                }
+                s.push_str(&format_value_internal(v, false));
+            }
+            s.push(')');
+            s
+        }
+        Value::NativeFunction(_) => "<native function>".to_string(),
+        Value::Closure { .. } => "<closure>".to_string(),
+    }
+}
+
+fn format_value(val: &Value) -> String {
+    format_value_internal(val, false)
+}
+
+fn display_value(val: &Value) -> String {
+    format_value_internal(val, true)
+}
+
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", format_value(self))
+    }
 }
 
 fn ast_to_value(ast: Ast) -> Value {
@@ -498,23 +690,86 @@ fn ast_to_value(ast: Ast) -> Value {
         Ast::Float(f) => Value::Float(f),
         Ast::String(s) => Value::String(s),
         Ast::Boolean(b) => Value::Boolean(b),
-        Ast::Atom(t) => Value::Symbol(t.source),
+        Ast::Symbol(_, id) => Value::Symbol(id),
+        Ast::Bind(id) => Value::Symbol(id),
         Ast::List(l) => Value::List(l.into_iter().map(ast_to_value).collect()),
-        Ast::Define(_) => Value::Symbol("define".to_string()),
-        Ast::Let(_) => Value::Symbol("let".to_string()),
-        Ast::Set(_) => Value::Symbol("set!".to_string()),
-        Ast::Bind(_) => Value::Symbol("&".to_string()),
+        Ast::If(_, cond, true_b, false_b) => {
+            let mut l = vec![Value::Symbol(intern("if")), ast_to_value(*cond), ast_to_value(*true_b)];
+            if let Some(f) = false_b {
+                l.push(ast_to_value(*f));
+            }
+            Value::List(l)
+        }
+        Ast::Lambda(_, params, body) => {
+            let mut l = vec![Value::Symbol(intern("lambda"))];
+            l.push(Value::List(params.into_iter().map(Value::Symbol).collect()));
+            l.extend(body.into_iter().map(ast_to_value));
+            Value::List(l)
+        }
+        Ast::Define(_, id, expr) => {
+            Value::List(vec![Value::Symbol(intern("define")), Value::Symbol(id), ast_to_value(*expr)])
+        }
+        Ast::Set(_, id, expr) => {
+            Value::List(vec![Value::Symbol(intern("set!")), Value::Symbol(id), ast_to_value(*expr)])
+        }
+        Ast::Let(_, bindings, body) => {
+            let mut l = vec![Value::Symbol(intern("let"))];
+            let mut b_list = Vec::new();
+            for (id, expr) in bindings {
+                b_list.push(Value::List(vec![Value::Symbol(id), ast_to_value(expr)]));
+            }
+            l.push(Value::List(b_list));
+            l.extend(body.into_iter().map(ast_to_value));
+            Value::List(l)
+        }
+        Ast::Begin(_, body) => {
+            let mut l = vec![Value::Symbol(intern("begin"))];
+            l.extend(body.into_iter().map(ast_to_value));
+            Value::List(l)
+        }
+        Ast::Quote(_, expr) => {
+            Value::List(vec![Value::Symbol(intern("quote")), ast_to_value(*expr)])
+        }
+        Ast::Quasiquote(_, expr) => {
+            Value::List(vec![Value::Symbol(intern("quasiquote")), ast_to_value(*expr)])
+        }
+        Ast::Unquote(_, expr) => {
+            Value::List(vec![Value::Symbol(intern("unquote")), ast_to_value(*expr)])
+        }
+        Ast::UnquoteSplicing(_, expr) => {
+            Value::List(vec![Value::Symbol(intern("unquote-splicing")), ast_to_value(*expr)])
+        }
+        Ast::And(_, exprs) => {
+            let mut l = vec![Value::Symbol(intern("and"))];
+            l.extend(exprs.into_iter().map(ast_to_value));
+            Value::List(l)
+        }
+        Ast::Or(_, exprs) => {
+            let mut l = vec![Value::Symbol(intern("or"))];
+            l.extend(exprs.into_iter().map(ast_to_value));
+            Value::List(l)
+        }
     }
 }
 
 #[derive(Debug, Clone)]
+#[allow(unused)]
 enum Ast {
-    Define(Loc),
-    Let(Loc),
-    Set(Loc),
-    Bind(Token),
+    Define(Loc, u32, Box<Ast>),
+    Let(Loc, Vec<(u32, Ast)>, Vec<Ast>),
+    Set(Loc, u32, Box<Ast>),
+    If(Loc, Box<Ast>, Box<Ast>, Option<Box<Ast>>),
+    Lambda(Loc, Vec<u32>, Vec<Ast>),
+    Begin(Loc, Vec<Ast>),
+    Quote(Loc, Box<Ast>),
+    Quasiquote(Loc, Box<Ast>),
+    Unquote(Loc, Box<Ast>),
+    UnquoteSplicing(Loc, Box<Ast>),
+    And(Loc, Vec<Ast>),
+    Or(Loc, Vec<Ast>),
+    Bind(u32),
     Nil,
-    Atom(Token),
+    Symbol(Loc, u32),
     Integer(i64),
     Float(f64),
     String(String),
@@ -525,65 +780,51 @@ enum Ast {
 impl std::fmt::Display for Ast {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Ast::Define(_) => write!(f, "define"),
-            Ast::Let(_) => write!(f, "let"),
-            Ast::Set(_) => write!(f, "set"),
+            Ast::Define(..) => write!(f, "define"),
+            Ast::Let(..) => write!(f, "let"),
+            Ast::Set(..) => write!(f, "set"),
+            Ast::If(..) => write!(f, "if"),
+            Ast::Lambda(..) => write!(f, "lambda"),
+            Ast::Begin(..) => write!(f, "begin"),
+            Ast::Quote(..) => write!(f, "quote"),
+            Ast::Quasiquote(..) => write!(f, "quasiquote"),
+            Ast::Unquote(..) => write!(f, "unquote"),
+            Ast::UnquoteSplicing(..) => write!(f, "unquote-splicing"),
+            Ast::And(..) => write!(f, "and"),
+            Ast::Or(..) => write!(f, "or"),
             Ast::Nil => write!(f, "nil"),
-            Ast::Atom(a) => write!(f, "{}", a.source()),
+            Ast::Symbol(_, id) => write!(f, "{}", lookup(*id)),
             Ast::Integer(i) => write!(f, "{i}"),
             Ast::Float(n) => write!(f, "{n}"),
-            Ast::String(s) => write!(f, "{s}"),
-            Ast::Boolean(s) => write!(f, "{s}"),
+            Ast::String(s) => write!(f, "\"{s}\""),
+            Ast::Boolean(b) => write!(f, "{}", if *b { "#t" } else { "#f" }),
             Ast::List(_) => write!(f, "<list>"),
-            Ast::Bind(_) => write!(f, "&"),
+            Ast::Bind(id) => write!(f, "&{}", lookup(*id)),
         }
     }
 }
 
 fn eval_quasiquote(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Value> {
     match ast {
-        Ast::List(mut list) => {
-            if !list.is_empty() {
-                if let Ast::Atom(t) = &list[0] {
-                    if t.source() == "unquote" {
-                        if list.len() != 2 {
-                            anyhow::bail!("{}: unquote takes exactly 1 argument", t.loc);
-                        }
-                        return eval(list.pop().unwrap(), env);
-                    } else if t.source() == "unquote-splicing" {
-                        anyhow::bail!(
-                            "{}: unquote-splicing invalid at top level of quasiquote",
-                            t.loc
-                        );
-                    }
-                }
-            }
+        Ast::Unquote(_, expr) => eval(*expr, env),
+        Ast::UnquoteSplicing(loc, _) => {
+            anyhow::bail!("{}: unquote-splicing invalid at top level of quasiquote", loc);
+        }
+        Ast::List(list) => {
             let mut result = Vec::new();
             for item in list {
-                if let Ast::List(mut sublist) = item.clone() {
-                    if !sublist.is_empty() {
-                        if let Ast::Atom(t) = sublist[0].clone() {
-                            if t.source() == "unquote-splicing" {
-                                if sublist.len() != 2 {
-                                    anyhow::bail!(
-                                        "{}: unquote-splicing takes exactly 1 argument",
-                                        t.loc
-                                    );
-                                }
-                                let val = eval(sublist.pop().unwrap(), env.clone())?;
-                                match val {
-                                    Value::List(items) => result.extend(items),
-                                    Value::Nil => {}
-                                    _ => {
-                                        anyhow::bail!("{}: unquote-splicing requires a list", t.loc)
-                                    }
-                                }
-                                continue;
-                            }
+                if let Ast::UnquoteSplicing(loc, expr) = item {
+                    let val = eval(*expr, env.clone())?;
+                    match val {
+                        Value::List(items) => result.extend(items),
+                        Value::Nil => {}
+                        _ => {
+                            anyhow::bail!("{}: unquote-splicing requires a list", loc)
                         }
                     }
+                } else {
+                    result.push(eval_quasiquote(item, env.clone())?);
                 }
-                result.push(eval_quasiquote(item, env.clone())?);
             }
             Ok(Value::List(result))
         }
@@ -591,292 +832,172 @@ fn eval_quasiquote(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Value> {
     }
 }
 
-fn eval(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Value> {
-    match ast {
-        Ast::Atom(token) => {
-            if let Some(v) = env.borrow().get(token.source()) {
-                Ok(v.clone())
-            } else {
-                anyhow::bail!("{}: Undefined bind `{}`", token.loc, token.source());
+fn eval(mut ast: Ast, mut env: Rc<RefCell<Env>>) -> Result<Value> {
+    loop {
+        match std::mem::replace(&mut ast, Ast::Nil) {
+            Ast::Symbol(loc, id) => {
+                if let Some(v) = env.borrow().get(id) {
+                    return Ok(v.clone());
+                } else {
+                    anyhow::bail!("{}: Undefined bind `{}`", loc, lookup(id));
+                }
             }
-        }
-        Ast::Define(loc) | Ast::Let(loc) | Ast::Set(loc) | Ast::Bind(Token { loc, .. }) => {
-            anyhow::bail!("{}: Unexpected `{}`.", loc, ast);
-        }
-        Ast::Nil => Ok(Value::Nil),
-        Ast::Integer(i) => Ok(Value::Integer(i)),
-        Ast::Float(f) => Ok(Value::Float(f)),
-        Ast::String(s) => Ok(Value::String(s)),
-        Ast::Boolean(b) => Ok(Value::Boolean(b)),
-        Ast::List(asts) => {
-            if asts.is_empty() {
-                return Ok(Value::Nil);
-            }
-            let mut iter = asts.into_iter();
-            let first = iter.next().unwrap();
+            Ast::Nil => return Ok(Value::Nil),
+            Ast::Integer(i) => return Ok(Value::Integer(i)),
+            Ast::Float(f) => return Ok(Value::Float(f)),
+            Ast::String(s) => return Ok(Value::String(s)),
+            Ast::Boolean(b) => return Ok(Value::Boolean(b)),
+            Ast::Bind(id) => anyhow::bail!("Unexpected `&{}`.", lookup(id)),
 
-            if let Ast::Define(_) = first {
-                let name_ast = iter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("Expected identifier in define"))?;
-                let expr_ast = iter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("Expected expression in define"))?;
-                let Ast::Atom(name) = name_ast else {
-                    anyhow::bail!("Expected identifier in define");
-                };
-                let val = eval(expr_ast, env.clone())?;
-                env.borrow_mut().insert(name.source, val.clone());
+            Ast::Define(_, id, expr) => {
+                let val = eval(*expr, env.clone())?;
+                env.borrow_mut().insert(id, val.clone());
                 return Ok(val);
             }
-
-            if let Ast::Let(_) = first {
-                let bindings_ast = iter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("Expected bindings in let"))?;
+            Ast::Set(loc, id, expr) => {
+                let val = eval(*expr, env.clone())?;
+                if !env.borrow_mut().set(id, val.clone()) {
+                    anyhow::bail!("{}: Unbound variable in set!: {}", loc, lookup(id));
+                }
+                return Ok(val);
+            }
+            Ast::If(_loc, cond_ast, true_ast, false_ast) => {
+                let cond = eval(*cond_ast, env.clone())?;
+                let is_true = match cond {
+                    Value::Boolean(false) => false,
+                    _ => true,
+                };
+                if is_true {
+                    ast = *true_ast;
+                } else if let Some(f) = false_ast {
+                    ast = *f;
+                } else {
+                    return Ok(Value::Nil);
+                }
+            }
+            Ast::Begin(_loc, mut exprs) => {
+                if exprs.is_empty() {
+                    return Ok(Value::Nil);
+                }
+                let last = exprs.pop().unwrap();
+                for expr in exprs {
+                    eval(expr, env.clone())?;
+                }
+                ast = last;
+            }
+            Ast::Let(_loc, bindings, mut body) => {
                 let mut let_env = Env::new(Some(env.clone()));
-                match bindings_ast {
-                    Ast::List(bindings) => {
-                        for bind in bindings {
-                            if let Ast::List(mut pair) = bind {
-                                if pair.len() != 2 {
-                                    anyhow::bail!("Invalid binding pair in let");
-                                }
-                                let val_ast = pair.pop().unwrap();
-                                let name_ast = pair.pop().unwrap();
-                                if let Ast::Atom(t) = name_ast {
-                                    let val = eval(val_ast, env.clone())?;
-                                    let_env.insert(t.source, val);
-                                } else {
-                                    anyhow::bail!("Expected identifier in let binding");
-                                }
-                            } else {
-                                anyhow::bail!("Expected binding pair in let");
-                            }
-                        }
-                    }
-                    Ast::Nil => {} // no bindings
-                    _ => anyhow::bail!("Expected bindings list in let"),
+                for (id, val_ast) in bindings {
+                    let val = eval(val_ast, env.clone())?;
+                    let_env.insert(id, val);
                 }
-
-                let let_env_rc = Rc::new(RefCell::new(let_env));
-                let mut last_val = Value::Nil;
-                let mut has_body = false;
-                for ast in iter {
-                    has_body = true;
-                    last_val = eval(ast, let_env_rc.clone())?;
+                env = Rc::new(RefCell::new(let_env));
+                if body.is_empty() {
+                    return Ok(Value::Nil);
                 }
-                if !has_body {
-                    anyhow::bail!("Expected body in let");
+                let last = body.pop().unwrap();
+                for expr in body {
+                    eval(expr, env.clone())?;
                 }
-                return Ok(last_val);
+                ast = last;
             }
-
-            if let Ast::Set(_) = first {
-                let name_ast = iter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("Expected identifier in set!"))?;
-                let expr_ast = iter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("Expected expression in set!"))?;
-                let Ast::Atom(name) = name_ast else {
-                    anyhow::bail!("Expected identifier in set!");
+            Ast::Lambda(loc, params, body_asts) => {
+                let body = if body_asts.len() == 1 {
+                    body_asts.into_iter().next().unwrap()
+                } else {
+                    Ast::Begin(loc, body_asts)
                 };
-                let val = eval(expr_ast, env.clone())?;
-
-                if !env.borrow_mut().set(&name.source, val.clone()) {
-                    anyhow::bail!("Unbound variable in set!: {}", name.source);
-                }
-                return Ok(val);
-            }
-
-            if let Ast::Atom(token) = &first {
-                match token.source() {
-                    "lambda" => {
-                        let params_ast = iter
-                            .next()
-                            .ok_or_else(|| anyhow::anyhow!("Expected parameters in lambda"))?;
-                        let mut params = Vec::new();
-                        match params_ast {
-                            Ast::List(p) => {
-                                for param in p {
-                                    if matches!(param, Ast::Atom(_) | Ast::Bind(_)) {
-                                        params.push(param);
-                                    } else {
-                                        anyhow::bail!("Expected identifier in lambda parameters");
-                                    }
-                                }
-                            }
-                            Ast::Nil => {} // No params
-                            _ => anyhow::bail!("Expected parameter list in lambda"),
-                        }
-
-                        let mut body_asts = Vec::new();
-                        for ast in iter {
-                            body_asts.push(ast);
-                        }
-                        if body_asts.is_empty() {
-                            anyhow::bail!("Expected body in lambda");
-                        }
-                        let body = if body_asts.len() == 1 {
-                            body_asts.pop().unwrap()
-                        } else {
-                            let mut begin_list = vec![Ast::Atom(Token {
-                                kind: TokenKind::Identifier,
-                                loc: token.loc.clone(),
-                                source: "begin".to_string(),
-                            })];
-                            begin_list.extend(body_asts);
-                            Ast::List(begin_list)
-                        };
-
-                        return Ok(Value::Closure {
-                            params,
-                            body,
-                            env: env.clone(),
-                        });
-                    }
-                    "if" => {
-                        let cond_ast = iter
-                            .next()
-                            .ok_or_else(|| anyhow::anyhow!("Missing condition in if"))?;
-                        let true_ast = iter
-                            .next()
-                            .ok_or_else(|| anyhow::anyhow!("Missing true branch in if"))?;
-                        let false_ast = iter.next();
-
-                        let cond = eval(cond_ast, env.clone())?;
-                        let is_true = match cond {
-                            Value::Boolean(false) => false,
-                            _ => true,
-                        };
-                        if is_true {
-                            return eval(true_ast, env);
-                        } else if let Some(false_ast) = false_ast {
-                            return eval(false_ast, env);
-                        } else {
-                            return Ok(Value::Nil);
-                        }
-                    }
-                    "quote" => {
-                        let expr = iter
-                            .next()
-                            .ok_or_else(|| anyhow::anyhow!("Expected expression in quote"))?;
-                        return Ok(ast_to_value(expr));
-                    }
-                    "quasiquote" => {
-                        let expr = iter
-                            .next()
-                            .ok_or_else(|| anyhow::anyhow!("Expected expression in quasiquote"))?;
-                        return eval_quasiquote(expr, env);
-                    }
-                    "begin" => {
-                        let mut last_val = Value::Nil;
-                        for ast in iter {
-                            last_val = eval(ast, env.clone())?;
-                        }
-                        return Ok(last_val);
-                    }
-                    "and" => {
-                        let mut last_val = Value::Boolean(true);
-                        for ast in iter {
-                            last_val = eval(ast, env.clone())?;
-                            if let Value::Boolean(false) = last_val {
-                                return Ok(Value::Boolean(false));
-                            }
-                        }
-                        return Ok(last_val);
-                    }
-                    "or" => {
-                        let mut last_val = Value::Boolean(false);
-                        for ast in iter {
-                            last_val = eval(ast, env.clone())?;
-                            if !matches!(last_val, Value::Boolean(false)) {
-                                return Ok(last_val);
-                            }
-                        }
-                        return Ok(last_val);
-                    }
-                    _ => {} // Fallthrough
-                }
-            }
-
-            let func_val = eval(first, env.clone())?;
-            let mut args = Vec::new();
-            for arg_ast in iter {
-                args.push(eval(arg_ast, env.clone())?);
-            }
-
-            match func_val {
-                Value::NativeFunction(f) => f(args, env),
-                Value::Closure {
+                return Ok(Value::Closure {
                     params,
                     body,
-                    env: closure_env,
-                } => {
-                    let mut call_env = Env::new(Some(closure_env.clone()));
-                    let mut params = params.into_iter();
-                    let mut args = args.into_iter();
-                    loop {
-                        match params.next() {
-                            Some(Ast::Bind(b)) => {
-                                let mut rest = Vec::new();
-                                for arg in args {
-                                    rest.push(arg);
-                                }
-                                call_env.insert(b.source, Value::List(rest));
-                                break;
-                            }
-                            Some(Ast::Atom(t)) => {
-                                if let Some(arg) = args.next() {
-                                    call_env.insert(t.source, arg);
-                                } else {
-                                    anyhow::bail!("Arity mismatch");
-                                }
-                            }
-                            _ => break,
+                    env: env.clone(),
+                });
+            }
+            Ast::Quote(_, expr) => return Ok(ast_to_value(*expr)),
+            Ast::Quasiquote(_, expr) => return eval_quasiquote(*expr, env),
+            Ast::And(_, exprs) => {
+                if exprs.is_empty() {
+                    return Ok(Value::Boolean(true));
+                }
+                let mut iter = exprs.into_iter().peekable();
+                while let Some(e) = iter.next() {
+                    if iter.peek().is_none() {
+                        ast = e;
+                        break;
+                    } else {
+                        let val = eval(e, env.clone())?;
+                        if let Value::Boolean(false) = val {
+                            return Ok(Value::Boolean(false));
                         }
                     }
-                    eval(body, Rc::new(RefCell::new(call_env)))
                 }
-                _ => anyhow::bail!("Attempt to call non-function value"),
+            }
+            Ast::Or(_, exprs) => {
+                if exprs.is_empty() {
+                    return Ok(Value::Boolean(false));
+                }
+                let mut iter = exprs.into_iter().peekable();
+                while let Some(e) = iter.next() {
+                    if iter.peek().is_none() {
+                        ast = e;
+                        break;
+                    } else {
+                        let val = eval(e, env.clone())?;
+                        if !matches!(val, Value::Boolean(false)) {
+                            return Ok(val);
+                        }
+                    }
+                }
+            }
+            Ast::Unquote(loc, _) | Ast::UnquoteSplicing(loc, _) => {
+                anyhow::bail!("{}: Unexpected unquote outside of quasiquote", loc);
+            }
+            Ast::List(asts) => {
+                if asts.is_empty() {
+                    return Ok(Value::Nil);
+                }
+                let mut iter = asts.into_iter();
+                let first = iter.next().unwrap();
+
+                let func_val = eval(first, env.clone())?;
+                let mut args = Vec::new();
+                for arg_ast in iter {
+                    args.push(eval(arg_ast, env.clone())?);
+                }
+
+                match func_val {
+                    Value::NativeFunction(f) => return f(args, env),
+                    Value::Closure {
+                        params,
+                        body,
+                        env: closure_env,
+                    } => {
+                        let mut call_env = Env::new(Some(closure_env.clone()));
+                        let mut params_iter = params.into_iter();
+                        let mut args_iter = args.into_iter();
+                        while let Some(id) = params_iter.next() {
+                            if lookup(id).starts_with('&') {
+                                let rest: Vec<Value> = args_iter.by_ref().collect();
+                                call_env.insert(id, Value::List(rest));
+                                break;
+                            }
+                            if let Some(arg) = args_iter.next() {
+                                call_env.insert(id, arg);
+                            } else {
+                                anyhow::bail!("Arity mismatch");
+                            }
+                        }
+                        if args_iter.next().is_some() {
+                            anyhow::bail!("Arity mismatch");
+                        }
+                        ast = body;
+                        env = Rc::new(RefCell::new(call_env));
+                    }
+                    _ => anyhow::bail!("Attempt to call non-function value"),
+                }
             }
         }
     }
-}
-
-fn format_value_internal(val: &Value, display: bool) -> String {
-    match val {
-        Value::Nil => "nil".to_string(),
-        Value::Integer(i) => i.to_string(),
-        Value::Float(f) => f.to_string(),
-        Value::String(s) => {
-            if display {
-                s.clone()
-            } else {
-                format!("\"{}\"", s)
-            }
-        }
-        Value::Boolean(b) => (if *b { "#t" } else { "#f" }).to_string(),
-        Value::Symbol(s) => s.clone(),
-        Value::NativeFunction(_) => "<native-function>".to_string(),
-        Value::Closure { .. } => "<closure>".to_string(),
-        Value::List(l) => {
-            let items: Vec<String> = l
-                .iter()
-                .map(|v| format_value_internal(v, display))
-                .collect();
-            format!("({})", items.join(" "))
-        }
-    }
-}
-
-fn format_value(val: &Value) -> String {
-    format_value_internal(val, false)
-}
-
-fn display_value(val: &Value) -> String {
-    format_value_internal(val, true)
 }
 
 fn print(val: Value) -> Result<()> {
@@ -1178,6 +1299,7 @@ mod sel_core {
         }
         match args.pop().unwrap() {
             Value::List(l) => Ok(Value::Boolean(l.is_empty())),
+            Value::Nil => Ok(Value::Boolean(true)),
             _ => anyhow::bail!("empty requires a list"),
         }
     }
@@ -1266,37 +1388,37 @@ mod sel_core {
 
     pub fn load(env: Rc<RefCell<Env>>) {
         let mut e = env.borrow_mut();
-        e.insert(String::from("+"), Value::NativeFunction(sum));
-        e.insert(String::from("-"), Value::NativeFunction(sub));
-        e.insert(String::from("*"), Value::NativeFunction(mul));
-        e.insert(String::from("/"), Value::NativeFunction(div));
-        e.insert(String::from("mod"), Value::NativeFunction(modulo));
+        e.insert(crate::intern("+"), Value::NativeFunction(sum));
+        e.insert(crate::intern("-"), Value::NativeFunction(sub));
+        e.insert(crate::intern("*"), Value::NativeFunction(mul));
+        e.insert(crate::intern("/"), Value::NativeFunction(div));
+        e.insert(crate::intern("mod"), Value::NativeFunction(modulo));
 
-        e.insert(String::from("="), Value::NativeFunction(num_eq));
-        e.insert(String::from("<"), Value::NativeFunction(num_lt));
-        e.insert(String::from(">"), Value::NativeFunction(num_gt));
-        e.insert(String::from("<="), Value::NativeFunction(num_lte));
-        e.insert(String::from(">="), Value::NativeFunction(num_gte));
+        e.insert(crate::intern("="), Value::NativeFunction(num_eq));
+        e.insert(crate::intern("<"), Value::NativeFunction(num_lt));
+        e.insert(crate::intern(">"), Value::NativeFunction(num_gt));
+        e.insert(crate::intern("<="), Value::NativeFunction(num_lte));
+        e.insert(crate::intern(">="), Value::NativeFunction(num_gte));
 
-        e.insert(String::from("cons"), Value::NativeFunction(cons));
-        e.insert(String::from("car"), Value::NativeFunction(car));
-        e.insert(String::from("cdr"), Value::NativeFunction(cdr));
-        e.insert(String::from("nth"), Value::NativeFunction(nth));
-        e.insert(String::from("count"), Value::NativeFunction(count));
-        e.insert(String::from("list"), Value::NativeFunction(list));
-        e.insert(String::from("empty?"), Value::NativeFunction(empty));
+        e.insert(crate::intern("cons"), Value::NativeFunction(cons));
+        e.insert(crate::intern("car"), Value::NativeFunction(car));
+        e.insert(crate::intern("cdr"), Value::NativeFunction(cdr));
+        e.insert(crate::intern("nth"), Value::NativeFunction(nth));
+        e.insert(crate::intern("count"), Value::NativeFunction(count));
+        e.insert(crate::intern("list"), Value::NativeFunction(list));
+        e.insert(crate::intern("empty?"), Value::NativeFunction(empty));
 
-        e.insert(String::from("nil?"), Value::NativeFunction(is_nil));
-        e.insert(String::from("list?"), Value::NativeFunction(is_list));
-        e.insert(String::from("number?"), Value::NativeFunction(is_number));
-        e.insert(String::from("string?"), Value::NativeFunction(is_string));
+        e.insert(crate::intern("nil?"), Value::NativeFunction(is_nil));
+        e.insert(crate::intern("list?"), Value::NativeFunction(is_list));
+        e.insert(crate::intern("number?"), Value::NativeFunction(is_number));
+        e.insert(crate::intern("string?"), Value::NativeFunction(is_string));
         e.insert(
-            String::from("function?"),
+            crate::intern("function?"),
             Value::NativeFunction(is_function),
         );
 
-        e.insert(String::from("not"), Value::NativeFunction(not));
-        e.insert(String::from("print"), Value::NativeFunction(print_func));
-        e.insert(String::from("display"), Value::NativeFunction(display_func));
+        e.insert(crate::intern("not"), Value::NativeFunction(not));
+        e.insert(crate::intern("print"), Value::NativeFunction(print_func));
+        e.insert(crate::intern("display"), Value::NativeFunction(display_func));
     }
 }
