@@ -6,8 +6,8 @@ use std::io::stdin;
 use std::io::stdout;
 
 use std::cell::RefCell;
-use std::rc::Rc;
 use std::iter::Peekable;
+use std::rc::Rc;
 use std::str::Chars;
 
 #[derive(Debug, Default)]
@@ -59,7 +59,8 @@ fn main() -> Result<()> {
         let script_path = args.remove(1);
 
         let scheme_args = args.into_iter().skip(1).map(Value::String).collect();
-        env.borrow_mut().insert("sys_args".to_string(), Value::List(scheme_args));
+        env.borrow_mut()
+            .insert("*args*".to_string(), Value::List(scheme_args));
 
         let mut src = fs::read_to_string(script_path)?;
         if src.starts_with("#!") {
@@ -72,9 +73,10 @@ fn main() -> Result<()> {
 
         let program = format!("(begin {src})");
         let ast = read(&program)?;
-        eval(ast, env).map(|_|())
+        eval(ast, env).map(|_| ())
     } else {
-        env.borrow_mut().insert("sys_args".to_string(), Value::List(vec![]));
+        env.borrow_mut()
+            .insert("*args*".to_string(), Value::List(vec![]));
         println!("Welcome to the Sel Scheme repl. (Use `quit` to exit)");
         repl("sel> ", env)
     }
@@ -83,6 +85,7 @@ fn main() -> Result<()> {
 fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<()> {
     let mut line_buffer = String::new();
     loop {
+        line_buffer.clear();
         print!("{prompt}");
         stdout().flush()?;
         stdin().read_line(&mut line_buffer)?;
@@ -94,11 +97,27 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<()> {
             _ => (),
         }
 
-        let ast = read(line)?;
-        let val = eval(ast, env.clone())?;
-        print(val)?;
-
-        line_buffer.clear();
+        let ast = match read(line) {
+            Ok(ast) => ast,
+            Err(e) => {
+                println!("Error: {e}");
+                stdout().flush()?;
+                continue;
+            }
+        };
+        let val = match eval(ast, env.clone()) {
+            Ok(val) => val,
+            Err(e) => {
+                println!("Error: {e}");
+                stdout().flush()?;
+                continue;
+            }
+        };
+        if let Err(e) = print(val) {
+            println!("Error: {e}");
+            stdout().flush()?;
+            continue;
+        }
     }
     Ok(())
 }
@@ -178,7 +197,9 @@ impl<'a> Lexer<'a> {
                 self.advance();
             } else if c == ';' {
                 while let Some(ch) = self.advance() {
-                    if ch == '\n' { break; }
+                    if ch == '\n' {
+                        break;
+                    }
                 }
             } else {
                 break;
@@ -189,23 +210,62 @@ impl<'a> Lexer<'a> {
     pub fn next_token(&mut self) -> Result<Option<Token>> {
         self.skip_whitespace_and_comments();
 
-        let start_loc = Loc { line: self.line, col: self.col };
+        let start_loc = Loc {
+            line: self.line,
+            col: self.col,
+        };
         let Some(&c) = self.peek() else {
             return Ok(None);
         };
 
         match c {
-            '(' => { self.advance(); Ok(Some(Token { kind: TokenKind::OpenParen, source: "(".into(), loc: start_loc })) }
-            ')' => { self.advance(); Ok(Some(Token { kind: TokenKind::CloseParen, source: ")".into(), loc: start_loc })) }
-            '\'' => { self.advance(); Ok(Some(Token { kind: TokenKind::Quote, source: "'".into(), loc: start_loc })) }
-            '`' => { self.advance(); Ok(Some(Token { kind: TokenKind::QuasiQuote, source: "`".into(), loc: start_loc })) }
+            '(' => {
+                self.advance();
+                Ok(Some(Token {
+                    kind: TokenKind::OpenParen,
+                    source: "(".into(),
+                    loc: start_loc,
+                }))
+            }
+            ')' => {
+                self.advance();
+                Ok(Some(Token {
+                    kind: TokenKind::CloseParen,
+                    source: ")".into(),
+                    loc: start_loc,
+                }))
+            }
+            '\'' => {
+                self.advance();
+                Ok(Some(Token {
+                    kind: TokenKind::Quote,
+                    source: "'".into(),
+                    loc: start_loc,
+                }))
+            }
+            '`' => {
+                self.advance();
+                Ok(Some(Token {
+                    kind: TokenKind::QuasiQuote,
+                    source: "`".into(),
+                    loc: start_loc,
+                }))
+            }
             '~' => {
                 self.advance();
                 if let Some(&'@') = self.peek() {
                     self.advance();
-                    Ok(Some(Token { kind: TokenKind::UnquoteSplicing, source: "~@".into(), loc: start_loc }))
+                    Ok(Some(Token {
+                        kind: TokenKind::UnquoteSplicing,
+                        source: "~@".into(),
+                        loc: start_loc,
+                    }))
                 } else {
-                    Ok(Some(Token { kind: TokenKind::Unquote, source: "~".into(), loc: start_loc }))
+                    Ok(Some(Token {
+                        kind: TokenKind::Unquote,
+                        source: "~".into(),
+                        loc: start_loc,
+                    }))
                 }
             }
             '"' => {
@@ -234,14 +294,22 @@ impl<'a> Lexer<'a> {
                         string.push(self.advance().unwrap());
                     }
                 }
-                Ok(Some(Token { kind: TokenKind::String, source: string, loc: start_loc }))
+                Ok(Some(Token {
+                    kind: TokenKind::String,
+                    source: string,
+                    loc: start_loc,
+                }))
             }
             '#' => {
                 self.advance();
                 if let Some(&c2) = self.peek() {
                     if c2 == 't' || c2 == 'f' {
                         self.advance();
-                        return Ok(Some(Token { kind: TokenKind::Boolean, source: format!("#{}", c2), loc: start_loc }));
+                        return Ok(Some(Token {
+                            kind: TokenKind::Boolean,
+                            source: format!("#{}", c2),
+                            loc: start_loc,
+                        }));
                     }
                 }
                 anyhow::bail!("{}: Invalid character following #", start_loc);
@@ -255,13 +323,25 @@ impl<'a> Lexer<'a> {
                     ident.push(self.advance().unwrap());
                 }
                 if ident.is_empty() {
-                    anyhow::bail!("{}: Unexpected character '{}'", start_loc, self.advance().unwrap());
+                    anyhow::bail!(
+                        "{}: Unexpected character '{}'",
+                        start_loc,
+                        self.advance().unwrap()
+                    );
                 }
 
                 if ident.parse::<i64>().is_ok() || ident.parse::<f64>().is_ok() {
-                    Ok(Some(Token { kind: TokenKind::Number, source: ident, loc: start_loc }))
+                    Ok(Some(Token {
+                        kind: TokenKind::Number,
+                        source: ident,
+                        loc: start_loc,
+                    }))
                 } else {
-                    Ok(Some(Token { kind: TokenKind::Identifier, source: ident, loc: start_loc }))
+                    Ok(Some(Token {
+                        kind: TokenKind::Identifier,
+                        source: ident,
+                        loc: start_loc,
+                    }))
                 }
             }
         }
@@ -303,29 +383,45 @@ fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
         TokenKind::Quote => {
             let expr = parse_expr(tokens, pos)?;
             Ok(Ast::List(vec![
-                Ast::Atom(Token { kind: TokenKind::Identifier, source: "quote".into(), loc: t.loc.clone() }),
-                expr
+                Ast::Atom(Token {
+                    kind: TokenKind::Identifier,
+                    source: "quote".into(),
+                    loc: t.loc.clone(),
+                }),
+                expr,
             ]))
         }
         TokenKind::QuasiQuote => {
             let expr = parse_expr(tokens, pos)?;
             Ok(Ast::List(vec![
-                Ast::Atom(Token { kind: TokenKind::Identifier, source: "quasiquote".into(), loc: t.loc.clone() }),
-                expr
+                Ast::Atom(Token {
+                    kind: TokenKind::Identifier,
+                    source: "quasiquote".into(),
+                    loc: t.loc.clone(),
+                }),
+                expr,
             ]))
         }
         TokenKind::Unquote => {
             let expr = parse_expr(tokens, pos)?;
             Ok(Ast::List(vec![
-                Ast::Atom(Token { kind: TokenKind::Identifier, source: "unquote".into(), loc: t.loc.clone() }),
-                expr
+                Ast::Atom(Token {
+                    kind: TokenKind::Identifier,
+                    source: "unquote".into(),
+                    loc: t.loc.clone(),
+                }),
+                expr,
             ]))
         }
         TokenKind::UnquoteSplicing => {
             let expr = parse_expr(tokens, pos)?;
             Ok(Ast::List(vec![
-                Ast::Atom(Token { kind: TokenKind::Identifier, source: "unquote-splicing".into(), loc: t.loc.clone() }),
-                expr
+                Ast::Atom(Token {
+                    kind: TokenKind::Identifier,
+                    source: "unquote-splicing".into(),
+                    loc: t.loc.clone(),
+                }),
+                expr,
             ]))
         }
         TokenKind::String => Ok(Ast::String(t.source.clone())),
@@ -339,15 +435,13 @@ fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
                 anyhow::bail!("{}: Invalid number format", t.loc)
             }
         }
-        TokenKind::Identifier => {
-            match t.source.as_str() {
-                "nil" => Ok(Ast::Nil),
-                "define" => Ok(Ast::Define(t.loc.clone())),
-                "let" => Ok(Ast::Let(t.loc.clone())),
-                "set" | "set!" => Ok(Ast::Set(t.loc.clone())),
-                _ => Ok(Ast::Atom(t.clone())),
-            }
-        }
+        TokenKind::Identifier => match t.source.as_str() {
+            "nil" => Ok(Ast::Nil),
+            "define" => Ok(Ast::Define(t.loc.clone())),
+            "let" => Ok(Ast::Let(t.loc.clone())),
+            "set!" => Ok(Ast::Set(t.loc.clone())),
+            _ => Ok(Ast::Atom(t.clone())),
+        },
     }
 }
 
@@ -379,7 +473,7 @@ fn ast_to_value(ast: Ast) -> Value {
         Ast::List(l) => Value::List(l.into_iter().map(ast_to_value).collect()),
         Ast::Define(_) => Value::Symbol("define".to_string()),
         Ast::Let(_) => Value::Symbol("let".to_string()),
-        Ast::Set(_) => Value::Symbol("set".to_string()),
+        Ast::Set(_) => Value::Symbol("set!".to_string()),
     }
 }
 
@@ -425,7 +519,10 @@ fn eval_quasiquote(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Value> {
                         }
                         return eval(list.pop().unwrap(), env);
                     } else if t.source() == "unquote-splicing" {
-                        anyhow::bail!("{}: unquote-splicing invalid at top level of quasiquote", t.loc);
+                        anyhow::bail!(
+                            "{}: unquote-splicing invalid at top level of quasiquote",
+                            t.loc
+                        );
                     }
                 }
             }
@@ -436,13 +533,18 @@ fn eval_quasiquote(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Value> {
                         if let Ast::Atom(t) = sublist[0].clone() {
                             if t.source() == "unquote-splicing" {
                                 if sublist.len() != 2 {
-                                    anyhow::bail!("{}: unquote-splicing takes exactly 1 argument", t.loc);
+                                    anyhow::bail!(
+                                        "{}: unquote-splicing takes exactly 1 argument",
+                                        t.loc
+                                    );
                                 }
                                 let val = eval(sublist.pop().unwrap(), env.clone())?;
                                 match val {
                                     Value::List(items) => result.extend(items),
-                                    Value::Nil => {},
-                                    _ => anyhow::bail!("{}: unquote-splicing requires a list", t.loc),
+                                    Value::Nil => {}
+                                    _ => {
+                                        anyhow::bail!("{}: unquote-splicing requires a list", t.loc)
+                                    }
                                 }
                                 continue;
                             }
@@ -704,13 +806,22 @@ fn format_value_internal(val: &Value, display: bool) -> String {
         Value::Nil => "nil".to_string(),
         Value::Integer(i) => i.to_string(),
         Value::Float(f) => f.to_string(),
-        Value::String(s) => if display { s.clone() } else { format!("\"{}\"", s) },
+        Value::String(s) => {
+            if display {
+                s.clone()
+            } else {
+                format!("\"{}\"", s)
+            }
+        }
         Value::Boolean(b) => (if *b { "#t" } else { "#f" }).to_string(),
         Value::Symbol(s) => s.clone(),
         Value::NativeFunction(_) => "<native-function>".to_string(),
         Value::Closure { .. } => "<closure>".to_string(),
         Value::List(l) => {
-            let items: Vec<String> = l.iter().map(|v| format_value_internal(v, display)).collect();
+            let items: Vec<String> = l
+                .iter()
+                .map(|v| format_value_internal(v, display))
+                .collect();
             format!("({})", items.join(" "))
         }
     }
@@ -967,6 +1078,26 @@ mod sel_core {
         }
     }
 
+    pub fn nth(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.len() != 2 {
+            anyhow::bail!("nth requires exactly 2 argument");
+        }
+        let index = args.pop().unwrap();
+        match args.pop().unwrap() {
+            Value::List(mut l) => match index {
+                Value::Integer(index) => {
+                    if (index as usize) < l.len() {
+                        Ok(l.remove(index as usize))
+                    } else {
+                        Ok(Value::Nil)
+                    }
+                }
+                _ => anyhow::bail!("nth requires a interger"),
+            },
+            _ => anyhow::bail!("nth requires a list"),
+        }
+    }
+
     pub fn cdr(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
             anyhow::bail!("cdr requires exactly 1 argument");
@@ -1085,7 +1216,10 @@ mod sel_core {
 
         e.insert(String::from("cons"), Value::NativeFunction(cons));
         e.insert(String::from("car"), Value::NativeFunction(car));
+        e.insert(String::from("first"), Value::NativeFunction(car));
         e.insert(String::from("cdr"), Value::NativeFunction(cdr));
+        e.insert(String::from("rest"), Value::NativeFunction(cdr));
+        e.insert(String::from("nth"), Value::NativeFunction(nth));
         e.insert(String::from("list"), Value::NativeFunction(list));
 
         e.insert(String::from("nil?"), Value::NativeFunction(is_nil));
