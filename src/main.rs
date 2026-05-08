@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::Result as AnyhowResult;
 use rustyline::error::ReadlineError;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -6,6 +6,51 @@ use std::iter::Peekable;
 use std::rc::Rc;
 use std::str::Chars;
 use std::{env, fs};
+
+#[derive(Debug, Clone)]
+pub enum SelErrorKind {
+    UnexpectedEOF,
+    UnexpectedToken(String),
+    UndefinedVariable(u32),
+    ArityMismatch { expected: usize, actual: usize },
+    UnboundVariable(u32),
+    InvalidNumber(String),
+    UnterminatedString,
+    Generic(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct SelError {
+    pub loc: Loc,
+    pub kind: SelErrorKind,
+}
+
+impl std::fmt::Display for SelError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.kind {
+            SelErrorKind::UnexpectedEOF => write!(f, "{}: Unexpected EOF", self.loc),
+            SelErrorKind::UnexpectedToken(s) => write!(f, "{}: Unexpected token `{}`", self.loc, s),
+            SelErrorKind::UndefinedVariable(id) => {
+                write!(f, "{}: Undefined variable `{}`", self.loc, lookup(*id))
+            }
+            SelErrorKind::ArityMismatch { expected, actual } => write!(
+                f,
+                "{}: Arity mismatch: expected {}, got {}",
+                self.loc, expected, actual
+            ),
+            SelErrorKind::UnboundVariable(id) => {
+                write!(f, "{}: Unbound variable in set!: {}", self.loc, lookup(*id))
+            }
+            SelErrorKind::InvalidNumber(s) => write!(f, "{}: Invalid number format `{}`", self.loc, s),
+            SelErrorKind::UnterminatedString => write!(f, "{}: Unterminated string", self.loc),
+            SelErrorKind::Generic(s) => write!(f, "{}: {}", self.loc, s),
+        }
+    }
+}
+
+impl std::error::Error for SelError {}
+
+pub type Result<T> = std::result::Result<T, SelError>;
 
 thread_local! {
     static SYMBOLS: RefCell<SymbolTable> = RefCell::new(SymbolTable::default());
@@ -85,9 +130,22 @@ impl Env {
     }
 }
 
-fn main() -> Result<()> {
+fn main() -> AnyhowResult<()> {
     let env = Rc::new(RefCell::new(Env::default()));
     sel_core::load(env.clone());
+
+    // Load core library if exists
+    if let Ok(core_src) = fs::read_to_string("core.scm") {
+        let program = format!("(begin {core_src})");
+        match read(&program) {
+            Ok(ast) => {
+                if let Err(e) = eval(ast, env.clone()) {
+                    eprintln!("Error loading core.scm: {}", e);
+                }
+            }
+            Err(e) => eprintln!("Error parsing core.scm: {}", e),
+        }
+    }
 
     let mut args: Vec<String> = std::env::args().collect();
     if args.len() > 1 {
@@ -108,7 +166,7 @@ fn main() -> Result<()> {
 
         let program = format!("(begin {src})");
         let ast = read(&program)?;
-        eval(ast, env).map(|_| ())
+        eval(ast, env).map_err(|e| anyhow::anyhow!("{}", e)).map(|_| ())
     } else {
         env.borrow_mut()
             .insert(intern("*args*"), Value::List(vec![]));
@@ -117,7 +175,7 @@ fn main() -> Result<()> {
     }
 }
 
-fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<()> {
+fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> AnyhowResult<()> {
     let sel_path = env::home_dir().unwrap_or_default().join(".sel");
     fs::create_dir_all(&sel_path)?;
     let hist_path = sel_path.join("history");
@@ -348,7 +406,10 @@ impl<'a> Lexer<'a> {
                                 _ => string.push(escaped),
                             }
                         } else {
-                            anyhow::bail!("{}: Unterminated string escape", start_loc);
+                            return Err(SelError {
+                                loc: start_loc,
+                                kind: SelErrorKind::Generic("Unterminated string escape".into()),
+                            });
                         }
                     } else {
                         string.push(self.advance().unwrap());
@@ -372,7 +433,10 @@ impl<'a> Lexer<'a> {
                         }));
                     }
                 }
-                anyhow::bail!("{}: Invalid character following #", start_loc);
+                Err(SelError {
+                    loc: start_loc,
+                    kind: SelErrorKind::Generic("Invalid character following #".into()),
+                })
             }
             _ => {
                 let mut ident = String::new();
@@ -383,11 +447,10 @@ impl<'a> Lexer<'a> {
                     ident.push(self.advance().unwrap());
                 }
                 if ident.is_empty() {
-                    anyhow::bail!(
-                        "{}: Unexpected character '{}'",
-                        start_loc,
-                        self.advance().unwrap()
-                    );
+                    return Err(SelError {
+                        loc: start_loc,
+                        kind: SelErrorKind::UnexpectedToken(self.advance().unwrap().to_string()),
+                    });
                 }
 
                 if ident.parse::<i64>().is_ok() || ident.parse::<f64>().is_ok() {
@@ -420,16 +483,20 @@ fn read(line: &str) -> Result<Ast> {
 
 fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
     if *pos >= tokens.len() {
-        anyhow::bail!("Unexpected EOF");
+        return Err(SelError {
+            loc: Loc::default(),
+            kind: SelErrorKind::UnexpectedEOF,
+        });
     }
     let t = &tokens[*pos];
     *pos += 1;
 
     match t.kind {
         TokenKind::OpenParen => parse_list(tokens, pos, t),
-        TokenKind::CloseParen => {
-            anyhow::bail!("{}: Unexpected closing parenthesis", t.loc);
-        }
+        TokenKind::CloseParen => Err(SelError {
+            loc: t.loc,
+            kind: SelErrorKind::UnexpectedToken(")".into()),
+        }),
         TokenKind::Quote => {
             let expr = parse_expr(tokens, pos)?;
             Ok(Ast::Quote(t.loc.clone(), Box::new(expr)))
@@ -438,7 +505,10 @@ fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
             if let Ast::Symbol(_, id) = parse_expr(tokens, pos)? {
                 return Ok(Ast::Bind(id));
             }
-            anyhow::bail!("{}: Expected identifier after &", t.loc);
+            Err(SelError {
+                loc: t.loc,
+                kind: SelErrorKind::Generic("Expected identifier after &".into()),
+            })
         }
         TokenKind::QuasiQuote => {
             let expr = parse_expr(tokens, pos)?;
@@ -460,7 +530,10 @@ fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
             } else if let Ok(f) = t.source.parse::<f64>() {
                 Ok(Ast::Float(f))
             } else {
-                anyhow::bail!("{}: Invalid number format", t.loc)
+                Err(SelError {
+                    loc: t.loc,
+                    kind: SelErrorKind::InvalidNumber(t.source.clone()),
+                })
             }
         }
         TokenKind::Identifier => match t.source.as_str() {
@@ -476,27 +549,35 @@ fn parse_list(tokens: &[Token], pos: &mut usize, open_token: &Token) -> Result<A
         list.push(parse_expr(tokens, pos)?);
     }
     if *pos >= tokens.len() {
-        anyhow::bail!("{}: Missing closing parenthesis", open_token.loc);
+        return Err(SelError {
+            loc: open_token.loc.clone(),
+            kind: SelErrorKind::Generic("Missing closing parenthesis".into()),
+        });
     }
     *pos += 1; // consume ')'
+    optimize_ast(list, open_token.loc.clone())
+}
 
+fn optimize_ast(list: Vec<Ast>, _loc: Loc) -> Result<Ast> {
     if list.is_empty() {
         return Ok(Ast::Nil);
     }
 
-    if let Some(Ast::Symbol(loc, id)) = list.first().cloned() {
+    if let Some(Ast::Symbol(s_loc, id)) = list.first().cloned() {
         match lookup(id).as_str() {
             "if" => {
                 let mut iter = list.into_iter().skip(1);
-                let cond = iter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("{}: Missing condition in if", loc))?;
-                let true_branch = iter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("{}: Missing true branch in if", loc))?;
+                let cond = iter.next().ok_or_else(|| SelError {
+                    loc: s_loc.clone(),
+                    kind: SelErrorKind::Generic("Missing condition in if".into()),
+                })?;
+                let true_branch = iter.next().ok_or_else(|| SelError {
+                    loc: s_loc.clone(),
+                    kind: SelErrorKind::Generic("Missing true branch in if".into()),
+                })?;
                 let false_branch = iter.next();
                 Ok(Ast::If(
-                    loc,
+                    s_loc,
                     Box::new(cond),
                     Box::new(true_branch),
                     false_branch.map(Box::new),
@@ -504,9 +585,10 @@ fn parse_list(tokens: &[Token], pos: &mut usize, open_token: &Token) -> Result<A
             }
             "lambda" => {
                 let mut iter = list.into_iter().skip(1);
-                let params_ast = iter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("{}: Missing parameters in lambda", loc))?;
+                let params_ast = iter.next().ok_or_else(|| SelError {
+                    loc: s_loc.clone(),
+                    kind: SelErrorKind::Generic("Missing parameters in lambda".into()),
+                })?;
                 let mut params = Vec::new();
                 match params_ast {
                     Ast::List(p) => {
@@ -514,100 +596,242 @@ fn parse_list(tokens: &[Token], pos: &mut usize, open_token: &Token) -> Result<A
                             if let Ast::Symbol(_, id) = param {
                                 params.push(id);
                             } else if let Ast::Bind(id) = param {
-                                params.push(id);
+                                let name = lookup(id);
+                                params.push(intern(&format!("&{}", name)));
                             } else {
-                                anyhow::bail!("{}: Expected identifier in lambda parameters", loc);
+                                return Err(SelError {
+                                    loc: s_loc.clone(),
+                                    kind: SelErrorKind::Generic(
+                                        "Expected identifier in lambda parameters".into(),
+                                    ),
+                                });
                             }
                         }
                     }
                     Ast::Nil => {}
-                    _ => anyhow::bail!("{}: Expected parameter list in lambda", loc),
+                    _ => {
+                        return Err(SelError {
+                            loc: s_loc.clone(),
+                            kind: SelErrorKind::Generic("Expected parameter list in lambda".into()),
+                        })
+                    }
                 }
                 let body = iter.collect();
-                Ok(Ast::Lambda(loc, params, body))
+                Ok(Ast::Lambda(s_loc, params, body))
             }
             "begin" => {
                 let iter = list.into_iter().skip(1);
-                Ok(Ast::Begin(loc, iter.collect()))
+                Ok(Ast::Begin(s_loc, iter.collect()))
             }
             "define" => {
                 let mut iter = list.into_iter().skip(1);
-                let name_ast = iter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("{}: Expected identifier in define", loc))?;
-                let value_ast = iter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("{}: Expected expression in define", loc))?;
+                let name_ast = iter.next().ok_or_else(|| SelError {
+                    loc: s_loc.clone(),
+                    kind: SelErrorKind::Generic("Expected identifier in define".into()),
+                })?;
+
+                if let Ast::List(mut p_list) = name_ast {
+                    if p_list.is_empty() {
+                        return Err(SelError {
+                            loc: s_loc,
+                            kind: SelErrorKind::Generic("Empty parameter list in define".into()),
+                        });
+                    }
+                    let head = p_list.remove(0);
+                    let Ast::Symbol(_, name_id) = head else {
+                        return Err(SelError {
+                            loc: s_loc,
+                            kind: SelErrorKind::Generic(
+                                "Expected identifier at head of parameter list in define".into(),
+                            ),
+                        });
+                    };
+                    let mut params = Vec::new();
+                    for p in p_list {
+                        match p {
+                            Ast::Symbol(_, id) => params.push(id),
+                            Ast::Bind(id) => {
+                                let name = lookup(id);
+                                params.push(intern(&format!("&{}", name)));
+                            }
+                            _ => {
+                                return Err(SelError {
+                                    loc: s_loc,
+                                    kind: SelErrorKind::Generic(
+                                        "Expected identifier in parameter list".into(),
+                                    ),
+                                })
+                            }
+                        }
+                    }
+                    let body: Vec<Ast> = iter.collect();
+                    if body.is_empty() {
+                        return Err(SelError {
+                            loc: s_loc,
+                            kind: SelErrorKind::Generic("Missing body in define".into()),
+                        });
+                    }
+                    return Ok(Ast::Define(
+                        s_loc.clone(),
+                        name_id,
+                        Box::new(Ast::Lambda(s_loc, params, body)),
+                    ));
+                }
+
+                let value_ast = iter.next().ok_or_else(|| SelError {
+                    loc: s_loc.clone(),
+                    kind: SelErrorKind::Generic("Expected expression in define".into()),
+                })?;
                 let Ast::Symbol(_, name_id) = name_ast else {
-                    anyhow::bail!("{}: Expected identifier in define", loc);
+                    return Err(SelError {
+                        loc: s_loc.clone(),
+                        kind: SelErrorKind::Generic("Expected identifier in define".into()),
+                    });
                 };
-                Ok(Ast::Define(loc, name_id, Box::new(value_ast)))
+                Ok(Ast::Define(s_loc, name_id, Box::new(value_ast)))
+            }
+            "defmacro" => {
+                let mut iter = list.into_iter().skip(1);
+                let name_ast = iter.next().ok_or_else(|| SelError {
+                    loc: s_loc.clone(),
+                    kind: SelErrorKind::Generic("Expected identifier in defmacro".into()),
+                })?;
+                let params_ast = iter.next().ok_or_else(|| SelError {
+                    loc: s_loc.clone(),
+                    kind: SelErrorKind::Generic("Expected parameters in defmacro".into()),
+                })?;
+
+                let mut params = Vec::new();
+                match params_ast {
+                    Ast::List(p) => {
+                        for param in p {
+                            if let Ast::Symbol(_, id) = param {
+                                params.push(id);
+                            } else if let Ast::Bind(id) = param {
+                                let name = lookup(id);
+                                params.push(intern(&format!("&{}", name)));
+                            } else {
+                                return Err(SelError {
+                                    loc: s_loc.clone(),
+                                    kind: SelErrorKind::Generic(
+                                        "Expected identifier in defmacro parameters".into(),
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                    Ast::Nil => {}
+                    _ => {
+                        return Err(SelError {
+                            loc: s_loc.clone(),
+                            kind: SelErrorKind::Generic("Expected parameter list in defmacro".into()),
+                        })
+                    }
+                }
+                let body: Vec<Ast> = iter.collect();
+                let Ast::Symbol(_, name_id) = name_ast else {
+                    return Err(SelError {
+                        loc: s_loc.clone(),
+                        kind: SelErrorKind::Generic("Expected identifier in defmacro".into()),
+                    });
+                };
+                Ok(Ast::DefMacro(
+                    s_loc,
+                    name_id,
+                    Box::new(Ast::Lambda(s_loc.clone(), params, body)),
+                ))
             }
             "set!" => {
                 let mut iter = list.into_iter().skip(1);
-                let name_ast = iter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("{}: Expected identifier in set!", loc))?;
-                let value_ast = iter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("{}: Expected expression in set!", loc))?;
+                let name_ast = iter.next().ok_or_else(|| SelError {
+                    loc: s_loc.clone(),
+                    kind: SelErrorKind::Generic("Expected identifier in set!".into()),
+                })?;
+                let value_ast = iter.next().ok_or_else(|| SelError {
+                    loc: s_loc.clone(),
+                    kind: SelErrorKind::Generic("Expected expression in set!".into()),
+                })?;
                 let Ast::Symbol(_, name_id) = name_ast else {
-                    anyhow::bail!("{}: Expected identifier in set!", loc);
+                    return Err(SelError {
+                        loc: s_loc.clone(),
+                        kind: SelErrorKind::Generic("Expected identifier in set!".into()),
+                    });
                 };
-                Ok(Ast::Set(loc, name_id, Box::new(value_ast)))
+                Ok(Ast::Set(s_loc, name_id, Box::new(value_ast)))
             }
             "let" => {
                 let mut iter = list.into_iter().skip(1);
-                let bindings_ast = iter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("{}: Expected bindings in let", loc))?;
+                let bindings_ast = iter.next().ok_or_else(|| SelError {
+                    loc: s_loc.clone(),
+                    kind: SelErrorKind::Generic("Expected bindings in let".into()),
+                })?;
                 let mut bindings = Vec::new();
                 match bindings_ast {
                     Ast::List(b) => {
                         for bind in b {
                             if let Ast::List(mut pair) = bind {
                                 if pair.len() != 2 {
-                                    anyhow::bail!("{}: Invalid binding pair in let", loc);
+                                    return Err(SelError {
+                                        loc: s_loc.clone(),
+                                        kind: SelErrorKind::Generic(
+                                            "Invalid binding pair in let".into(),
+                                        ),
+                                    });
                                 }
                                 let val = pair.pop().unwrap();
                                 let name = pair.pop().unwrap();
                                 if let Ast::Symbol(_, name_id) = name {
                                     bindings.push((name_id, val));
                                 } else {
-                                    anyhow::bail!("{}: Expected identifier in let binding", loc);
+                                    return Err(SelError {
+                                        loc: s_loc.clone(),
+                                        kind: SelErrorKind::Generic(
+                                            "Expected identifier in let binding".into(),
+                                        ),
+                                    });
                                 }
                             } else {
-                                anyhow::bail!("{}: Expected binding pair in let", loc);
+                                return Err(SelError {
+                                    loc: s_loc.clone(),
+                                    kind: SelErrorKind::Generic("Expected binding pair in let".into()),
+                                });
                             }
                         }
                     }
                     Ast::Nil => {}
-                    _ => anyhow::bail!("{}: Expected bindings list in let", loc),
+                    _ => {
+                        return Err(SelError {
+                            loc: s_loc.clone(),
+                            kind: SelErrorKind::Generic("Expected binding list in let".into()),
+                        })
+                    }
                 }
                 let body = iter.collect();
-                Ok(Ast::Let(loc, bindings, body))
+                Ok(Ast::Let(s_loc, bindings, body))
             }
             "quote" => {
                 let mut iter = list.into_iter().skip(1);
-                let expr = iter
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("{}: Expected expression in quote", loc))?;
-                Ok(Ast::Quote(loc, Box::new(expr)))
+                let expr = iter.next().ok_or_else(|| SelError {
+                    loc: s_loc.clone(),
+                    kind: SelErrorKind::Generic("Expected expression in quote".into()),
+                })?;
+                Ok(Ast::Quote(s_loc, Box::new(expr)))
             }
             "quasiquote" => {
                 let mut iter = list.into_iter().skip(1);
-                let expr = iter.next().ok_or_else(|| {
-                    anyhow::anyhow!("{}: Expected expression in quasiquote", loc)
+                let expr = iter.next().ok_or_else(|| SelError {
+                    loc: s_loc.clone(),
+                    kind: SelErrorKind::Generic("Expected expression in quasiquote".into()),
                 })?;
-                Ok(Ast::Quasiquote(loc, Box::new(expr)))
+                Ok(Ast::Quasiquote(s_loc, Box::new(expr)))
             }
             "and" => {
                 let iter = list.into_iter().skip(1);
-                Ok(Ast::And(loc, iter.collect()))
+                Ok(Ast::And(s_loc, iter.collect()))
             }
             "or" => {
                 let iter = list.into_iter().skip(1);
-                Ok(Ast::Or(loc, iter.collect()))
+                Ok(Ast::Or(s_loc, iter.collect()))
             }
             _ => Ok(Ast::List(list)),
         }
@@ -631,6 +855,17 @@ enum Value {
         body: Ast,
         env: Rc<RefCell<Env>>,
     },
+    Macro {
+        params: Vec<u32>,
+        body: Ast,
+        env: Rc<RefCell<Env>>,
+    },
+}
+
+impl Value {
+    pub fn display(&self) -> String {
+        display_value(self)
+    }
 }
 
 fn format_value_internal(val: &Value, display: bool) -> String {
@@ -666,6 +901,7 @@ fn format_value_internal(val: &Value, display: bool) -> String {
         }
         Value::NativeFunction(_) => "<native function>".to_string(),
         Value::Closure { .. } => "<closure>".to_string(),
+        Value::Macro { .. } => "<macro>".to_string(),
     }
 }
 
@@ -683,79 +919,11 @@ impl std::fmt::Display for Value {
     }
 }
 
-fn ast_to_value(ast: Ast) -> Value {
-    match ast {
-        Ast::Nil => Value::Nil,
-        Ast::Integer(i) => Value::Integer(i),
-        Ast::Float(f) => Value::Float(f),
-        Ast::String(s) => Value::String(s),
-        Ast::Boolean(b) => Value::Boolean(b),
-        Ast::Symbol(_, id) => Value::Symbol(id),
-        Ast::Bind(id) => Value::Symbol(id),
-        Ast::List(l) => Value::List(l.into_iter().map(ast_to_value).collect()),
-        Ast::If(_, cond, true_b, false_b) => {
-            let mut l = vec![Value::Symbol(intern("if")), ast_to_value(*cond), ast_to_value(*true_b)];
-            if let Some(f) = false_b {
-                l.push(ast_to_value(*f));
-            }
-            Value::List(l)
-        }
-        Ast::Lambda(_, params, body) => {
-            let mut l = vec![Value::Symbol(intern("lambda"))];
-            l.push(Value::List(params.into_iter().map(Value::Symbol).collect()));
-            l.extend(body.into_iter().map(ast_to_value));
-            Value::List(l)
-        }
-        Ast::Define(_, id, expr) => {
-            Value::List(vec![Value::Symbol(intern("define")), Value::Symbol(id), ast_to_value(*expr)])
-        }
-        Ast::Set(_, id, expr) => {
-            Value::List(vec![Value::Symbol(intern("set!")), Value::Symbol(id), ast_to_value(*expr)])
-        }
-        Ast::Let(_, bindings, body) => {
-            let mut l = vec![Value::Symbol(intern("let"))];
-            let mut b_list = Vec::new();
-            for (id, expr) in bindings {
-                b_list.push(Value::List(vec![Value::Symbol(id), ast_to_value(expr)]));
-            }
-            l.push(Value::List(b_list));
-            l.extend(body.into_iter().map(ast_to_value));
-            Value::List(l)
-        }
-        Ast::Begin(_, body) => {
-            let mut l = vec![Value::Symbol(intern("begin"))];
-            l.extend(body.into_iter().map(ast_to_value));
-            Value::List(l)
-        }
-        Ast::Quote(_, expr) => {
-            Value::List(vec![Value::Symbol(intern("quote")), ast_to_value(*expr)])
-        }
-        Ast::Quasiquote(_, expr) => {
-            Value::List(vec![Value::Symbol(intern("quasiquote")), ast_to_value(*expr)])
-        }
-        Ast::Unquote(_, expr) => {
-            Value::List(vec![Value::Symbol(intern("unquote")), ast_to_value(*expr)])
-        }
-        Ast::UnquoteSplicing(_, expr) => {
-            Value::List(vec![Value::Symbol(intern("unquote-splicing")), ast_to_value(*expr)])
-        }
-        Ast::And(_, exprs) => {
-            let mut l = vec![Value::Symbol(intern("and"))];
-            l.extend(exprs.into_iter().map(ast_to_value));
-            Value::List(l)
-        }
-        Ast::Or(_, exprs) => {
-            let mut l = vec![Value::Symbol(intern("or"))];
-            l.extend(exprs.into_iter().map(ast_to_value));
-            Value::List(l)
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 #[allow(unused)]
 enum Ast {
     Define(Loc, u32, Box<Ast>),
+    DefMacro(Loc, u32, Box<Ast>),
     Let(Loc, Vec<(u32, Ast)>, Vec<Ast>),
     Set(Loc, u32, Box<Ast>),
     If(Loc, Box<Ast>, Box<Ast>, Option<Box<Ast>>),
@@ -781,6 +949,7 @@ impl std::fmt::Display for Ast {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Ast::Define(..) => write!(f, "define"),
+            Ast::DefMacro(..) => write!(f, "defmacro"),
             Ast::Let(..) => write!(f, "let"),
             Ast::Set(..) => write!(f, "set"),
             Ast::If(..) => write!(f, "if"),
@@ -807,9 +976,10 @@ impl std::fmt::Display for Ast {
 fn eval_quasiquote(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Value> {
     match ast {
         Ast::Unquote(_, expr) => eval(*expr, env),
-        Ast::UnquoteSplicing(loc, _) => {
-            anyhow::bail!("{}: unquote-splicing invalid at top level of quasiquote", loc);
-        }
+        Ast::UnquoteSplicing(loc, _) => Err(SelError {
+            loc,
+            kind: SelErrorKind::Generic("unquote-splicing invalid at top level of quasiquote".into()),
+        }),
         Ast::List(list) => {
             let mut result = Vec::new();
             for item in list {
@@ -819,7 +989,10 @@ fn eval_quasiquote(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Value> {
                         Value::List(items) => result.extend(items),
                         Value::Nil => {}
                         _ => {
-                            anyhow::bail!("{}: unquote-splicing requires a list", loc)
+                            return Err(SelError {
+                                loc,
+                                kind: SelErrorKind::Generic("unquote-splicing requires a list".into()),
+                            });
                         }
                     }
                 } else {
@@ -832,6 +1005,137 @@ fn eval_quasiquote(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Value> {
     }
 }
 
+fn ast_to_value(ast: Ast) -> Value {
+    match ast {
+        Ast::Symbol(_, id) => Value::Symbol(id),
+        Ast::Integer(i) => Value::Integer(i),
+        Ast::Float(f) => Value::Float(f),
+        Ast::String(s) => Value::String(s),
+        Ast::Boolean(b) => Value::Boolean(b),
+        Ast::Nil => Value::Nil,
+        Ast::List(l) => Value::List(l.into_iter().map(ast_to_value).collect()),
+        Ast::Define(_, id, val) => {
+            Value::List(vec![Value::Symbol(intern("define")), Value::Symbol(id), ast_to_value(*val)])
+        }
+        Ast::DefMacro(_, id, val) => {
+            Value::List(vec![Value::Symbol(intern("defmacro")), Value::Symbol(id), ast_to_value(*val)])
+        }
+        Ast::Set(_, id, val) => {
+            Value::List(vec![Value::Symbol(intern("set!")), Value::Symbol(id), ast_to_value(*val)])
+        }
+        Ast::If(_, cond, t, f) => {
+            let mut list = vec![Value::Symbol(intern("if")), ast_to_value(*cond), ast_to_value(*t)];
+            if let Some(f) = f {
+                list.push(ast_to_value(*f));
+            }
+            Value::List(list)
+        }
+        Ast::Lambda(_, params, body) => {
+            let mut list = vec![Value::Symbol(intern("lambda")), Value::List(params.into_iter().map(Value::Symbol).collect())];
+            list.extend(body.into_iter().map(ast_to_value));
+            Value::List(list)
+        }
+        Ast::Begin(_, body) => {
+            let mut list = vec![Value::Symbol(intern("begin"))];
+            list.extend(body.into_iter().map(ast_to_value));
+            Value::List(list)
+        }
+        Ast::Let(_, bindings, body) => {
+            let mut list = vec![Value::Symbol(intern("let"))];
+            let mut bind_list = Vec::new();
+            for (id, val) in bindings {
+                bind_list.push(Value::List(vec![Value::Symbol(id), ast_to_value(val)]));
+            }
+            list.push(Value::List(bind_list));
+            list.extend(body.into_iter().map(ast_to_value));
+            Value::List(list)
+        }
+        Ast::Quote(_, val) => Value::List(vec![Value::Symbol(intern("quote")), ast_to_value(*val)]),
+        Ast::Quasiquote(_, val) => Value::List(vec![Value::Symbol(intern("quasiquote")), ast_to_value(*val)]),
+        Ast::Unquote(_, val) => Value::List(vec![Value::Symbol(intern("unquote")), ast_to_value(*val)]),
+        Ast::UnquoteSplicing(_, val) => Value::List(vec![Value::Symbol(intern("unquote-splicing")), ast_to_value(*val)]),
+        Ast::And(_, exprs) => {
+            let mut list = vec![Value::Symbol(intern("and"))];
+            list.extend(exprs.into_iter().map(ast_to_value));
+            Value::List(list)
+        }
+        Ast::Or(_, exprs) => {
+            let mut list = vec![Value::Symbol(intern("or"))];
+            list.extend(exprs.into_iter().map(ast_to_value));
+            Value::List(list)
+        }
+        Ast::Bind(id) => Value::Symbol(id),
+    }
+}
+
+fn value_to_ast(val: Value, loc: Loc) -> Result<Ast> {
+    match val {
+        Value::Nil => Ok(Ast::Nil),
+        Value::Integer(i) => Ok(Ast::Integer(i)),
+        Value::Float(f) => Ok(Ast::Float(f)),
+        Value::String(s) => Ok(Ast::String(s)),
+        Value::Boolean(b) => Ok(Ast::Boolean(b)),
+        Value::Symbol(id) => Ok(Ast::Symbol(loc, id)),
+        Value::List(l) => {
+            let mut ast_list = Vec::new();
+            for v in l {
+                ast_list.push(value_to_ast(v, loc.clone())?);
+            }
+            // Need to re-run parse_list logic to get optimized AST
+            // Or we could just return Ast::List and let eval handle it
+            // but we want optimized AST.
+            // Let's use a helper that simulates the parser's logic.
+            if ast_list.is_empty() {
+                return Ok(Ast::Nil);
+            }
+            optimize_ast(ast_list, loc)
+        }
+        _ => Err(SelError {
+            loc,
+            kind: SelErrorKind::Generic("Cannot convert function or macro to AST".into()),
+        }),
+    }
+}
+
+fn bind_args(
+    params: &[u32],
+    args: Vec<Value>,
+    parent_env: Rc<RefCell<Env>>,
+    head_loc: Loc,
+) -> Result<Rc<RefCell<Env>>> {
+    let expected = params.len();
+    let actual = args.len();
+    let mut call_env = Env::new(Some(parent_env));
+    let mut params_iter = params.iter();
+    let mut args_iter = args.into_iter();
+
+    let mut has_rest = false;
+    while let Some(id) = params_iter.next() {
+        if lookup(*id).starts_with('&') {
+            let rest: Vec<Value> = args_iter.by_ref().collect();
+            let name = &lookup(*id)[1..];
+            call_env.insert(intern(name), Value::List(rest));
+            has_rest = true;
+            break;
+        }
+        if let Some(arg) = args_iter.next() {
+            call_env.insert(*id, arg);
+        } else {
+            return Err(SelError {
+                loc: head_loc,
+                kind: SelErrorKind::ArityMismatch { expected, actual },
+            });
+        }
+    }
+    if !has_rest && args_iter.next().is_some() {
+        return Err(SelError {
+            loc: head_loc,
+            kind: SelErrorKind::ArityMismatch { expected, actual },
+        });
+    }
+    Ok(Rc::new(RefCell::new(call_env)))
+}
+
 fn eval(mut ast: Ast, mut env: Rc<RefCell<Env>>) -> Result<Value> {
     loop {
         match std::mem::replace(&mut ast, Ast::Nil) {
@@ -839,7 +1143,10 @@ fn eval(mut ast: Ast, mut env: Rc<RefCell<Env>>) -> Result<Value> {
                 if let Some(v) = env.borrow().get(id) {
                     return Ok(v.clone());
                 } else {
-                    anyhow::bail!("{}: Undefined bind `{}`", loc, lookup(id));
+                    return Err(SelError {
+                        loc,
+                        kind: SelErrorKind::UndefinedVariable(id),
+                    });
                 }
             }
             Ast::Nil => return Ok(Value::Nil),
@@ -847,17 +1154,38 @@ fn eval(mut ast: Ast, mut env: Rc<RefCell<Env>>) -> Result<Value> {
             Ast::Float(f) => return Ok(Value::Float(f)),
             Ast::String(s) => return Ok(Value::String(s)),
             Ast::Boolean(b) => return Ok(Value::Boolean(b)),
-            Ast::Bind(id) => anyhow::bail!("Unexpected `&{}`.", lookup(id)),
+            Ast::Bind(id) => {
+                return Err(SelError {
+                    loc: Loc::default(),
+                    kind: SelErrorKind::Generic(format!("Unexpected `&{}`.", lookup(id))),
+                })
+            }
 
-            Ast::Define(_, id, expr) => {
+            Ast::Define(_loc, id, expr) => {
                 let val = eval(*expr, env.clone())?;
                 env.borrow_mut().insert(id, val.clone());
                 return Ok(val);
             }
+            Ast::DefMacro(loc, id, expr) => {
+                let val = eval(*expr, env.clone())?;
+                if let Value::Closure { params, body, env: c_env } = val {
+                    let macro_val = Value::Macro { params, body, env: c_env };
+                    env.borrow_mut().insert(id, macro_val.clone());
+                    return Ok(macro_val);
+                } else {
+                    return Err(SelError {
+                        loc,
+                        kind: SelErrorKind::Generic("defmacro expects a lambda".into()),
+                    });
+                }
+            }
             Ast::Set(loc, id, expr) => {
                 let val = eval(*expr, env.clone())?;
                 if !env.borrow_mut().set(id, val.clone()) {
-                    anyhow::bail!("{}: Unbound variable in set!: {}", loc, lookup(id));
+                    return Err(SelError {
+                        loc,
+                        kind: SelErrorKind::UnboundVariable(id),
+                    });
                 }
                 return Ok(val);
             }
@@ -949,51 +1277,65 @@ fn eval(mut ast: Ast, mut env: Rc<RefCell<Env>>) -> Result<Value> {
                     }
                 }
             }
-            Ast::Unquote(loc, _) | Ast::UnquoteSplicing(loc, _) => {
-                anyhow::bail!("{}: Unexpected unquote outside of quasiquote", loc);
+            Ast::Unquote(loc, _) => {
+                return Err(SelError {
+                    loc,
+                    kind: SelErrorKind::Generic("unquote invalid outside of quasiquote".into()),
+                })
             }
-            Ast::List(asts) => {
-                if asts.is_empty() {
+            Ast::UnquoteSplicing(loc, _) => {
+                return Err(SelError {
+                    loc,
+                    kind: SelErrorKind::Generic("unquote-splicing invalid outside of quasiquote".into()),
+                })
+            }
+            Ast::List(mut list) => {
+                if list.is_empty() {
                     return Ok(Value::Nil);
                 }
-                let mut iter = asts.into_iter();
-                let first = iter.next().unwrap();
+                let head = list.remove(0);
+                let head_loc = match &head {
+                    Ast::Symbol(loc, _) => loc.clone(),
+                    _ => Loc::default(),
+                };
+                let func = eval(head, env.clone())?;
+                if let Value::Macro {
+                    params,
+                    body,
+                    env: m_env,
+                } = func
+                {
+                    let args: Vec<Value> = list.into_iter().map(ast_to_value).collect();
+                    let macro_env = bind_args(&params, args, m_env, head_loc.clone())?;
+                    let expanded = eval(body, macro_env)?;
+                    ast = value_to_ast(expanded, head_loc)?;
+                    continue;
+                }
 
-                let func_val = eval(first, env.clone())?;
                 let mut args = Vec::new();
-                for arg_ast in iter {
+                for arg_ast in list {
                     args.push(eval(arg_ast, env.clone())?);
                 }
 
-                match func_val {
+                match func {
                     Value::NativeFunction(f) => return f(args, env),
                     Value::Closure {
                         params,
                         body,
-                        env: closure_env,
+                        env: c_env,
                     } => {
-                        let mut call_env = Env::new(Some(closure_env.clone()));
-                        let mut params_iter = params.into_iter();
-                        let mut args_iter = args.into_iter();
-                        while let Some(id) = params_iter.next() {
-                            if lookup(id).starts_with('&') {
-                                let rest: Vec<Value> = args_iter.by_ref().collect();
-                                call_env.insert(id, Value::List(rest));
-                                break;
-                            }
-                            if let Some(arg) = args_iter.next() {
-                                call_env.insert(id, arg);
-                            } else {
-                                anyhow::bail!("Arity mismatch");
-                            }
-                        }
-                        if args_iter.next().is_some() {
-                            anyhow::bail!("Arity mismatch");
-                        }
+                        env = bind_args(&params, args, c_env, head_loc)?;
                         ast = body;
-                        env = Rc::new(RefCell::new(call_env));
                     }
-                    _ => anyhow::bail!("Attempt to call non-function value"),
+                    _ => {
+                        return Err(SelError {
+                            loc: head_loc,
+                            kind: SelErrorKind::Generic(format!(
+                                "Attempt to call non-function value: {}",
+                                func.display()
+                            )),
+                        })
+                    }
                 }
             }
         }
@@ -1006,11 +1348,11 @@ fn print(val: Value) -> Result<()> {
 }
 
 mod sel_core {
-    use anyhow::Result;
+    use crate::Result;
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use crate::{Env, Value};
+    use crate::{Env, Loc, SelError, SelErrorKind, Value};
 
     pub fn sum(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         let mut int_sum = 0;
@@ -1034,7 +1376,7 @@ mod sel_core {
                         float_sum += f;
                     }
                 }
-                _ => anyhow::bail!("Invalid argument to +: expected number"),
+                _ => return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("Invalid argument to +: expected number".into()) }),
             }
         }
         if is_float {
@@ -1046,7 +1388,7 @@ mod sel_core {
 
     pub fn sub(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.is_empty() {
-            anyhow::bail!("Expected at least 1 argument to -");
+            return Err(crate::SelError { loc: crate::Loc::default(), kind: crate::SelErrorKind::Generic("Expected at least 1 argument to -".into()) });
         }
         let mut is_float = false;
         let mut int_val = 0;
@@ -1058,7 +1400,7 @@ mod sel_core {
                 is_float = true;
                 float_val = f;
             }
-            _ => anyhow::bail!("Invalid argument to -: expected number"),
+            _ => return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("Invalid argument to -: expected number".into()) }),
         }
 
         if args.len() == 1 {
@@ -1086,7 +1428,7 @@ mod sel_core {
                         float_val -= f;
                     }
                 }
-                _ => anyhow::bail!("Invalid argument to -: expected number"),
+                _ => return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("Invalid argument to -: expected number".into()) }),
             }
         }
         if is_float {
@@ -1118,7 +1460,7 @@ mod sel_core {
                         float_val *= f;
                     }
                 }
-                _ => anyhow::bail!("Invalid argument to *: expected number"),
+                _ => return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("Invalid argument to *: expected number".into()) }),
             }
         }
         if is_float {
@@ -1130,28 +1472,28 @@ mod sel_core {
 
     pub fn div(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.is_empty() {
-            anyhow::bail!("Expected at least 1 argument to /");
+            return Err(crate::SelError { loc: crate::Loc::default(), kind: crate::SelErrorKind::Generic("Expected at least 1 argument to /".into()) });
         }
 
         if args.len() == 1 {
             match args[0] {
                 Value::Integer(i) => return Ok(Value::Float(1.0 / i as f64)),
                 Value::Float(f) => return Ok(Value::Float(1.0 / f)),
-                _ => anyhow::bail!("Invalid argument to /: expected number"),
+                _ => return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("Invalid argument to /: expected number".into()) }),
             }
         }
 
         let mut float_val = match args[0] {
             Value::Integer(i) => i as f64,
             Value::Float(f) => f,
-            _ => anyhow::bail!("Invalid argument to /: expected number"),
+            _ => return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("Invalid argument to /: expected number".into()) }),
         };
 
         for arg in args.into_iter().skip(1) {
             match arg {
                 Value::Integer(i) => float_val /= i as f64,
                 Value::Float(f) => float_val /= f,
-                _ => anyhow::bail!("Invalid argument to /: expected number"),
+                _ => return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("Invalid argument to /: expected number".into()) }),
             }
         }
         Ok(Value::Float(float_val))
@@ -1159,33 +1501,33 @@ mod sel_core {
 
     pub fn modulo(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 2 {
-            anyhow::bail!("modulo requires exactly 2 arguments");
+            return Err(crate::SelError { loc: crate::Loc::default(), kind: crate::SelErrorKind::ArityMismatch { expected: 2, actual: args.len() } });
         }
         let a = match args[0] {
             Value::Integer(i) => i,
-            _ => anyhow::bail!("modulo requires integer"),
+            _ => return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("modulo requires integer".into()) }),
         };
         let b = match args[1] {
             Value::Integer(i) => i,
-            _ => anyhow::bail!("modulo requires integer"),
+            _ => return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("modulo requires integer".into()) }),
         };
         Ok(Value::Integer(a % b))
     }
 
     fn compare_nums(args: Vec<Value>, op: fn(f64, f64) -> bool) -> Result<Value> {
         if args.len() < 2 {
-            anyhow::bail!("comparison requires at least 2 arguments");
+            return Err(crate::SelError { loc: crate::Loc::default(), kind: crate::SelErrorKind::Generic("comparison requires at least 2 arguments".into()) });
         }
         let mut prev = match args[0] {
             Value::Integer(i) => i as f64,
             Value::Float(f) => f,
-            _ => anyhow::bail!("comparison requires numbers"),
+            _ => return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("comparison requires numbers".into()) }),
         };
         for arg in args.into_iter().skip(1) {
             let curr = match arg {
                 Value::Integer(i) => i as f64,
                 Value::Float(f) => f,
-                _ => anyhow::bail!("comparison requires numbers"),
+                _ => return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("comparison requires numbers".into()) }),
             };
             if !op(prev, curr) {
                 return Ok(Value::Boolean(false));
@@ -1213,7 +1555,7 @@ mod sel_core {
 
     pub fn cons(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 2 {
-            anyhow::bail!("cons requires exactly 2 arguments");
+            return Err(crate::SelError { loc: crate::Loc::default(), kind: crate::SelErrorKind::ArityMismatch { expected: 2, actual: args.len() } });
         }
         let tail = args.pop().unwrap();
         let head = args.pop().unwrap();
@@ -1230,22 +1572,22 @@ mod sel_core {
 
     pub fn car(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
-            anyhow::bail!("car requires exactly 1 argument");
+            return Err(crate::SelError { loc: crate::Loc::default(), kind: crate::SelErrorKind::ArityMismatch { expected: 1, actual: args.len() } });
         }
         match args.pop().unwrap() {
             Value::List(mut l) => {
                 if l.is_empty() {
-                    anyhow::bail!("car on empty list");
+                    return Err(crate::SelError { loc: crate::Loc::default(), kind: crate::SelErrorKind::Generic("car on empty list".into()) });
                 }
                 Ok(l.remove(0))
             }
-            _ => anyhow::bail!("car requires a list"),
+            _ => return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("car requires a list".into()) }),
         }
     }
 
     pub fn nth(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 2 {
-            anyhow::bail!("nth requires exactly 2 argument");
+            return Err(crate::SelError { loc: crate::Loc::default(), kind: crate::SelErrorKind::ArityMismatch { expected: 2, actual: args.len() } });
         }
         let index = args.pop().unwrap();
         match args.pop().unwrap() {
@@ -1257,20 +1599,20 @@ mod sel_core {
                         Ok(Value::Nil)
                     }
                 }
-                _ => anyhow::bail!("nth requires a interger"),
+                _ => return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("nth requires a interger".into()) }),
             },
-            _ => anyhow::bail!("nth requires a list"),
+            _ => return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("nth requires a list".into()) }),
         }
     }
 
     pub fn cdr(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
-            anyhow::bail!("cdr requires exactly 1 argument");
+            return Err(crate::SelError { loc: crate::Loc::default(), kind: crate::SelErrorKind::ArityMismatch { expected: 1, actual: args.len() } });
         }
         match args.pop().unwrap() {
             Value::List(mut l) => {
                 if l.is_empty() {
-                    anyhow::bail!("cdr on empty list");
+                    return Err(crate::SelError { loc: crate::Loc::default(), kind: crate::SelErrorKind::Generic("cdr on empty list".into()) });
                 }
                 l.remove(0);
                 Ok(if l.is_empty() {
@@ -1279,28 +1621,28 @@ mod sel_core {
                     Value::List(l)
                 })
             }
-            _ => anyhow::bail!("cdr requires a list"),
+            _ => return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("cdr requires a list".into()) }),
         }
     }
 
     pub fn count(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
-            anyhow::bail!("count requires exactly 1 argument");
+            return Err(crate::SelError { loc: crate::Loc::default(), kind: crate::SelErrorKind::ArityMismatch { expected: 1, actual: args.len() } });
         }
         match args.pop().unwrap() {
             Value::List(l) => Ok(Value::Integer(l.len() as _)),
-            _ => anyhow::bail!("count requires a list"),
+            _ => return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("count requires a list".into()) }),
         }
     }
 
     pub fn empty(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
-            anyhow::bail!("empty requires exactly 1 argument");
+            return Err(crate::SelError { loc: crate::Loc::default(), kind: crate::SelErrorKind::ArityMismatch { expected: 1, actual: args.len() } });
         }
         match args.pop().unwrap() {
             Value::List(l) => Ok(Value::Boolean(l.is_empty())),
             Value::Nil => Ok(Value::Boolean(true)),
-            _ => anyhow::bail!("empty requires a list"),
+            _ => return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("empty requires a list".into()) }),
         }
     }
 
@@ -1314,7 +1656,7 @@ mod sel_core {
 
     pub fn is_nil(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
-            anyhow::bail!("nil? requires exactly 1 argument");
+            return Err(crate::SelError { loc: crate::Loc::default(), kind: crate::SelErrorKind::ArityMismatch { expected: 1, actual: args.len() } });
         }
         match &args[0] {
             Value::Nil => Ok(Value::Boolean(true)),
@@ -1325,7 +1667,7 @@ mod sel_core {
 
     pub fn is_list(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
-            anyhow::bail!("islist requires exactly 1 argument");
+            return Err(crate::SelError { loc: crate::Loc::default(), kind: crate::SelErrorKind::ArityMismatch { expected: 1, actual: args.len() } });
         }
         match &args[0] {
             Value::List(l) if !l.is_empty() => Ok(Value::Boolean(true)),
@@ -1335,7 +1677,7 @@ mod sel_core {
 
     pub fn is_number(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
-            anyhow::bail!("isnumber requires exactly 1 argument");
+            return Err(crate::SelError { loc: crate::Loc::default(), kind: crate::SelErrorKind::ArityMismatch { expected: 1, actual: args.len() } });
         }
         Ok(Value::Boolean(matches!(
             args[0],
@@ -1345,14 +1687,14 @@ mod sel_core {
 
     pub fn is_string(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
-            anyhow::bail!("isstring requires exactly 1 argument");
+            return Err(crate::SelError { loc: crate::Loc::default(), kind: crate::SelErrorKind::ArityMismatch { expected: 1, actual: args.len() } });
         }
         Ok(Value::Boolean(matches!(args[0], Value::String(_))))
     }
 
     pub fn is_function(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
-            anyhow::bail!("isfunction requires exactly 1 argument");
+            return Err(crate::SelError { loc: crate::Loc::default(), kind: crate::SelErrorKind::ArityMismatch { expected: 1, actual: args.len() } });
         }
         Ok(Value::Boolean(matches!(
             args[0],
@@ -1362,7 +1704,7 @@ mod sel_core {
 
     pub fn not(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
-            anyhow::bail!("not requires exactly 1 argument");
+            return Err(crate::SelError { loc: crate::Loc::default(), kind: crate::SelErrorKind::ArityMismatch { expected: 1, actual: args.len() } });
         }
         match args[0] {
             Value::Boolean(false) => Ok(Value::Boolean(true)),
@@ -1378,10 +1720,19 @@ mod sel_core {
         Ok(Value::Nil)
     }
 
-    pub fn display_func(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+    pub fn display(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         for arg in args {
-            print!("{} ", crate::display_value(&arg));
+            match arg {
+                Value::String(s) => print!("{}", s),
+                _ => print!("{}", arg),
+            }
         }
+        use std::io::Write;
+        std::io::stdout().flush().unwrap();
+        Ok(Value::Nil)
+    }
+
+    pub fn newline(_args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         println!();
         Ok(Value::Nil)
     }
@@ -1419,6 +1770,7 @@ mod sel_core {
 
         e.insert(crate::intern("not"), Value::NativeFunction(not));
         e.insert(crate::intern("print"), Value::NativeFunction(print_func));
-        e.insert(crate::intern("display"), Value::NativeFunction(display_func));
+        e.insert(crate::intern("display"), Value::NativeFunction(display));
+        e.insert(crate::intern("newline"), Value::NativeFunction(newline));
     }
 }
