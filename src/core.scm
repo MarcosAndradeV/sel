@@ -6,6 +6,16 @@
 (defmacro unless (test &body)
   (list 'if test 'nil (cons 'begin body)))
 
+(defmacro defun (name args &body)
+    (list 'define `(~name ~@args) (cons 'begin body)))
+
+(defmacro cond (& xs)
+    (if (> (count xs) 0)
+    (list 'if (car xs)
+    (if (> (count xs) 1)
+    (nth xs 1)
+    (throw "odd number of forms to cond")) (cons 'cond (cdr (cdr xs))))))
+
 (define (map f l)
   (if (empty? l)
       '()
@@ -30,6 +40,11 @@
 
 (define (reverse l)
   (foldl (lambda (acc x) (cons x acc)) '() l))
+
+(define (repeat f n)
+    (if (<= n 0)
+        nil
+        (begin (f) (repeat f (- n 1)))))
 
 (defmacro delay (expr)
   (list 'lambda '() expr))
