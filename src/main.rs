@@ -152,10 +152,6 @@ fn main() -> AnyhowResult<()> {
     if args.len() > 1 {
         let script_path = args.remove(1);
 
-        let scheme_args = args.into_iter().skip(1).map(Value::String).collect();
-        env.borrow_mut()
-            .insert(intern("*args*"), Value::List(scheme_args));
-
         let mut src = fs::read_to_string(script_path)?;
         if src.starts_with("#!") {
             if let Some(newline_idx) = src.find('\n') {
@@ -170,8 +166,6 @@ fn main() -> AnyhowResult<()> {
             .map_err(|e| anyhow::anyhow!("{}", e))
             .map(|_| ())
     } else {
-        env.borrow_mut()
-            .insert(intern("*args*"), Value::List(vec![]));
         println!("Welcome to the Sel Scheme repl. (Use `quit` to exit)");
         repl("sel> ", env)
     }
@@ -588,7 +582,7 @@ fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
                 NumberBase::O => t.source.trim_start_matches("0o").trim_start_matches("0O"),
                 NumberBase::D => &t.source,
             };
-            
+
             if let Ok(i) = i64::from_str_radix(s, base.radix()) {
                 Ok(Ast::Integer(i))
             } else if base == NumberBase::D {
@@ -2964,6 +2958,14 @@ mod sel_core {
         if !args.is_empty() {
             return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("os/args takes no arguments".into()) });
         }
+        let args_vec = std::env::args().skip(1).map(Value::String).collect::<Vec<_>>();
+        Ok(Value::List(args_vec))
+    }
+
+    pub fn os_orig_args(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if !args.is_empty() {
+            return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("os/args takes no arguments".into()) });
+        }
         let args_vec = std::env::args().map(Value::String).collect::<Vec<_>>();
         Ok(Value::List(args_vec))
     }
@@ -3017,5 +3019,6 @@ mod sel_core {
         e.insert(crate::intern("io/file-exists?"), Value::NativeFunction(io_file_exists));
         e.insert(crate::intern("os/getenv"), Value::NativeFunction(os_getenv));
         e.insert(crate::intern("os/args"), Value::NativeFunction(os_args));
+        e.insert(crate::intern("os/orig-args"), Value::NativeFunction(os_orig_args));
     }
 }
