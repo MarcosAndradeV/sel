@@ -135,20 +135,7 @@ impl Env {
 fn main() -> AnyhowResult<()> {
     let env = Rc::new(RefCell::new(Env::default()));
     sel_core::load(env.clone());
-
-    // Load core library if exists
-    {
-        let core_src = include_str!("core.scm");
-
-        match read_all(core_src) {
-            Ok(asts) => {
-                if let Err(e) = execute_asts(asts, env.clone()) {
-                    eprintln!("Error loading core.scm: {}", e);
-                }
-            }
-            Err(e) => eprintln!("Error parsing core.scm: {}", e),
-        }
-    }
+    load_core_lib(&env);
 
     let mut args: Vec<String> = std::env::args().collect();
     if args.len() > 1 {
@@ -170,6 +157,22 @@ fn main() -> AnyhowResult<()> {
     } else {
         println!("Welcome to the Sel Scheme repl. (Use `quit` to exit)");
         repl("sel> ", env)
+    }
+}
+
+pub fn load_core_lib(env: &Rc<RefCell<Env>>) {
+    // Load core library if exists
+    {
+        let core_src = include_str!("core.scm");
+
+        match read_all(core_src) {
+            Ok(asts) => {
+                if let Err(e) = execute_asts(asts, env.clone()) {
+                    eprintln!("Error loading core.scm: {}", e);
+                }
+            }
+            Err(e) => eprintln!("Error parsing core.scm: {}", e),
+        }
     }
 }
 
@@ -206,10 +209,7 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> AnyhowResult<()> {
                         continue;
                     }
                 };
-                if let Err(e) = print(val) {
-                    println!("Error: {e}");
-                    continue;
-                }
+                println!("{val}");
             }
             Err(ReadlineError::Interrupted) => {
                 println!("CTRL-C");
@@ -953,24 +953,12 @@ pub enum Value {
     Library(Rc<libloading::Library>),
 }
 
-impl Value {
-    pub fn display(&self) -> String {
-        display_value(self)
-    }
-}
-
-fn format_value_internal(val: &Value, display: bool) -> String {
+fn format_value(val: &Value) -> String {
     match val {
         Value::Nil => "()".to_string(),
         Value::Integer(i) => i.to_string(),
         Value::Float(f) => f.to_string(),
-        Value::String(s) => {
-            if display {
-                s.clone()
-            } else {
-                format!("\"{}\"", s)
-            }
-        }
+        Value::String(s) => s.to_string(),
         Value::Boolean(b) => {
             if *b {
                 "#t".to_string()
@@ -985,7 +973,7 @@ fn format_value_internal(val: &Value, display: bool) -> String {
                 if i > 0 {
                     s.push(' ');
                 }
-                s.push_str(&format_value_internal(v, false));
+                s.push_str(&format_value(v));
             }
             s.push(')');
             s
@@ -996,14 +984,6 @@ fn format_value_internal(val: &Value, display: bool) -> String {
         Value::Pointer(p) => format!("<pointer: {:#x}>", p),
         Value::Library(_) => "<library>".to_string(),
     }
-}
-
-fn format_value(val: &Value) -> String {
-    format_value_internal(val, false)
-}
-
-fn display_value(val: &Value) -> String {
-    format_value_internal(val, true)
 }
 
 impl std::fmt::Display for Value {
@@ -1239,9 +1219,9 @@ fn value_to_ast(val: Value, loc: Loc) -> Result<Ast> {
             }
             optimize_ast(ast_list, loc)
         }
-        _ => Err(SelError {
+        v => Err(SelError {
             loc,
-            kind: SelErrorKind::Generic("Cannot convert function or macro to AST".into()),
+            kind: SelErrorKind::Generic(format!("Cannot convert function or macro to AST ({v})")),
         }),
     }
 }
@@ -1725,7 +1705,7 @@ impl VM {
                                 loc,
                                 kind: SelErrorKind::Generic(format!(
                                     "Attempt to call non-function value: {}",
-                                    callee.display()
+                                    callee
                                 )),
                             });
                         }
@@ -1953,11 +1933,6 @@ pub fn execute_asts(asts: Vec<Ast>, env: Rc<RefCell<Env>>) -> Result<Value> {
         last_val = vm.run(Rc::new(chunk), env.clone())?;
     }
     Ok(last_val)
-}
-
-fn print(val: Value) -> Result<()> {
-    println!("{}", format_value(&val));
-    Ok(())
 }
 
 mod sel_core {
@@ -2518,20 +2493,18 @@ mod sel_core {
         }
     }
 
-    pub fn print_func(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-        for arg in args {
-            print!("{} ", crate::format_value(&arg));
-        }
+    pub fn display_newline(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        display(args, _env)?;
         println!();
         Ok(Value::Nil)
     }
 
     pub fn display(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-        for arg in args {
-            match arg {
-                Value::String(s) => print!("{}", s),
-                _ => print!("{}", arg),
+        for (i, arg) in args.into_iter().enumerate() {
+            if i > 0 {
+                print!(" ");
             }
+            print!("{}", arg);
         }
         use std::io::Write;
         std::io::stdout().flush().unwrap();
@@ -3104,8 +3077,11 @@ mod sel_core {
         );
 
         e.insert(crate::intern("not"), Value::NativeFunction(not));
-        e.insert(crate::intern("print"), Value::NativeFunction(print_func));
         e.insert(crate::intern("display"), Value::NativeFunction(display));
+        e.insert(
+            crate::intern("println"),
+            Value::NativeFunction(display_newline),
+        );
         e.insert(crate::intern("newline"), Value::NativeFunction(newline));
 
         e.insert(
@@ -3133,5 +3109,76 @@ mod sel_core {
             crate::intern("os/orig-args"),
             Value::NativeFunction(os_orig_args),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::read_dir;
+
+    use super::*;
+
+    #[test]
+    fn test_all_folders() {
+        fn test_all_folders_impl() -> AnyhowResult<()> {
+            let tests_dir = read_dir("tests")?;
+            for res_entry in tests_dir {
+                let entry = res_entry?;
+                if entry.file_type()?.is_file()
+                    && entry.path().extension().is_some_and(|ext| ext == "scm")
+                {
+                    let env = Rc::new(RefCell::new(Env::default()));
+                    sel_core::load(env.clone());
+                    load_core_lib(&env);
+                    println!("TEST: {}", entry.path().display());
+                    let src = fs::read_to_string(entry.path())?;
+                    let asts = read_all(&src)?;
+                    execute_asts(asts, env)
+                        .map_err(|e| anyhow::anyhow!("{}", e))
+                        .map(|_| ())?;
+                }
+            }
+            Ok(())
+        }
+
+        assert!(match test_all_folders_impl() {
+            Ok(_) => true,
+            Err(e) => {
+                println!("{e}");
+                false
+            }
+        })
+    }
+
+    #[test]
+    fn test_errors_folder() {
+        fn test_errors_folder_impl() -> AnyhowResult<()> {
+            let tests_dir = read_dir("tests/errors")?;
+            for res_entry in tests_dir {
+                let entry = res_entry?;
+                if entry.file_type()?.is_file()
+                    && entry.path().extension().is_some_and(|ext| ext == "scm")
+                {
+                    let env = Rc::new(RefCell::new(Env::default()));
+                    sel_core::load(env.clone());
+                    load_core_lib(&env);
+                    println!("TEST: {}", entry.path().display());
+                    let src = fs::read_to_string(entry.path())?;
+                    let asts = read_all(&src)?;
+                    execute_asts(asts, env)
+                        .map_err(|e| anyhow::anyhow!("{}", e))
+                        .map(|_| ())?;
+                }
+            }
+            Ok(())
+        }
+
+        assert!(match test_errors_folder_impl() {
+            Ok(_) => false,
+            Err(e) => {
+                println!("{e}");
+                true
+            }
+        })
     }
 }
