@@ -3,4 +3,4 @@
       acc
       (sum (- n 1) (+ n acc)))))
 
-(print (sum 100000 0))
+(println (sum 100000 0))
