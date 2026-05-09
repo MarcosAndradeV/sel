@@ -20,7 +20,7 @@ cargo build --release
 
 You can execute a `sel` script by passing it as an argument:
 ```bash
-cargo run -- test_ffi.scm
+cargo run -- tests/test_ffi.scm
 ```
 
 Or run the interactive REPL:
