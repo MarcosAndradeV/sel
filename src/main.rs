@@ -137,8 +137,10 @@ fn main() -> AnyhowResult<()> {
     sel_core::load(env.clone());
 
     // Load core library if exists
-    if let Ok(core_src) = fs::read_to_string("core.scm") {
-        match read_all(&core_src) {
+    {
+        let core_src = include_str!("core.scm");
+
+        match read_all(core_src) {
             Ok(asts) => {
                 if let Err(e) = execute_asts(asts, env.clone()) {
                     eprintln!("Error loading core.scm: {}", e);
@@ -492,14 +494,26 @@ impl<'a> Lexer<'a> {
                     });
                 }
 
-                let (is_num, base) = if let Some(stripped) = ident.strip_prefix("0x").or_else(|| ident.strip_prefix("0X")) {
+                let (is_num, base) = if let Some(stripped) = ident
+                    .strip_prefix("0x")
+                    .or_else(|| ident.strip_prefix("0X"))
+                {
                     (i64::from_str_radix(stripped, 16).is_ok(), NumberBase::X)
-                } else if let Some(stripped) = ident.strip_prefix("0b").or_else(|| ident.strip_prefix("0B")) {
+                } else if let Some(stripped) = ident
+                    .strip_prefix("0b")
+                    .or_else(|| ident.strip_prefix("0B"))
+                {
                     (i64::from_str_radix(stripped, 2).is_ok(), NumberBase::B)
-                } else if let Some(stripped) = ident.strip_prefix("0o").or_else(|| ident.strip_prefix("0O")) {
+                } else if let Some(stripped) = ident
+                    .strip_prefix("0o")
+                    .or_else(|| ident.strip_prefix("0O"))
+                {
                     (i64::from_str_radix(stripped, 8).is_ok(), NumberBase::O)
                 } else {
-                    (ident.parse::<i64>().is_ok() || ident.parse::<f64>().is_ok(), NumberBase::D)
+                    (
+                        ident.parse::<i64>().is_ok() || ident.parse::<f64>().is_ok(),
+                        NumberBase::D,
+                    )
                 };
 
                 if is_num {
@@ -2714,8 +2728,20 @@ mod sel_core {
                 }
                 "bool" => {
                     let v = match arg_val {
-                        Value::Boolean(b) => if *b { 1u8 } else { 0u8 },
-                        Value::Integer(n) => if *n != 0 { 1u8 } else { 0u8 },
+                        Value::Boolean(b) => {
+                            if *b {
+                                1u8
+                            } else {
+                                0u8
+                            }
+                        }
+                        Value::Integer(n) => {
+                            if *n != 0 {
+                                1u8
+                            } else {
+                                0u8
+                            }
+                        }
                         _ => {
                             return Err(SelError {
                                 loc: Loc::default(),
@@ -2903,46 +2929,73 @@ mod sel_core {
 
     pub fn io_read_string(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
-            return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("io/read-string requires exactly 1 argument".into()) });
+            return Err(SelError {
+                loc: Loc::default(),
+                kind: SelErrorKind::Generic("io/read-string requires exactly 1 argument".into()),
+            });
         }
         if let Value::String(path) = &args[0] {
             match std::fs::read_to_string(path) {
                 Ok(content) => Ok(Value::String(content)),
-                Err(e) => Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic(format!("io/read-string failed: {}", e)) }),
+                Err(e) => Err(SelError {
+                    loc: Loc::default(),
+                    kind: SelErrorKind::Generic(format!("io/read-string failed: {}", e)),
+                }),
             }
         } else {
-            Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("io/read-string requires a string argument".into()) })
+            Err(SelError {
+                loc: Loc::default(),
+                kind: SelErrorKind::Generic("io/read-string requires a string argument".into()),
+            })
         }
     }
 
     pub fn io_write_string(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 2 {
-            return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("io/write-string requires exactly 2 arguments".into()) });
+            return Err(SelError {
+                loc: Loc::default(),
+                kind: SelErrorKind::Generic("io/write-string requires exactly 2 arguments".into()),
+            });
         }
         if let (Value::String(path), Value::String(content)) = (&args[0], &args[1]) {
             match std::fs::write(path, content) {
                 Ok(_) => Ok(Value::Nil),
-                Err(e) => Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic(format!("io/write-string failed: {}", e)) }),
+                Err(e) => Err(SelError {
+                    loc: Loc::default(),
+                    kind: SelErrorKind::Generic(format!("io/write-string failed: {}", e)),
+                }),
             }
         } else {
-            Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("io/write-string requires string arguments".into()) })
+            Err(SelError {
+                loc: Loc::default(),
+                kind: SelErrorKind::Generic("io/write-string requires string arguments".into()),
+            })
         }
     }
 
     pub fn io_file_exists(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
-            return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("io/file-exists? requires exactly 1 argument".into()) });
+            return Err(SelError {
+                loc: Loc::default(),
+                kind: SelErrorKind::Generic("io/file-exists? requires exactly 1 argument".into()),
+            });
         }
         if let Value::String(path) = &args[0] {
             Ok(Value::Boolean(std::path::Path::new(path).exists()))
         } else {
-            Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("io/file-exists? requires a string argument".into()) })
+            Err(SelError {
+                loc: Loc::default(),
+                kind: SelErrorKind::Generic("io/file-exists? requires a string argument".into()),
+            })
         }
     }
 
     pub fn os_getenv(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
-            return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("os/getenv requires exactly 1 argument".into()) });
+            return Err(SelError {
+                loc: Loc::default(),
+                kind: SelErrorKind::Generic("os/getenv requires exactly 1 argument".into()),
+            });
         }
         if let Value::String(key) = &args[0] {
             match std::env::var(key) {
@@ -2950,21 +3003,33 @@ mod sel_core {
                 Err(_) => Ok(Value::Nil),
             }
         } else {
-            Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("os/getenv requires a string argument".into()) })
+            Err(SelError {
+                loc: Loc::default(),
+                kind: SelErrorKind::Generic("os/getenv requires a string argument".into()),
+            })
         }
     }
 
     pub fn os_args(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if !args.is_empty() {
-            return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("os/args takes no arguments".into()) });
+            return Err(SelError {
+                loc: Loc::default(),
+                kind: SelErrorKind::Generic("os/args takes no arguments".into()),
+            });
         }
-        let args_vec = std::env::args().skip(1).map(Value::String).collect::<Vec<_>>();
+        let args_vec = std::env::args()
+            .skip(1)
+            .map(Value::String)
+            .collect::<Vec<_>>();
         Ok(Value::List(args_vec))
     }
 
     pub fn os_orig_args(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if !args.is_empty() {
-            return Err(SelError { loc: Loc::default(), kind: SelErrorKind::Generic("os/args takes no arguments".into()) });
+            return Err(SelError {
+                loc: Loc::default(),
+                kind: SelErrorKind::Generic("os/args takes no arguments".into()),
+            });
         }
         let args_vec = std::env::args().map(Value::String).collect::<Vec<_>>();
         Ok(Value::List(args_vec))
@@ -3014,11 +3079,23 @@ mod sel_core {
         e.insert(crate::intern("ffi-dlsym"), Value::NativeFunction(ffi_dlsym));
         e.insert(crate::intern("ffi-call"), Value::NativeFunction(ffi_call));
 
-        e.insert(crate::intern("io/read-string"), Value::NativeFunction(io_read_string));
-        e.insert(crate::intern("io/write-string"), Value::NativeFunction(io_write_string));
-        e.insert(crate::intern("io/file-exists?"), Value::NativeFunction(io_file_exists));
+        e.insert(
+            crate::intern("io/read-string"),
+            Value::NativeFunction(io_read_string),
+        );
+        e.insert(
+            crate::intern("io/write-string"),
+            Value::NativeFunction(io_write_string),
+        );
+        e.insert(
+            crate::intern("io/file-exists?"),
+            Value::NativeFunction(io_file_exists),
+        );
         e.insert(crate::intern("os/getenv"), Value::NativeFunction(os_getenv));
         e.insert(crate::intern("os/args"), Value::NativeFunction(os_args));
-        e.insert(crate::intern("os/orig-args"), Value::NativeFunction(os_orig_args));
+        e.insert(
+            crate::intern("os/orig-args"),
+            Value::NativeFunction(os_orig_args),
+        );
     }
 }
