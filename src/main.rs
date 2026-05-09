@@ -229,10 +229,16 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> AnyhowResult<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Loc {
     pub line: usize,
     pub col: usize,
+}
+
+impl Default for Loc {
+    fn default() -> Self {
+        Self { line: 1, col: 1 }
+    }
 }
 
 impl std::fmt::Display for Loc {
@@ -564,11 +570,11 @@ fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
         }),
         TokenKind::Quote => {
             let expr = parse_expr(tokens, pos)?;
-            Ok(Ast::Quote(t.loc.clone(), Box::new(expr)))
+            Ok(Ast::Quote(t.loc, Box::new(expr)))
         }
         TokenKind::Ampersand => {
-            if let Ast::Symbol(_, id) = parse_expr(tokens, pos)? {
-                return Ok(Ast::Bind(id));
+            if let Ast::Symbol(loc, id) = parse_expr(tokens, pos)? {
+                return Ok(Ast::Bind(loc, id));
             }
             Err(SelError {
                 loc: t.loc,
@@ -577,18 +583,18 @@ fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
         }
         TokenKind::QuasiQuote => {
             let expr = parse_expr(tokens, pos)?;
-            Ok(Ast::Quasiquote(t.loc.clone(), Box::new(expr)))
+            Ok(Ast::Quasiquote(t.loc, Box::new(expr)))
         }
         TokenKind::Unquote => {
             let expr = parse_expr(tokens, pos)?;
-            Ok(Ast::Unquote(t.loc.clone(), Box::new(expr)))
+            Ok(Ast::Unquote(t.loc, Box::new(expr)))
         }
         TokenKind::UnquoteSplicing => {
             let expr = parse_expr(tokens, pos)?;
-            Ok(Ast::UnquoteSplicing(t.loc.clone(), Box::new(expr)))
+            Ok(Ast::UnquoteSplicing(t.loc, Box::new(expr)))
         }
-        TokenKind::String => Ok(Ast::String(t.source.clone())),
-        TokenKind::Boolean => Ok(Ast::Boolean(t.source == "#t")),
+        TokenKind::String => Ok(Ast::String(t.loc, t.source.clone())),
+        TokenKind::Boolean => Ok(Ast::Boolean(t.loc, t.source == "#t")),
         TokenKind::Number(base) => {
             let s = match base {
                 NumberBase::X => t.source.trim_start_matches("0x").trim_start_matches("0X"),
@@ -598,25 +604,25 @@ fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
             };
 
             if let Ok(i) = i64::from_str_radix(s, base.radix()) {
-                Ok(Ast::Integer(i))
+                Ok(Ast::Integer(t.loc, i))
             } else if base == NumberBase::D {
                 if let Ok(f) = t.source.parse::<f64>() {
-                    Ok(Ast::Float(f))
+                    Ok(Ast::Float(t.loc, f))
                 } else {
                     Err(SelError {
-                        loc: t.loc.clone(),
+                        loc: t.loc,
                         kind: SelErrorKind::InvalidNumber(t.source.clone()),
                     })
                 }
             } else {
                 Err(SelError {
-                    loc: t.loc.clone(),
+                    loc: t.loc,
                     kind: SelErrorKind::InvalidNumber(t.source.clone()),
                 })
             }
         }
         TokenKind::Identifier => match t.source.as_str() {
-            "nil" => Ok(Ast::Nil),
+            "nil" => Ok(Ast::Nil(t.loc)),
             _ => Ok(Ast::Symbol(t.loc, intern(&t.source))),
         },
     }
@@ -629,17 +635,17 @@ fn parse_list(tokens: &[Token], pos: &mut usize, open_token: &Token) -> Result<A
     }
     if *pos >= tokens.len() {
         return Err(SelError {
-            loc: open_token.loc.clone(),
+            loc: open_token.loc,
             kind: SelErrorKind::Generic("Missing closing parenthesis".into()),
         });
     }
     *pos += 1; // consume ')'
-    optimize_ast(list, open_token.loc.clone())
+    optimize_ast(list, open_token.loc)
 }
 
-fn optimize_ast(list: Vec<Ast>, _loc: Loc) -> Result<Ast> {
+fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
     if list.is_empty() {
-        return Ok(Ast::Nil);
+        return Ok(Ast::Nil(loc));
     }
 
     if let Some(Ast::Symbol(s_loc, id)) = list.first().cloned() {
@@ -647,11 +653,11 @@ fn optimize_ast(list: Vec<Ast>, _loc: Loc) -> Result<Ast> {
             "if" => {
                 let mut iter = list.into_iter().skip(1);
                 let cond = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc.clone(),
+                    loc: s_loc,
                     kind: SelErrorKind::Generic("Missing condition in if".into()),
                 })?;
                 let true_branch = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc.clone(),
+                    loc: s_loc,
                     kind: SelErrorKind::Generic("Missing true branch in if".into()),
                 })?;
                 let false_branch = iter.next();
@@ -665,21 +671,21 @@ fn optimize_ast(list: Vec<Ast>, _loc: Loc) -> Result<Ast> {
             "lambda" => {
                 let mut iter = list.into_iter().skip(1);
                 let params_ast = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc.clone(),
+                    loc: s_loc,
                     kind: SelErrorKind::Generic("Missing parameters in lambda".into()),
                 })?;
                 let mut params = Vec::new();
                 match params_ast {
-                    Ast::List(p) => {
+                    Ast::List(loc, p) => {
                         for param in p {
                             if let Ast::Symbol(_, id) = param {
                                 params.push(id);
-                            } else if let Ast::Bind(id) = param {
+                            } else if let Ast::Bind(_, id) = param {
                                 let name = lookup(id);
                                 params.push(intern(&format!("&{}", name)));
                             } else {
                                 return Err(SelError {
-                                    loc: s_loc.clone(),
+                                    loc,
                                     kind: SelErrorKind::Generic(
                                         "Expected identifier in lambda parameters".into(),
                                     ),
@@ -687,10 +693,10 @@ fn optimize_ast(list: Vec<Ast>, _loc: Loc) -> Result<Ast> {
                             }
                         }
                     }
-                    Ast::Nil => {}
+                    Ast::Nil(_) => {}
                     _ => {
                         return Err(SelError {
-                            loc: s_loc.clone(),
+                            loc: s_loc,
                             kind: SelErrorKind::Generic("Expected parameter list in lambda".into()),
                         });
                     }
@@ -705,14 +711,14 @@ fn optimize_ast(list: Vec<Ast>, _loc: Loc) -> Result<Ast> {
             "define" => {
                 let mut iter = list.into_iter().skip(1);
                 let name_ast = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc.clone(),
+                    loc: s_loc,
                     kind: SelErrorKind::Generic("Expected identifier in define".into()),
                 })?;
 
-                if let Ast::List(mut p_list) = name_ast {
+                if let Ast::List(loc, mut p_list) = name_ast {
                     if p_list.is_empty() {
                         return Err(SelError {
-                            loc: s_loc,
+                            loc,
                             kind: SelErrorKind::Generic("Empty parameter list in define".into()),
                         });
                     }
@@ -729,7 +735,7 @@ fn optimize_ast(list: Vec<Ast>, _loc: Loc) -> Result<Ast> {
                     for p in p_list {
                         match p {
                             Ast::Symbol(_, id) => params.push(id),
-                            Ast::Bind(id) => {
+                            Ast::Bind(_, id) => {
                                 let name = lookup(id);
                                 params.push(intern(&format!("&{}", name)));
                             }
@@ -751,19 +757,19 @@ fn optimize_ast(list: Vec<Ast>, _loc: Loc) -> Result<Ast> {
                         });
                     }
                     return Ok(Ast::Define(
-                        s_loc.clone(),
+                        s_loc,
                         name_id,
                         Box::new(Ast::Lambda(s_loc, params, body)),
                     ));
                 }
 
                 let value_ast = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc.clone(),
+                    loc: s_loc,
                     kind: SelErrorKind::Generic("Expected expression in define".into()),
                 })?;
                 let Ast::Symbol(_, name_id) = name_ast else {
                     return Err(SelError {
-                        loc: s_loc.clone(),
+                        loc: s_loc,
                         kind: SelErrorKind::Generic("Expected identifier in define".into()),
                     });
                 };
@@ -772,26 +778,26 @@ fn optimize_ast(list: Vec<Ast>, _loc: Loc) -> Result<Ast> {
             "defmacro" => {
                 let mut iter = list.into_iter().skip(1);
                 let name_ast = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc.clone(),
+                    loc: s_loc,
                     kind: SelErrorKind::Generic("Expected identifier in defmacro".into()),
                 })?;
                 let params_ast = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc.clone(),
+                    loc: s_loc,
                     kind: SelErrorKind::Generic("Expected parameters in defmacro".into()),
                 })?;
 
                 let mut params = Vec::new();
                 match params_ast {
-                    Ast::List(p) => {
+                    Ast::List(_, p) => {
                         for param in p {
                             if let Ast::Symbol(_, id) = param {
                                 params.push(id);
-                            } else if let Ast::Bind(id) = param {
+                            } else if let Ast::Bind(_, id) = param {
                                 let name = lookup(id);
                                 params.push(intern(&format!("&{}", name)));
                             } else {
                                 return Err(SelError {
-                                    loc: s_loc.clone(),
+                                    loc: s_loc,
                                     kind: SelErrorKind::Generic(
                                         "Expected identifier in defmacro parameters".into(),
                                     ),
@@ -799,10 +805,10 @@ fn optimize_ast(list: Vec<Ast>, _loc: Loc) -> Result<Ast> {
                             }
                         }
                     }
-                    Ast::Nil => {}
+                    Ast::Nil(_) => {}
                     _ => {
                         return Err(SelError {
-                            loc: s_loc.clone(),
+                            loc: s_loc,
                             kind: SelErrorKind::Generic(
                                 "Expected parameter list in defmacro".into(),
                             ),
@@ -812,29 +818,29 @@ fn optimize_ast(list: Vec<Ast>, _loc: Loc) -> Result<Ast> {
                 let body: Vec<Ast> = iter.collect();
                 let Ast::Symbol(_, name_id) = name_ast else {
                     return Err(SelError {
-                        loc: s_loc.clone(),
+                        loc: s_loc,
                         kind: SelErrorKind::Generic("Expected identifier in defmacro".into()),
                     });
                 };
                 Ok(Ast::DefMacro(
                     s_loc,
                     name_id,
-                    Box::new(Ast::Lambda(s_loc.clone(), params, body)),
+                    Box::new(Ast::Lambda(s_loc, params, body)),
                 ))
             }
             "set!" => {
                 let mut iter = list.into_iter().skip(1);
                 let name_ast = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc.clone(),
+                    loc: s_loc,
                     kind: SelErrorKind::Generic("Expected identifier in set!".into()),
                 })?;
                 let value_ast = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc.clone(),
+                    loc: s_loc,
                     kind: SelErrorKind::Generic("Expected expression in set!".into()),
                 })?;
                 let Ast::Symbol(_, name_id) = name_ast else {
                     return Err(SelError {
-                        loc: s_loc.clone(),
+                        loc: s_loc,
                         kind: SelErrorKind::Generic("Expected identifier in set!".into()),
                     });
                 };
@@ -843,17 +849,17 @@ fn optimize_ast(list: Vec<Ast>, _loc: Loc) -> Result<Ast> {
             "let" => {
                 let mut iter = list.into_iter().skip(1);
                 let bindings_ast = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc.clone(),
+                    loc: s_loc,
                     kind: SelErrorKind::Generic("Expected bindings in let".into()),
                 })?;
                 let mut bindings = Vec::new();
                 match bindings_ast {
-                    Ast::List(b) => {
+                    Ast::List(loc, b) => {
                         for bind in b {
-                            if let Ast::List(mut pair) = bind {
+                            if let Ast::List(loc, mut pair) = bind {
                                 if pair.len() != 2 {
                                     return Err(SelError {
-                                        loc: s_loc.clone(),
+                                        loc,
                                         kind: SelErrorKind::Generic(
                                             "Invalid binding pair in let".into(),
                                         ),
@@ -865,7 +871,7 @@ fn optimize_ast(list: Vec<Ast>, _loc: Loc) -> Result<Ast> {
                                     bindings.push((name_id, val));
                                 } else {
                                     return Err(SelError {
-                                        loc: s_loc.clone(),
+                                        loc,
                                         kind: SelErrorKind::Generic(
                                             "Expected identifier in let binding".into(),
                                         ),
@@ -873,7 +879,7 @@ fn optimize_ast(list: Vec<Ast>, _loc: Loc) -> Result<Ast> {
                                 }
                             } else {
                                 return Err(SelError {
-                                    loc: s_loc.clone(),
+                                    loc,
                                     kind: SelErrorKind::Generic(
                                         "Expected binding pair in let".into(),
                                     ),
@@ -881,10 +887,10 @@ fn optimize_ast(list: Vec<Ast>, _loc: Loc) -> Result<Ast> {
                             }
                         }
                     }
-                    Ast::Nil => {}
+                    Ast::Nil(_) => {}
                     _ => {
                         return Err(SelError {
-                            loc: s_loc.clone(),
+                            loc: s_loc,
                             kind: SelErrorKind::Generic("Expected binding list in let".into()),
                         });
                     }
@@ -895,7 +901,7 @@ fn optimize_ast(list: Vec<Ast>, _loc: Loc) -> Result<Ast> {
             "quote" => {
                 let mut iter = list.into_iter().skip(1);
                 let expr = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc.clone(),
+                    loc: s_loc,
                     kind: SelErrorKind::Generic("Expected expression in quote".into()),
                 })?;
                 Ok(Ast::Quote(s_loc, Box::new(expr)))
@@ -903,7 +909,7 @@ fn optimize_ast(list: Vec<Ast>, _loc: Loc) -> Result<Ast> {
             "quasiquote" => {
                 let mut iter = list.into_iter().skip(1);
                 let expr = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc.clone(),
+                    loc: s_loc,
                     kind: SelErrorKind::Generic("Expected expression in quasiquote".into()),
                 })?;
                 Ok(Ast::Quasiquote(s_loc, Box::new(expr)))
@@ -916,10 +922,10 @@ fn optimize_ast(list: Vec<Ast>, _loc: Loc) -> Result<Ast> {
                 let iter = list.into_iter().skip(1);
                 Ok(Ast::Or(s_loc, iter.collect()))
             }
-            _ => Ok(Ast::List(list)),
+            _ => Ok(Ast::List(loc, list)),
         }
     } else {
-        Ok(Ast::List(list))
+        Ok(Ast::List(loc, list))
     }
 }
 
@@ -1022,14 +1028,14 @@ pub enum Ast {
     UnquoteSplicing(Loc, Box<Ast>),
     And(Loc, Vec<Ast>),
     Or(Loc, Vec<Ast>),
-    Bind(u32),
-    Nil,
+    Bind(Loc, u32),
+    Nil(Loc),
     Symbol(Loc, u32),
-    Integer(i64),
-    Float(f64),
-    String(String),
-    Boolean(bool),
-    List(Vec<Self>),
+    Integer(Loc, i64),
+    Float(Loc, f64),
+    String(Loc, String),
+    Boolean(Loc, bool),
+    List(Loc, Vec<Self>),
 }
 
 impl std::fmt::Display for Ast {
@@ -1048,17 +1054,19 @@ impl std::fmt::Display for Ast {
             Ast::UnquoteSplicing(..) => write!(f, "unquote-splicing"),
             Ast::And(..) => write!(f, "and"),
             Ast::Or(..) => write!(f, "or"),
-            Ast::Nil => write!(f, "nil"),
+            Ast::Nil(_) => write!(f, "nil"),
             Ast::Symbol(_, id) => write!(f, "{}", lookup(*id)),
-            Ast::Integer(i) => write!(f, "{i}"),
-            Ast::Float(n) => write!(f, "{n}"),
-            Ast::String(s) => write!(f, "\"{s}\""),
-            Ast::Boolean(b) => write!(f, "{}", if *b { "#t" } else { "#f" }),
-            Ast::List(_) => write!(f, "<list>"),
-            Ast::Bind(id) => write!(f, "&{}", lookup(*id)),
+            Ast::Integer(_, i) => write!(f, "{i}"),
+            Ast::Float(_, n) => write!(f, "{n}"),
+            Ast::String(_, s) => write!(f, "\"{s}\""),
+            Ast::Boolean(_, b) => write!(f, "{}", if *b { "#t" } else { "#f" }),
+            Ast::List(..) => write!(f, "<list>"),
+            Ast::Bind(_, id) => write!(f, "&{}", lookup(*id)),
         }
     }
 }
+
+pub type OpCodeLoc = (Loc, OpCode);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum OpCode {
@@ -1081,7 +1089,7 @@ pub enum OpCode {
 
 #[derive(Debug, Clone)]
 pub struct Chunk {
-    pub code: Vec<OpCode>,
+    pub code: Vec<OpCodeLoc>,
     pub constants: Vec<Value>,
 }
 
@@ -1093,7 +1101,7 @@ impl Chunk {
         }
     }
 
-    pub fn write(&mut self, op: OpCode) {
+    pub fn write(&mut self, op: OpCodeLoc) {
         self.code.push(op);
     }
 
@@ -1103,109 +1111,131 @@ impl Chunk {
     }
 }
 
-fn ast_to_value(ast: Ast) -> Value {
+fn ast_to_value(ast: Ast) -> (Loc, Value) {
     match ast {
-        Ast::Symbol(_, id) => Value::Symbol(id),
-        Ast::Integer(i) => Value::Integer(i),
-        Ast::Float(f) => Value::Float(f),
-        Ast::String(s) => Value::String(s),
-        Ast::Boolean(b) => Value::Boolean(b),
-        Ast::Nil => Value::Nil,
-        Ast::List(l) => Value::List(l.into_iter().map(ast_to_value).collect()),
-        Ast::Define(_, id, val) => Value::List(vec![
-            Value::Symbol(intern("define")),
-            Value::Symbol(id),
-            ast_to_value(*val),
-        ]),
-        Ast::DefMacro(_, id, val) => Value::List(vec![
-            Value::Symbol(intern("defmacro")),
-            Value::Symbol(id),
-            ast_to_value(*val),
-        ]),
-        Ast::Set(_, id, val) => Value::List(vec![
-            Value::Symbol(intern("set!")),
-            Value::Symbol(id),
-            ast_to_value(*val),
-        ]),
-        Ast::If(_, cond, t, f) => {
+        Ast::Symbol(loc, id) => (loc, Value::Symbol(id)),
+        Ast::Integer(loc, i) => (loc, Value::Integer(i)),
+        Ast::Float(loc, f) => (loc, Value::Float(f)),
+        Ast::String(loc, s) => (loc, Value::String(s)),
+        Ast::Boolean(loc, b) => (loc, Value::Boolean(b)),
+        Ast::Nil(loc) => (loc, Value::Nil),
+        Ast::List(loc, l) => (
+            loc,
+            Value::List(l.into_iter().map(|a| ast_to_value(a).1).collect()),
+        ),
+        Ast::Define(loc, id, val) => (
+            loc,
+            Value::List(vec![
+                Value::Symbol(intern("define")),
+                Value::Symbol(id),
+                ast_to_value(*val).1,
+            ]),
+        ),
+        Ast::DefMacro(loc, id, val) => (
+            loc,
+            Value::List(vec![
+                Value::Symbol(intern("defmacro")),
+                Value::Symbol(id),
+                ast_to_value(*val).1,
+            ]),
+        ),
+        Ast::Set(loc, id, val) => (
+            loc,
+            Value::List(vec![
+                Value::Symbol(intern("set!")),
+                Value::Symbol(id),
+                ast_to_value(*val).1,
+            ]),
+        ),
+        Ast::If(loc, cond, t, f) => {
             let mut list = vec![
                 Value::Symbol(intern("if")),
-                ast_to_value(*cond),
-                ast_to_value(*t),
+                ast_to_value(*cond).1,
+                ast_to_value(*t).1,
             ];
             if let Some(f) = f {
-                list.push(ast_to_value(*f));
+                list.push(ast_to_value(*f).1);
             }
-            Value::List(list)
+            (loc, Value::List(list))
         }
-        Ast::Lambda(_, params, body) => {
+        Ast::Lambda(loc, params, body) => {
             let mut list = vec![
                 Value::Symbol(intern("lambda")),
                 Value::List(params.into_iter().map(Value::Symbol).collect()),
             ];
-            list.extend(body.into_iter().map(ast_to_value));
-            Value::List(list)
+            list.extend(body.into_iter().map(|a| ast_to_value(a).1));
+            (loc, Value::List(list))
         }
-        Ast::Begin(_, body) => {
+        Ast::Begin(loc, body) => {
             let mut list = vec![Value::Symbol(intern("begin"))];
-            list.extend(body.into_iter().map(ast_to_value));
-            Value::List(list)
+            list.extend(body.into_iter().map(|a| ast_to_value(a).1));
+            (loc, Value::List(list))
         }
-        Ast::Let(_, bindings, body) => {
+        Ast::Let(loc, bindings, body) => {
             let mut list = vec![Value::Symbol(intern("let"))];
             let mut bind_list = Vec::new();
             for (id, val) in bindings {
-                bind_list.push(Value::List(vec![Value::Symbol(id), ast_to_value(val)]));
+                bind_list.push(Value::List(vec![Value::Symbol(id), ast_to_value(val).1]));
             }
             list.push(Value::List(bind_list));
-            list.extend(body.into_iter().map(ast_to_value));
-            Value::List(list)
+            list.extend(body.into_iter().map(|a| ast_to_value(a).1));
+            (loc, Value::List(list))
         }
-        Ast::Quote(_, val) => Value::List(vec![Value::Symbol(intern("quote")), ast_to_value(*val)]),
-        Ast::Quasiquote(_, val) => Value::List(vec![
-            Value::Symbol(intern("quasiquote")),
-            ast_to_value(*val),
-        ]),
-        Ast::Unquote(_, val) => {
-            Value::List(vec![Value::Symbol(intern("unquote")), ast_to_value(*val)])
-        }
-        Ast::UnquoteSplicing(_, val) => Value::List(vec![
-            Value::Symbol(intern("unquote-splicing")),
-            ast_to_value(*val),
-        ]),
-        Ast::And(_, exprs) => {
+        Ast::Quote(loc, val) => (
+            loc,
+            Value::List(vec![Value::Symbol(intern("quote")), ast_to_value(*val).1]),
+        ),
+        Ast::Quasiquote(loc, val) => (
+            loc,
+            Value::List(vec![
+                Value::Symbol(intern("quasiquote")),
+                ast_to_value(*val).1,
+            ]),
+        ),
+        Ast::Unquote(loc, val) => (
+            loc,
+            Value::List(vec![Value::Symbol(intern("unquote")), ast_to_value(*val).1]),
+        ),
+        Ast::UnquoteSplicing(loc, val) => (
+            loc,
+            Value::List(vec![
+                Value::Symbol(intern("unquote-splicing")),
+                ast_to_value(*val).1,
+            ]),
+        ),
+        Ast::And(loc, exprs) => {
             let mut list = vec![Value::Symbol(intern("and"))];
-            list.extend(exprs.into_iter().map(ast_to_value));
-            Value::List(list)
+            list.extend(exprs.into_iter().map(|a| ast_to_value(a).1));
+            (loc, Value::List(list))
         }
-        Ast::Or(_, exprs) => {
+        Ast::Or(loc, exprs) => {
             let mut list = vec![Value::Symbol(intern("or"))];
-            list.extend(exprs.into_iter().map(ast_to_value));
-            Value::List(list)
+            list.extend(exprs.into_iter().map(|a| ast_to_value(a).1));
+            (loc, Value::List(list))
         }
-        Ast::Bind(id) => Value::Symbol(id),
+        Ast::Bind(loc, id) => (loc, Value::Symbol(id)),
     }
 }
 
 fn value_to_ast(val: Value, loc: Loc) -> Result<Ast> {
     match val {
-        Value::Nil => Ok(Ast::Nil),
-        Value::Integer(i) => Ok(Ast::Integer(i)),
-        Value::Float(f) => Ok(Ast::Float(f)),
-        Value::String(s) => Ok(Ast::String(s)),
-        Value::Boolean(b) => Ok(Ast::Boolean(b)),
+        Value::Nil => Ok(Ast::Nil(loc)),
+        Value::Integer(i) => Ok(Ast::Integer(loc, i)),
+        Value::Float(f) => Ok(Ast::Float(loc, f)),
+        Value::String(s) => Ok(Ast::String(loc, s)),
+        Value::Boolean(b) => Ok(Ast::Boolean(loc, b)),
         Value::Symbol(id) => Ok(Ast::Symbol(loc, id)),
         Value::List(l) => {
             let mut ast_list = Vec::new();
             for v in l {
-                ast_list.push(value_to_ast(v, loc.clone())?);
+                ast_list.push(value_to_ast(v, loc)?);
             }
             // Need to re-run parse_list logic to get optimized AST
             // Or we could just return Ast::List and let eval handle it
             // but we want optimized AST.
             // Let's use a helper that simulates the parser's logic.
             if ast_list.is_empty() {
-                return Ok(Ast::Nil);
+                return Ok(Ast::Nil(loc));
             }
             optimize_ast(ast_list, loc)
         }
@@ -1268,111 +1298,112 @@ impl<'a> Compiler<'a> {
 
     pub fn compile(&mut self, ast: Ast) -> Result<()> {
         match ast {
-            Ast::Integer(i) => {
+            Ast::Integer(loc, i) => {
                 let idx = self.chunk.add_constant(Value::Integer(i));
-                self.chunk.write(OpCode::Constant(idx));
+                self.chunk.write((loc, OpCode::Constant(idx)));
             }
-            Ast::Float(f) => {
+            Ast::Float(loc, f) => {
                 let idx = self.chunk.add_constant(Value::Float(f));
-                self.chunk.write(OpCode::Constant(idx));
+                self.chunk.write((loc, OpCode::Constant(idx)));
             }
-            Ast::String(s) => {
+            Ast::String(loc, s) => {
                 let idx = self.chunk.add_constant(Value::String(s));
-                self.chunk.write(OpCode::Constant(idx));
+                self.chunk.write((loc, OpCode::Constant(idx)));
             }
-            Ast::Boolean(b) => {
+            Ast::Boolean(loc, b) => {
                 let idx = self.chunk.add_constant(Value::Boolean(b));
-                self.chunk.write(OpCode::Constant(idx));
+                self.chunk.write((loc, OpCode::Constant(idx)));
             }
-            Ast::Nil => {
+            Ast::Nil(loc) => {
                 let idx = self.chunk.add_constant(Value::Nil);
-                self.chunk.write(OpCode::Constant(idx));
+                self.chunk.write((loc, OpCode::Constant(idx)));
             }
-            Ast::Symbol(_, id) => {
-                self.chunk.write(OpCode::LoadVar(id));
+            Ast::Symbol(loc, id) => {
+                self.chunk.write((loc, OpCode::LoadVar(id)));
             }
-            Ast::Define(_, id, expr) => {
+            Ast::Define(loc, id, expr) => {
                 self.compile(*expr)?;
-                self.chunk.write(OpCode::DefVar(id));
+                self.chunk.write((loc, OpCode::DefVar(id)));
             }
-            Ast::Set(_, id, expr) => {
+            Ast::Set(loc, id, expr) => {
                 self.compile(*expr)?;
-                self.chunk.write(OpCode::StoreVar(id));
+                self.chunk.write((loc, OpCode::StoreVar(id)));
             }
-            Ast::If(_, cond, true_branch, false_branch) => {
+            Ast::If(loc, cond, true_branch, false_branch) => {
                 self.compile(*cond)?;
                 let jump_if_false_idx = self.chunk.code.len();
-                self.chunk.write(OpCode::JumpIfFalse(0));
+                self.chunk.write((loc, OpCode::JumpIfFalse(0)));
 
-                self.chunk.write(OpCode::Pop);
+                self.chunk.write((loc, OpCode::Pop));
                 self.compile(*true_branch)?;
 
                 let jump_end_idx = self.chunk.code.len();
-                self.chunk.write(OpCode::Jump(0));
+                self.chunk.write((loc, OpCode::Jump(0)));
 
-                self.chunk.code[jump_if_false_idx] = OpCode::JumpIfFalse(self.chunk.code.len());
-                self.chunk.write(OpCode::Pop);
+                self.chunk.code[jump_if_false_idx] =
+                    (loc, OpCode::JumpIfFalse(self.chunk.code.len()));
+                self.chunk.write((loc, OpCode::Pop));
 
                 if let Some(fb) = false_branch {
                     self.compile(*fb)?;
                 } else {
                     let idx = self.chunk.add_constant(Value::Nil);
-                    self.chunk.write(OpCode::Constant(idx));
+                    self.chunk.write((loc, OpCode::Constant(idx)));
                 }
 
-                self.chunk.code[jump_end_idx] = OpCode::Jump(self.chunk.code.len());
+                self.chunk.code[jump_end_idx] = (loc, OpCode::Jump(self.chunk.code.len()));
             }
-            Ast::Begin(_, mut exprs) => {
+            Ast::Begin(loc, mut exprs) => {
                 if exprs.is_empty() {
                     let idx = self.chunk.add_constant(Value::Nil);
-                    self.chunk.write(OpCode::Constant(idx));
+                    self.chunk.write((loc, OpCode::Constant(idx)));
                 } else {
                     let last = exprs.pop().unwrap();
                     for expr in exprs {
                         self.compile(expr)?;
-                        self.chunk.write(OpCode::Pop);
+                        self.chunk.write((loc, OpCode::Pop));
                     }
                     self.compile(last)?;
                 }
             }
-            Ast::Let(_, bindings, mut body) => {
+            Ast::Let(loc, bindings, mut body) => {
                 let mut ids = Vec::new();
                 for (id, val) in bindings {
                     self.compile(val)?;
                     ids.push(id);
                 }
-                self.chunk.write(OpCode::BuildEnv(ids));
+                self.chunk.write((loc, OpCode::BuildEnv(ids)));
 
                 if body.is_empty() {
                     let idx = self.chunk.add_constant(Value::Nil);
-                    self.chunk.write(OpCode::Constant(idx));
+                    self.chunk.write((loc, OpCode::Constant(idx)));
                 } else {
                     let last = body.pop().unwrap();
                     for expr in body {
                         self.compile(expr)?;
-                        self.chunk.write(OpCode::Pop);
+                        self.chunk.write((loc, OpCode::Pop));
                     }
                     self.compile(last)?;
                 }
 
-                self.chunk.write(OpCode::PopEnv);
+                self.chunk.write((loc, OpCode::PopEnv));
             }
-            Ast::Lambda(_, params, mut body_asts) => {
+            Ast::Lambda(loc, params, mut body_asts) => {
                 let mut child_chunk = Chunk::new();
                 let mut child_compiler = Compiler::new(&mut child_chunk);
 
                 if body_asts.is_empty() {
                     let idx = child_chunk.add_constant(Value::Nil);
-                    child_chunk.write(OpCode::Constant(idx));
+                    child_chunk.write((loc, OpCode::Constant(idx)));
                 } else {
                     let last = body_asts.pop().unwrap();
                     for expr in body_asts {
                         child_compiler.compile(expr)?;
-                        child_compiler.chunk.write(OpCode::Pop);
+                        child_compiler.chunk.write((loc, OpCode::Pop));
                     }
                     child_compiler.compile(last)?;
                 }
-                child_chunk.write(OpCode::Return);
+                child_chunk.write((loc, OpCode::Return));
 
                 let stub = Value::Closure {
                     params,
@@ -1380,9 +1411,9 @@ impl<'a> Compiler<'a> {
                     env: Rc::new(RefCell::new(Env::default())),
                 };
                 let idx = self.chunk.add_constant(stub);
-                self.chunk.write(OpCode::MakeClosure(idx));
+                self.chunk.write((loc, OpCode::MakeClosure(idx)));
             }
-            Ast::DefMacro(_, id, expr) => {
+            Ast::DefMacro(loc, id, expr) => {
                 // Compile the macro body as a lambda, then make it a macro
                 if let Ast::Lambda(_, params, mut body_asts) = *expr {
                     let mut child_chunk = Chunk::new();
@@ -1390,16 +1421,16 @@ impl<'a> Compiler<'a> {
 
                     if body_asts.is_empty() {
                         let idx = child_chunk.add_constant(Value::Nil);
-                        child_chunk.write(OpCode::Constant(idx));
+                        child_chunk.write((loc, OpCode::Constant(idx)));
                     } else {
                         let last = body_asts.pop().unwrap();
                         for expr in body_asts {
                             child_compiler.compile(expr)?;
-                            child_compiler.chunk.write(OpCode::Pop);
+                            child_compiler.chunk.write((loc, OpCode::Pop));
                         }
                         child_compiler.compile(last)?;
                     }
-                    child_chunk.write(OpCode::Return);
+                    child_chunk.write((loc, OpCode::Return));
 
                     let stub = Value::Macro {
                         params,
@@ -1407,18 +1438,18 @@ impl<'a> Compiler<'a> {
                         env: Rc::new(RefCell::new(Env::default())),
                     };
                     let idx = self.chunk.add_constant(stub);
-                    self.chunk.write(OpCode::MakeMacro(id, idx));
+                    self.chunk.write((loc, OpCode::MakeMacro(id, idx)));
                 } else {
                     return Err(SelError {
-                        loc: Loc::default(),
+                        loc,
                         kind: SelErrorKind::Generic("defmacro expects a lambda".into()),
                     });
                 }
             }
-            Ast::List(list) => {
+            Ast::List(loc, list) => {
                 if list.is_empty() {
                     let idx = self.chunk.add_constant(Value::Nil);
-                    self.chunk.write(OpCode::Constant(idx));
+                    self.chunk.write((loc, OpCode::Constant(idx)));
                     return Ok(());
                 }
 
@@ -1430,20 +1461,20 @@ impl<'a> Compiler<'a> {
                     self.compile(arg)?;
                     arg_count += 1;
                 }
-                self.chunk.write(OpCode::Call(arg_count));
+                self.chunk.write((loc, OpCode::Call(arg_count)));
             }
-            Ast::Quote(_, expr) => {
-                let val = ast_to_value(*expr);
+            Ast::Quote(loc, expr) => {
+                let val = ast_to_value(*expr).1;
                 let idx = self.chunk.add_constant(val);
-                self.chunk.write(OpCode::Constant(idx));
+                self.chunk.write((loc, OpCode::Constant(idx)));
             }
             Ast::Quasiquote(_, expr) => {
                 self.compile_quasiquote(*expr)?;
             }
-            Ast::And(_, exprs) => {
+            Ast::And(loc, exprs) => {
                 if exprs.is_empty() {
                     let idx = self.chunk.add_constant(Value::Boolean(true));
-                    self.chunk.write(OpCode::Constant(idx));
+                    self.chunk.write((loc, OpCode::Constant(idx)));
                     return Ok(());
                 }
                 let mut jump_ends = Vec::new();
@@ -1452,21 +1483,21 @@ impl<'a> Compiler<'a> {
                     self.compile(expr.clone())?;
                     if i < exprs.len() - 1 {
                         let jmp_false = self.chunk.code.len();
-                        self.chunk.write(OpCode::JumpIfFalse(0));
-                        self.chunk.write(OpCode::Pop);
+                        self.chunk.write((loc, OpCode::JumpIfFalse(0)));
+                        self.chunk.write((loc, OpCode::Pop));
                         jump_ends.push(jmp_false);
                     }
                 }
 
                 let end_pos = self.chunk.code.len();
                 for jmp in jump_ends {
-                    self.chunk.code[jmp] = OpCode::JumpIfFalse(end_pos);
+                    self.chunk.code[jmp] = (loc, OpCode::JumpIfFalse(end_pos));
                 }
             }
-            Ast::Or(_, exprs) => {
+            Ast::Or(loc, exprs) => {
                 if exprs.is_empty() {
                     let idx = self.chunk.add_constant(Value::Boolean(false));
-                    self.chunk.write(OpCode::Constant(idx));
+                    self.chunk.write((loc, OpCode::Constant(idx)));
                     return Ok(());
                 }
 
@@ -1475,20 +1506,21 @@ impl<'a> Compiler<'a> {
                     self.compile(expr.clone())?;
                     if i < exprs.len() - 1 {
                         let jmp_false = self.chunk.code.len();
-                        self.chunk.write(OpCode::JumpIfFalse(0));
+                        self.chunk.write((loc, OpCode::JumpIfFalse(0)));
 
                         let jmp_end = self.chunk.code.len();
-                        self.chunk.write(OpCode::Jump(0));
+                        self.chunk.write((loc, OpCode::Jump(0)));
                         jump_ends.push(jmp_end);
 
-                        self.chunk.code[jmp_false] = OpCode::JumpIfFalse(self.chunk.code.len());
-                        self.chunk.write(OpCode::Pop);
+                        self.chunk.code[jmp_false] =
+                            (loc, OpCode::JumpIfFalse(self.chunk.code.len()));
+                        self.chunk.write((loc, OpCode::Pop));
                     }
                 }
 
                 let end_pos = self.chunk.code.len();
                 for jmp in jump_ends {
-                    self.chunk.code[jmp] = OpCode::Jump(end_pos);
+                    self.chunk.code[jmp] = (loc, OpCode::Jump(end_pos));
                 }
             }
             Ast::Unquote(loc, _) | Ast::UnquoteSplicing(loc, _) => {
@@ -1499,9 +1531,9 @@ impl<'a> Compiler<'a> {
                     ),
                 });
             }
-            Ast::Bind(_) => {
+            Ast::Bind(loc, _) => {
                 return Err(SelError {
-                    loc: Loc::default(),
+                    loc,
                     kind: SelErrorKind::Generic("unexpected & binding in normal expression".into()),
                 });
             }
@@ -1522,28 +1554,28 @@ impl<'a> Compiler<'a> {
                     ),
                 });
             }
-            Ast::List(list) => {
+            Ast::List(loc, list) => {
                 let mut parts = 0;
                 for item in list {
                     if let Ast::UnquoteSplicing(_, inner) = item {
                         self.compile(*inner)?;
                     } else {
                         self.compile_quasiquote(item)?;
-                        self.chunk.write(OpCode::MakeList(1));
+                        self.chunk.write((loc, OpCode::MakeList(1)));
                     }
                     parts += 1;
                 }
                 if parts == 0 {
                     let idx = self.chunk.add_constant(Value::Nil);
-                    self.chunk.write(OpCode::Constant(idx));
+                    self.chunk.write((loc, OpCode::Constant(idx)));
                 } else {
-                    self.chunk.write(OpCode::ConcatList(parts));
+                    self.chunk.write((loc, OpCode::ConcatList(parts)));
                 }
             }
             _ => {
-                let val = ast_to_value(ast);
+                let (loc, val) = ast_to_value(ast);
                 let idx = self.chunk.add_constant(val);
-                self.chunk.write(OpCode::Constant(idx));
+                self.chunk.write((loc, OpCode::Constant(idx)));
             }
         }
         Ok(())
@@ -1584,7 +1616,7 @@ impl VM {
                 }
             }
 
-            let instruction = frame.chunk.code[frame.ip].clone();
+            let (loc, instruction) = frame.chunk.code[frame.ip].clone();
             frame.ip += 1;
 
             match instruction {
@@ -1596,7 +1628,7 @@ impl VM {
                         self.stack.push(val);
                     } else {
                         return Err(SelError {
-                            loc: Loc::default(),
+                            loc,
                             kind: SelErrorKind::UndefinedVariable(id),
                         });
                     }
@@ -1605,7 +1637,7 @@ impl VM {
                     let val = self.stack.last().unwrap().clone();
                     if !frame.env.borrow_mut().set(id, val) {
                         return Err(SelError {
-                            loc: Loc::default(),
+                            loc,
                             kind: SelErrorKind::UnboundVariable(id),
                         });
                     }
@@ -1648,12 +1680,16 @@ impl VM {
                                     has_rest = true;
                                     break;
                                 } else {
+                                    if params.len() != arg_count {
+                                        return Err(SelError {
+                                            loc,
+                                            kind: SelErrorKind::ArityMismatch {
+                                                expected: params.len(),
+                                                actual: arg_count,
+                                            },
+                                        });
+                                    }
                                     let arg_idx = self.stack.len() - arg_count + i;
-                                    // BUG: This code breaks
-                                    // code: (display (map (lambda (x) (* x x) '(2 4 6))))
-                                    // output: thread 'main' panicked at src/main.rs:1577:68:
-                                    //         index out of bounds: the len is 3 but the index is 3
-                                    //         note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
                                     call_env.insert(*id, self.stack[arg_idx].clone());
                                 }
                             }
@@ -1680,13 +1716,13 @@ impl VM {
                         }
                         Value::Macro { .. } => {
                             return Err(SelError {
-                                loc: Loc::default(),
+                                loc,
                                 kind: SelErrorKind::Generic("Cannot call macro at runtime".into()),
                             });
                         }
                         _ => {
                             return Err(SelError {
-                                loc: Loc::default(),
+                                loc,
                                 kind: SelErrorKind::Generic(format!(
                                     "Attempt to call non-function value: {}",
                                     callee.display()
@@ -1753,7 +1789,7 @@ impl VM {
                             Value::Nil => {}
                             _ => {
                                 return Err(SelError {
-                                    loc: Loc::default(),
+                                    loc,
                                     kind: SelErrorKind::Generic(
                                         "unquote-splicing requires a list".into(),
                                     ),
@@ -1770,9 +1806,9 @@ impl VM {
 
 pub fn macro_expand(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
     match ast {
-        Ast::List(list) => {
+        Ast::List(loc, list) => {
             if list.is_empty() {
-                return Ok(Ast::List(list));
+                return Ok(Ast::List(loc, list));
             }
             if let Ast::Symbol(loc, id) = list[0].clone() {
                 let macro_opt = env.borrow().get(id);
@@ -1787,7 +1823,7 @@ pub fn macro_expand(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
                     let args_ast: Vec<Ast> = list_iter.collect();
                     let mut args: Vec<Value> = Vec::new();
                     for a in args_ast {
-                        args.push(ast_to_value(a));
+                        args.push(ast_to_value(a).1);
                     }
 
                     let mut call_env = Env::new(Some(m_env));
@@ -1803,7 +1839,7 @@ pub fn macro_expand(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
                                 call_env.insert(*pid, args[i].clone());
                             } else {
                                 return Err(SelError {
-                                    loc: loc.clone(),
+                                    loc: loc,
                                     kind: SelErrorKind::Generic(
                                         "Arity mismatch in macro call".into(),
                                     ),
@@ -1815,7 +1851,7 @@ pub fn macro_expand(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
                     let mut vm = VM::new();
                     let result_val = vm.run(chunk, Rc::new(RefCell::new(call_env)))?;
 
-                    let expanded_ast = value_to_ast(result_val, loc.clone())?;
+                    let expanded_ast = value_to_ast(result_val, loc)?;
                     return macro_expand(expanded_ast, env);
                 }
             }
@@ -1824,7 +1860,7 @@ pub fn macro_expand(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
             for item in list {
                 expanded_list.push(macro_expand(item, env.clone())?);
             }
-            Ok(Ast::List(expanded_list))
+            Ok(Ast::List(loc, expanded_list))
         }
         Ast::Begin(loc, exprs) => {
             let mut exp = Vec::new();
@@ -1881,12 +1917,12 @@ pub fn macro_expand_quasiquote(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
             loc,
             Box::new(macro_expand(*expr, env)?),
         )),
-        Ast::List(list) => {
+        Ast::List(loc, list) => {
             let mut exp = Vec::new();
             for item in list {
                 exp.push(macro_expand_quasiquote(item, env.clone())?);
             }
-            Ok(Ast::List(exp))
+            Ok(Ast::List(loc, exp))
         }
         _ => Ok(ast),
     }
@@ -1973,7 +2009,7 @@ mod sel_core {
     pub fn sub(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.is_empty() {
             return Err(crate::SelError {
-                loc: crate::Loc::default(),
+                loc: Loc::default(),
                 kind: crate::SelErrorKind::Generic("Expected at least 1 argument to -".into()),
             });
         }
@@ -2079,7 +2115,7 @@ mod sel_core {
     pub fn div(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.is_empty() {
             return Err(crate::SelError {
-                loc: crate::Loc::default(),
+                loc: Loc::default(),
                 kind: crate::SelErrorKind::Generic("Expected at least 1 argument to /".into()),
             });
         }
@@ -2130,7 +2166,7 @@ mod sel_core {
     pub fn modulo(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 2 {
             return Err(crate::SelError {
-                loc: crate::Loc::default(),
+                loc: Loc::default(),
                 kind: crate::SelErrorKind::ArityMismatch {
                     expected: 2,
                     actual: args.len(),
@@ -2161,7 +2197,7 @@ mod sel_core {
     fn compare_nums(args: Vec<Value>, op: fn(f64, f64) -> bool) -> Result<Value> {
         if args.len() < 2 {
             return Err(crate::SelError {
-                loc: crate::Loc::default(),
+                loc: Loc::default(),
                 kind: crate::SelErrorKind::Generic(
                     "comparison requires at least 2 arguments".into(),
                 ),
@@ -2218,7 +2254,7 @@ mod sel_core {
     pub fn cons(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 2 {
             return Err(crate::SelError {
-                loc: crate::Loc::default(),
+                loc: Loc::default(),
                 kind: crate::SelErrorKind::ArityMismatch {
                     expected: 2,
                     actual: args.len(),
@@ -2241,7 +2277,7 @@ mod sel_core {
     pub fn car(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
             return Err(crate::SelError {
-                loc: crate::Loc::default(),
+                loc: Loc::default(),
                 kind: crate::SelErrorKind::ArityMismatch {
                     expected: 1,
                     actual: args.len(),
@@ -2252,7 +2288,7 @@ mod sel_core {
             Value::List(mut l) => {
                 if l.is_empty() {
                     return Err(crate::SelError {
-                        loc: crate::Loc::default(),
+                        loc: Loc::default(),
                         kind: crate::SelErrorKind::Generic("car on empty list".into()),
                     });
                 }
@@ -2270,7 +2306,7 @@ mod sel_core {
     pub fn nth(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 2 {
             return Err(crate::SelError {
-                loc: crate::Loc::default(),
+                loc: Loc::default(),
                 kind: crate::SelErrorKind::ArityMismatch {
                     expected: 2,
                     actual: args.len(),
@@ -2306,7 +2342,7 @@ mod sel_core {
     pub fn cdr(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
             return Err(crate::SelError {
-                loc: crate::Loc::default(),
+                loc: Loc::default(),
                 kind: crate::SelErrorKind::ArityMismatch {
                     expected: 1,
                     actual: args.len(),
@@ -2317,7 +2353,7 @@ mod sel_core {
             Value::List(mut l) => {
                 if l.is_empty() {
                     return Err(crate::SelError {
-                        loc: crate::Loc::default(),
+                        loc: Loc::default(),
                         kind: crate::SelErrorKind::Generic("cdr on empty list".into()),
                     });
                 }
@@ -2340,7 +2376,7 @@ mod sel_core {
     pub fn count(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
             return Err(crate::SelError {
-                loc: crate::Loc::default(),
+                loc: Loc::default(),
                 kind: crate::SelErrorKind::ArityMismatch {
                     expected: 1,
                     actual: args.len(),
@@ -2361,7 +2397,7 @@ mod sel_core {
     pub fn empty(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
             return Err(crate::SelError {
-                loc: crate::Loc::default(),
+                loc: Loc::default(),
                 kind: crate::SelErrorKind::ArityMismatch {
                     expected: 1,
                     actual: args.len(),
@@ -2391,7 +2427,7 @@ mod sel_core {
     pub fn is_nil(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
             return Err(crate::SelError {
-                loc: crate::Loc::default(),
+                loc: Loc::default(),
                 kind: crate::SelErrorKind::ArityMismatch {
                     expected: 1,
                     actual: args.len(),
@@ -2408,7 +2444,7 @@ mod sel_core {
     pub fn is_list(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
             return Err(crate::SelError {
-                loc: crate::Loc::default(),
+                loc: Loc::default(),
                 kind: crate::SelErrorKind::ArityMismatch {
                     expected: 1,
                     actual: args.len(),
@@ -2424,7 +2460,7 @@ mod sel_core {
     pub fn is_number(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
             return Err(crate::SelError {
-                loc: crate::Loc::default(),
+                loc: Loc::default(),
                 kind: crate::SelErrorKind::ArityMismatch {
                     expected: 1,
                     actual: args.len(),
@@ -2440,7 +2476,7 @@ mod sel_core {
     pub fn is_string(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
             return Err(crate::SelError {
-                loc: crate::Loc::default(),
+                loc: Loc::default(),
                 kind: crate::SelErrorKind::ArityMismatch {
                     expected: 1,
                     actual: args.len(),
@@ -2453,7 +2489,7 @@ mod sel_core {
     pub fn is_function(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
             return Err(crate::SelError {
-                loc: crate::Loc::default(),
+                loc: Loc::default(),
                 kind: crate::SelErrorKind::ArityMismatch {
                     expected: 1,
                     actual: args.len(),
@@ -2469,7 +2505,7 @@ mod sel_core {
     pub fn not(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
             return Err(crate::SelError {
-                loc: crate::Loc::default(),
+                loc: Loc::default(),
                 kind: crate::SelErrorKind::ArityMismatch {
                     expected: 1,
                     actual: args.len(),
