@@ -12,20 +12,20 @@
 
 ## Getting Started
 
-To build and run `sel`, you will need Rust installed on your system.
+To build and install `sel`, you will need Rust installed on your system.
 
 ```bash
-cargo build --release
+cargo install --path .
 ```
 
-You can execute a `sel` script by passing it as an argument:
+Now you can execute a `sel` script by passing it as an argument:
 ```bash
-cargo run -- tests/test_ffi.scm
+sel tests/test_ffi.scm
 ```
 
 Or run the interactive REPL:
 ```bash
-cargo run
+sel
 ```
 
 ## Language Showcase
