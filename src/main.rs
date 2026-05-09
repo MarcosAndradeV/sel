@@ -245,6 +245,49 @@ impl std::fmt::Display for Loc {
     }
 }
 
+/// The numerical base of a parsed number token (e.g., Binary, Octal, Decimal, Hexadecimal).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NumberBase {
+    B,
+    O,
+    D,
+    X,
+}
+
+impl NumberBase {
+    pub fn radix(&self) -> u32 {
+        match self {
+            NumberBase::B => 2,
+            NumberBase::O => 8,
+            NumberBase::D => 10,
+            NumberBase::X => 16,
+        }
+    }
+}
+
+impl From<u32> for NumberBase {
+    fn from(value: u32) -> Self {
+        match value {
+            2 => Self::B,
+            8 => Self::O,
+            10 => Self::D,
+            16 => Self::X,
+            _ => panic!("Unknown base"),
+        }
+    }
+}
+
+impl From<NumberBase> for u32 {
+    fn from(val: NumberBase) -> Self {
+        match val {
+            NumberBase::B => 2,
+            NumberBase::O => 8,
+            NumberBase::D => 10,
+            NumberBase::X => 16,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     OpenParen,
@@ -255,7 +298,7 @@ pub enum TokenKind {
     UnquoteSplicing,
     String,
     Identifier,
-    Number,
+    Number(NumberBase),
     Boolean,
     Ampersand,
 }
@@ -455,9 +498,19 @@ impl<'a> Lexer<'a> {
                     });
                 }
 
-                if ident.parse::<i64>().is_ok() || ident.parse::<f64>().is_ok() {
+                let (is_num, base) = if let Some(stripped) = ident.strip_prefix("0x").or_else(|| ident.strip_prefix("0X")) {
+                    (i64::from_str_radix(stripped, 16).is_ok(), NumberBase::X)
+                } else if let Some(stripped) = ident.strip_prefix("0b").or_else(|| ident.strip_prefix("0B")) {
+                    (i64::from_str_radix(stripped, 2).is_ok(), NumberBase::B)
+                } else if let Some(stripped) = ident.strip_prefix("0o").or_else(|| ident.strip_prefix("0O")) {
+                    (i64::from_str_radix(stripped, 8).is_ok(), NumberBase::O)
+                } else {
+                    (ident.parse::<i64>().is_ok() || ident.parse::<f64>().is_ok(), NumberBase::D)
+                };
+
+                if is_num {
                     Ok(Some(Token {
-                        kind: TokenKind::Number,
+                        kind: TokenKind::Number(base),
                         source: ident,
                         loc: start_loc,
                     }))
@@ -528,14 +581,28 @@ fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
         }
         TokenKind::String => Ok(Ast::String(t.source.clone())),
         TokenKind::Boolean => Ok(Ast::Boolean(t.source == "#t")),
-        TokenKind::Number => {
-            if let Ok(i) = t.source.parse::<i64>() {
+        TokenKind::Number(base) => {
+            let s = match base {
+                NumberBase::X => t.source.trim_start_matches("0x").trim_start_matches("0X"),
+                NumberBase::B => t.source.trim_start_matches("0b").trim_start_matches("0B"),
+                NumberBase::O => t.source.trim_start_matches("0o").trim_start_matches("0O"),
+                NumberBase::D => &t.source,
+            };
+            
+            if let Ok(i) = i64::from_str_radix(s, base.radix()) {
                 Ok(Ast::Integer(i))
-            } else if let Ok(f) = t.source.parse::<f64>() {
-                Ok(Ast::Float(f))
+            } else if base == NumberBase::D {
+                if let Ok(f) = t.source.parse::<f64>() {
+                    Ok(Ast::Float(f))
+                } else {
+                    Err(SelError {
+                        loc: t.loc.clone(),
+                        kind: SelErrorKind::InvalidNumber(t.source.clone()),
+                    })
+                }
             } else {
                 Err(SelError {
-                    loc: t.loc,
+                    loc: t.loc.clone(),
                     kind: SelErrorKind::InvalidNumber(t.source.clone()),
                 })
             }
@@ -868,6 +935,8 @@ pub enum Value {
         chunk: Rc<Chunk>,
         env: Rc<RefCell<Env>>,
     },
+    Pointer(usize),
+    Library(Rc<libloading::Library>),
 }
 
 impl Value {
@@ -910,6 +979,8 @@ fn format_value_internal(val: &Value, display: bool) -> String {
         Value::NativeFunction(_) => "<native function>".to_string(),
         Value::Closure { .. } => "<closure>".to_string(),
         Value::Macro { .. } => "<macro>".to_string(),
+        Value::Pointer(p) => format!("<pointer: {:#x}>", p),
+        Value::Library(_) => "<library>".to_string(),
     }
 }
 
@@ -1570,6 +1641,11 @@ impl VM {
                                     break;
                                 } else {
                                     let arg_idx = self.stack.len() - arg_count + i;
+                                    // BUG: This code breaks
+                                    // code: (display (map (lambda (x) (* x x) '(2 4 6))))
+                                    // output: thread 'main' panicked at src/main.rs:1577:68:
+                                    //         index out of bounds: the len is 3 but the index is 3
+                                    //         note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
                                     call_env.insert(*id, self.stack[arg_idx].clone());
                                 }
                             }
@@ -2112,6 +2188,9 @@ mod sel_core {
         Ok(Value::Boolean(true))
     }
 
+    pub fn num_noteq(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        compare_nums(args, |a, b| a != b)
+    }
     pub fn num_eq(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         compare_nums(args, |a, b| a == b)
     }
@@ -2420,6 +2499,414 @@ mod sel_core {
         Ok(Value::Nil)
     }
 
+    pub fn ffi_dlopen(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.len() != 1 {
+            return Err(SelError {
+                loc: Loc::default(),
+                kind: SelErrorKind::ArityMismatch {
+                    expected: 1,
+                    actual: args.len(),
+                },
+            });
+        }
+        if let Value::String(s) = &args[0] {
+            unsafe {
+                match libloading::Library::new(s) {
+                    Ok(lib) => Ok(Value::Library(Rc::new(lib))),
+                    Err(e) => Err(SelError {
+                        loc: Loc::default(),
+                        kind: SelErrorKind::Generic(format!("dlopen failed: {}", e)),
+                    }),
+                }
+            }
+        } else {
+            Err(SelError {
+                loc: Loc::default(),
+                kind: SelErrorKind::Generic("ffi-dlopen requires a string".into()),
+            })
+        }
+    }
+
+    pub fn ffi_dlsym(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.len() != 2 {
+            return Err(SelError {
+                loc: Loc::default(),
+                kind: SelErrorKind::ArityMismatch {
+                    expected: 2,
+                    actual: args.len(),
+                },
+            });
+        }
+        let lib = match &args[0] {
+            Value::Library(l) => l,
+            _ => {
+                return Err(SelError {
+                    loc: Loc::default(),
+                    kind: SelErrorKind::Generic("ffi-dlsym requires a library".into()),
+                });
+            }
+        };
+        let sym_name = match &args[1] {
+            Value::String(s) => s,
+            _ => {
+                return Err(SelError {
+                    loc: Loc::default(),
+                    kind: SelErrorKind::Generic("ffi-dlsym requires a string symbol name".into()),
+                });
+            }
+        };
+
+        let mut sym_bytes = sym_name.as_bytes().to_vec();
+        sym_bytes.push(0);
+
+        unsafe {
+            match lib.get::<*const ()>(&sym_bytes) {
+                Ok(sym) => {
+                    let ptr = *sym as usize;
+                    Ok(Value::Pointer(ptr))
+                }
+                Err(e) => Err(SelError {
+                    loc: Loc::default(),
+                    kind: SelErrorKind::Generic(format!("dlsym failed: {}", e)),
+                }),
+            }
+        }
+    }
+
+    pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.len() < 3 {
+            return Err(SelError {
+                loc: Loc::default(),
+                kind: SelErrorKind::Generic(
+                    "ffi-call requires at least ptr, ret_type, arg_types".into(),
+                ),
+            });
+        }
+
+        let ptr = match args[0] {
+            Value::Pointer(p) => p,
+            _ => {
+                return Err(SelError {
+                    loc: Loc::default(),
+                    kind: SelErrorKind::Generic("ffi-call requires a pointer".into()),
+                });
+            }
+        };
+
+        let ret_type_sym = match args[1] {
+            Value::Symbol(s) => crate::lookup(s),
+            _ => {
+                return Err(SelError {
+                    loc: Loc::default(),
+                    kind: SelErrorKind::Generic("ffi-call requires a return type symbol".into()),
+                });
+            }
+        };
+
+        let arg_type_syms = match &args[2] {
+            Value::List(l) => {
+                let mut syms = Vec::new();
+                for v in l {
+                    if let Value::Symbol(s) = v {
+                        syms.push(crate::lookup(*s));
+                    } else {
+                        return Err(SelError {
+                            loc: Loc::default(),
+                            kind: SelErrorKind::Generic(
+                                "arg_types must be a list of symbols".into(),
+                            ),
+                        });
+                    }
+                }
+                syms
+            }
+            Value::Nil => Vec::new(),
+            _ => {
+                return Err(SelError {
+                    loc: Loc::default(),
+                    kind: SelErrorKind::Generic("arg_types must be a list".into()),
+                });
+            }
+        };
+
+        if args.len() - 3 != arg_type_syms.len() {
+            return Err(SelError {
+                loc: Loc::default(),
+                kind: SelErrorKind::Generic(format!(
+                    "arg_types length mismatch: expected {}, got {}",
+                    arg_type_syms.len(),
+                    args.len() - 3
+                )),
+            });
+        }
+
+        let ret_type = match ret_type_sym.as_str() {
+            "void" => libffi::middle::Type::void(),
+            "i32" => libffi::middle::Type::i32(),
+            "i64" => libffi::middle::Type::i64(),
+            "u32" => libffi::middle::Type::u32(),
+            "u64" => libffi::middle::Type::u64(),
+            "f32" => libffi::middle::Type::f32(),
+            "f64" => libffi::middle::Type::f64(),
+            "bool" => libffi::middle::Type::u8(),
+            "*u8" => libffi::middle::Type::pointer(),
+            _ => {
+                return Err(SelError {
+                    loc: Loc::default(),
+                    kind: SelErrorKind::Generic(format!(
+                        "Unsupported return type: {}",
+                        ret_type_sym
+                    )),
+                });
+            }
+        };
+
+        let mut arg_types = Vec::new();
+        for sym in &arg_type_syms {
+            let t = match sym.as_str() {
+                "i32" => libffi::middle::Type::i32(),
+                "i64" => libffi::middle::Type::i64(),
+                "u32" => libffi::middle::Type::u32(),
+                "u64" => libffi::middle::Type::u64(),
+                "f32" => libffi::middle::Type::f32(),
+                "f64" => libffi::middle::Type::f64(),
+                "bool" => libffi::middle::Type::u8(),
+                "*u8" => libffi::middle::Type::pointer(),
+                _ => {
+                    return Err(SelError {
+                        loc: Loc::default(),
+                        kind: SelErrorKind::Generic(format!("Unsupported arg type: {}", sym)),
+                    });
+                }
+            };
+            arg_types.push(t);
+        }
+
+        let cif = libffi::middle::Cif::new(arg_types.into_iter(), ret_type);
+
+        let mut c_strings = Vec::new();
+
+        enum FfiArg {
+            I32(i32),
+            I64(i64),
+            U8(u8),
+            U32(u32),
+            U64(u64),
+            F32(f32),
+            F64(f64),
+            Ptr(*const std::ffi::c_void),
+        }
+
+        let mut ffi_args_storage = Vec::new();
+
+        for (i, arg_val) in args.iter().skip(3).enumerate() {
+            let sym = &arg_type_syms[i];
+            match sym.as_str() {
+                "i32" => {
+                    let v = match arg_val {
+                        Value::Integer(n) => *n as i32,
+                        Value::Float(f) => *f as i32,
+                        _ => {
+                            return Err(SelError {
+                                loc: Loc::default(),
+                                kind: SelErrorKind::Generic(format!(
+                                    "Expected integer for arg {}",
+                                    i
+                                )),
+                            });
+                        }
+                    };
+                    ffi_args_storage.push(FfiArg::I32(v));
+                }
+                "bool" => {
+                    let v = match arg_val {
+                        Value::Boolean(b) => if *b { 1u8 } else { 0u8 },
+                        Value::Integer(n) => if *n != 0 { 1u8 } else { 0u8 },
+                        _ => {
+                            return Err(SelError {
+                                loc: Loc::default(),
+                                kind: SelErrorKind::Generic(format!(
+                                    "Expected boolean for arg {}",
+                                    i
+                                )),
+                            });
+                        }
+                    };
+                    ffi_args_storage.push(FfiArg::U8(v));
+                }
+                "i64" => {
+                    let v = match arg_val {
+                        Value::Integer(n) => *n,
+                        Value::Float(f) => *f as i64,
+                        _ => {
+                            return Err(SelError {
+                                loc: Loc::default(),
+                                kind: SelErrorKind::Generic(format!(
+                                    "Expected integer for arg {}",
+                                    i
+                                )),
+                            });
+                        }
+                    };
+                    ffi_args_storage.push(FfiArg::I64(v));
+                }
+                "u32" => {
+                    let v = match arg_val {
+                        Value::Integer(n) => *n as u32,
+                        Value::Float(f) => *f as u32,
+                        _ => {
+                            return Err(SelError {
+                                loc: Loc::default(),
+                                kind: SelErrorKind::Generic(format!(
+                                    "Expected integer for arg {}",
+                                    i
+                                )),
+                            });
+                        }
+                    };
+                    ffi_args_storage.push(FfiArg::U32(v));
+                }
+                "u64" => {
+                    let v = match arg_val {
+                        Value::Integer(n) => *n as u64,
+                        Value::Float(f) => *f as u64,
+                        _ => {
+                            return Err(SelError {
+                                loc: Loc::default(),
+                                kind: SelErrorKind::Generic(format!(
+                                    "Expected integer for arg {}",
+                                    i
+                                )),
+                            });
+                        }
+                    };
+                    ffi_args_storage.push(FfiArg::U64(v));
+                }
+                "f32" => {
+                    let v = match arg_val {
+                        Value::Integer(n) => *n as f32,
+                        Value::Float(f) => *f as f32,
+                        _ => {
+                            return Err(SelError {
+                                loc: Loc::default(),
+                                kind: SelErrorKind::Generic(format!(
+                                    "Expected float for arg {}",
+                                    i
+                                )),
+                            });
+                        }
+                    };
+                    ffi_args_storage.push(FfiArg::F32(v));
+                }
+                "f64" => {
+                    let v = match arg_val {
+                        Value::Integer(n) => *n as f64,
+                        Value::Float(f) => *f,
+                        _ => {
+                            return Err(SelError {
+                                loc: Loc::default(),
+                                kind: SelErrorKind::Generic(format!(
+                                    "Expected float for arg {}",
+                                    i
+                                )),
+                            });
+                        }
+                    };
+                    ffi_args_storage.push(FfiArg::F64(v));
+                }
+                "*u8" => {
+                    match arg_val {
+                        Value::String(s) => {
+                            let cstr = std::ffi::CString::new(s.as_str()).unwrap();
+                            let ptr = cstr.as_ptr() as *const std::ffi::c_void;
+                            c_strings.push(cstr); // keep alive
+                            ffi_args_storage.push(FfiArg::Ptr(ptr));
+                        }
+                        Value::Pointer(p) => {
+                            ffi_args_storage.push(FfiArg::Ptr(*p as *const std::ffi::c_void));
+                        }
+                        Value::Nil => {
+                            ffi_args_storage.push(FfiArg::Ptr(std::ptr::null()));
+                        }
+                        _ => {
+                            return Err(SelError {
+                                loc: Loc::default(),
+                                kind: SelErrorKind::Generic(format!(
+                                    "Expected string or pointer for arg {}",
+                                    i
+                                )),
+                            });
+                        }
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        let mut call_args = Vec::new();
+        for arg in &ffi_args_storage {
+            match arg {
+                FfiArg::I32(v) => call_args.push(libffi::middle::arg(v)),
+                FfiArg::I64(v) => call_args.push(libffi::middle::arg(v)),
+                FfiArg::U8(v) => call_args.push(libffi::middle::arg(v)),
+                FfiArg::U32(v) => call_args.push(libffi::middle::arg(v)),
+                FfiArg::U64(v) => call_args.push(libffi::middle::arg(v)),
+                FfiArg::F32(v) => call_args.push(libffi::middle::arg(v)),
+                FfiArg::F64(v) => call_args.push(libffi::middle::arg(v)),
+                FfiArg::Ptr(v) => call_args.push(libffi::middle::arg(v)),
+            }
+        }
+
+        let code_ptr = libffi::middle::CodePtr::from_ptr(ptr as *mut _);
+
+        unsafe {
+            match ret_type_sym.as_str() {
+                "void" => {
+                    cif.call::<()>(code_ptr, &call_args);
+                    Ok(Value::Nil)
+                }
+                "bool" => {
+                    let res: u8 = cif.call(code_ptr, &call_args);
+                    Ok(Value::Boolean(res != 0))
+                }
+                "i32" => {
+                    let res: i32 = cif.call(code_ptr, &call_args);
+                    Ok(Value::Integer(res as i64))
+                }
+                "i64" => {
+                    let res: i64 = cif.call(code_ptr, &call_args);
+                    Ok(Value::Integer(res))
+                }
+                "u32" => {
+                    let res: u32 = cif.call(code_ptr, &call_args);
+                    Ok(Value::Integer(res as i64))
+                }
+                "u64" => {
+                    let res: u64 = cif.call(code_ptr, &call_args);
+                    Ok(Value::Integer(res as i64))
+                }
+                "f32" => {
+                    let res: f32 = cif.call(code_ptr, &call_args);
+                    Ok(Value::Float(res as f64))
+                }
+                "f64" => {
+                    let res: f64 = cif.call(code_ptr, &call_args);
+                    Ok(Value::Float(res))
+                }
+                "*u8" => {
+                    let res: *const std::ffi::c_char = cif.call(code_ptr, &call_args);
+                    if res.is_null() {
+                        Ok(Value::Nil)
+                    } else {
+                        let c_str = std::ffi::CStr::from_ptr(res);
+                        Ok(Value::String(c_str.to_string_lossy().into_owned()))
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
     pub fn load(env: Rc<RefCell<Env>>) {
         let mut e = env.borrow_mut();
         e.insert(crate::intern("+"), Value::NativeFunction(sum));
@@ -2429,6 +2916,7 @@ mod sel_core {
         e.insert(crate::intern("mod"), Value::NativeFunction(modulo));
 
         e.insert(crate::intern("="), Value::NativeFunction(num_eq));
+        e.insert(crate::intern("!="), Value::NativeFunction(num_noteq));
         e.insert(crate::intern("<"), Value::NativeFunction(num_lt));
         e.insert(crate::intern(">"), Value::NativeFunction(num_gt));
         e.insert(crate::intern("<="), Value::NativeFunction(num_lte));
@@ -2455,5 +2943,12 @@ mod sel_core {
         e.insert(crate::intern("print"), Value::NativeFunction(print_func));
         e.insert(crate::intern("display"), Value::NativeFunction(display));
         e.insert(crate::intern("newline"), Value::NativeFunction(newline));
+
+        e.insert(
+            crate::intern("ffi-dlopen"),
+            Value::NativeFunction(ffi_dlopen),
+        );
+        e.insert(crate::intern("ffi-dlsym"), Value::NativeFunction(ffi_dlsym));
+        e.insert(crate::intern("ffi-call"), Value::NativeFunction(ffi_call));
     }
 }
