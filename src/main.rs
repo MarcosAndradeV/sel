@@ -2209,6 +2209,29 @@ mod sel_core {
         Ok(Value::Boolean(true))
     }
 
+    pub fn is_equal(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.len() < 2 {
+            return Ok(Value::Boolean(true));
+        }
+        let first = &args[0];
+        for arg in args.iter().skip(1) {
+            let eq = match (first, arg) {
+                (Value::Nil, Value::Nil) => true,
+                (Value::Boolean(a), Value::Boolean(b)) => a == b,
+                (Value::Integer(a), Value::Integer(b)) => a == b,
+                (Value::Float(a), Value::Float(b)) => a == b,
+                (Value::String(a), Value::String(b)) => a == b,
+                (Value::Symbol(a), Value::Symbol(b)) => a == b,
+                (Value::Pointer(a), Value::Pointer(b)) => a == b,
+                _ => false,
+            };
+            if !eq {
+                return Ok(Value::Boolean(false));
+            }
+        }
+        Ok(Value::Boolean(true))
+    }
+
     pub fn num_noteq(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         compare_nums(args, |a, b| a != b)
     }
@@ -2362,6 +2385,7 @@ mod sel_core {
         }
         match args.pop().unwrap() {
             Value::List(l) => Ok(Value::Integer(l.len() as _)),
+            Value::Nil => Ok(Value::Integer(0)),
             _ => {
                 return Err(SelError {
                     loc: Loc::default(),
@@ -3055,6 +3079,8 @@ mod sel_core {
         e.insert(crate::intern("*"), Value::NativeFunction(mul));
         e.insert(crate::intern("/"), Value::NativeFunction(div));
         e.insert(crate::intern("mod"), Value::NativeFunction(modulo));
+
+        e.insert(crate::intern("eq?"), Value::NativeFunction(is_equal));
 
         e.insert(crate::intern("="), Value::NativeFunction(num_eq));
         e.insert(crate::intern("!="), Value::NativeFunction(num_noteq));
