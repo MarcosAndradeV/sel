@@ -1,0 +1,19 @@
+// Project-local debug tasks
+//
+// For more documentation on how to configure debug tasks,
+// see: https://zed.dev/docs/debugger
+[
+  {
+    "label": "Sel Debug",
+    "sourceLanguages": ["rust"],
+    "request": "launch",
+    "adapter": "CodeLLDB",
+    "pid": 0,
+    "program": "target/debug/sel",
+    "args": ["temp/temp.scm"],
+    "build": {
+      "command": "cargo",
+      "args": ["build"]
+    },
+  }
+]
