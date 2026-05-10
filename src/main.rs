@@ -1193,7 +1193,9 @@ fn ast_to_value(ast: Ast) -> (Loc, Value) {
             list.extend(exprs.into_iter().map(|a| ast_to_value(a).1));
             (loc, Value::List(list))
         }
-        Ast::Bind(loc, id) => (loc, Value::Symbol(id)),
+        Ast::Bind(loc, id) => (loc, Value::Symbol(
+            intern(&format!("&{}", lookup(id)))
+        )),
     }
 }
 
@@ -2591,11 +2593,11 @@ mod sel_core {
     }
 
     pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-        if args.len() < 3 {
+        if args.len() == 4 + 1 {
             return Err(SelError {
                 loc: Loc::default(),
                 kind: SelErrorKind::Generic(
-                    "ffi-call requires at least ptr, ret_type, arg_types".into(),
+                    "ffi-call requires (ptr, ret_type, arg_types, arg_vals)".into(),
                 ),
             });
         }
@@ -2629,9 +2631,9 @@ mod sel_core {
                     } else {
                         return Err(SelError {
                             loc: Loc::default(),
-                            kind: SelErrorKind::Generic(
-                                "arg_types must be a list of symbols".into(),
-                            ),
+                            kind: SelErrorKind::Generic(format!(
+                                "arg_types must be a list of symbols {v}"
+                            )),
                         });
                     }
                 }
@@ -2646,16 +2648,18 @@ mod sel_core {
             }
         };
 
-        if args.len() - 3 != arg_type_syms.len() {
-            return Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic(format!(
-                    "arg_types length mismatch: expected {}, got {}",
-                    arg_type_syms.len(),
-                    args.len() - 3
-                )),
-            });
-        }
+        let arg_vals = match args[3].clone() {
+            Value::List(l) => {
+                l
+            }
+            Value::Nil => Vec::new(),
+            _ => {
+                return Err(SelError {
+                    loc: Loc::default(),
+                    kind: SelErrorKind::Generic("arg_vals must be a list".into()),
+                });
+            }
+        };
 
         let ret_type = match ret_type_sym.as_str() {
             "void" => libffi::middle::Type::void(),
@@ -2716,7 +2720,7 @@ mod sel_core {
 
         let mut ffi_args_storage = Vec::new();
 
-        for (i, arg_val) in args.iter().skip(3).enumerate() {
+        for (i, arg_val) in arg_vals.iter().enumerate() {
             let sym = &arg_type_syms[i];
             match sym.as_str() {
                 "i32" => {
