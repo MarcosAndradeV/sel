@@ -16,6 +16,9 @@
     (nth xs 1)
     (throw "odd number of forms to cond")) (cons 'cond (cdr (cdr xs))))))
 
+(defmacro ffi-func (sym ret arg-types)
+    (list 'lambda '(&args) `(ffi-call ~sym ~ret ~arg-types args)))
+
 (define (map f l)
   (if (empty? l)
       '()
