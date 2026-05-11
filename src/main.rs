@@ -155,7 +155,6 @@ fn main() -> AnyhowResult<()> {
             .map_err(|e| anyhow::anyhow!("{}", e))
             .map(|_| ())
     } else {
-        println!("Welcome to the Sel Scheme repl. (Use `quit` to exit)");
         repl("sel> ", env)
     }
 }
@@ -177,6 +176,9 @@ pub fn load_core_lib(env: &Rc<RefCell<Env>>) {
 }
 
 fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> AnyhowResult<()> {
+    const QUIT_COMMAND: &str = ":quit";
+    println!("Welcome to the Sel Scheme repl. (Use `{QUIT_COMMAND}` to exit)");
+
     let sel_path = env::home_dir().unwrap_or_default().join(".sel");
     fs::create_dir_all(&sel_path)?;
     let hist_path = sel_path.join("history");
@@ -191,7 +193,15 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> AnyhowResult<()> {
                 rl.add_history_entry(line)?;
                 match line {
                     "" => continue,
-                    "quit" => break,
+                    QUIT_COMMAND => break,
+                    ":summary" => {
+                        let mut entries: Vec<_> = env.borrow().bindings.iter().map(|(id, v)| format!("{} := {}", lookup(*id), v)).collect();
+                        entries.sort();
+                        for e in entries {
+                            println!("{e}");
+                        }
+                        continue;
+                    }
                     _ => (),
                 }
 
