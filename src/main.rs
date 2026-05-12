@@ -1653,6 +1653,27 @@ impl VM {
                     frame.ip = offset;
                 }
                 OpCode::Call(arg_count) => {
+                    let mut next_ip = frame.ip;
+                    let mut is_tail_call = false;
+                    let mut jumps = 0;
+                    while next_ip < frame.chunk.code.len() && jumps < 10 {
+                        match frame.chunk.code[next_ip].1 {
+                            OpCode::Return => {
+                                is_tail_call = true;
+                                break;
+                            }
+                            OpCode::Jump(target) => {
+                                next_ip = target;
+                                jumps += 1;
+                            }
+                            OpCode::PopEnv => {
+                                next_ip += 1;
+                            }
+                            _ => {
+                                break;
+                            }
+                        }
+                    }
                     let callee = self.stack[self.stack.len() - arg_count - 1].clone();
                     match callee {
                         Value::Closure {
@@ -1661,7 +1682,6 @@ impl VM {
                             env: c_env,
                         } => {
                             let mut call_env = Env::new(Some(c_env));
-
                             let mut has_rest = false;
                             for (i, id) in params.iter().enumerate() {
                                 if lookup(*id).starts_with('&') {
@@ -1685,17 +1705,21 @@ impl VM {
                                     call_env.insert(*id, self.stack[arg_idx].clone());
                                 }
                             }
-
                             if !has_rest {
                                 self.stack.truncate(self.stack.len() - arg_count);
                             }
-                            self.stack.pop(); // pop callee
-
-                            frames.push(CallFrame {
-                                chunk,
-                                ip: 0,
-                                env: Rc::new(RefCell::new(call_env)),
-                            });
+                            if is_tail_call {
+                                frame.chunk = chunk;
+                                frame.ip = 0;
+                                frame.env = Rc::new(RefCell::new(call_env));
+                            } else {
+                                self.stack.pop(); // pop callee
+                                frames.push(CallFrame {
+                                    chunk,
+                                    ip: 0,
+                                    env: Rc::new(RefCell::new(call_env)),
+                                });
+                            }
                         }
                         Value::NativeFunction(f) => {
                             let mut args = Vec::with_capacity(arg_count);
