@@ -2537,6 +2537,53 @@ mod sel_core {
         )))
     }
 
+    pub fn is_symbol(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.len() != 1 {
+            return Err(crate::SelError {
+                loc: crate::Loc::default(),
+                kind: crate::SelErrorKind::ArityMismatch {
+                    expected: 1,
+                    actual: args.len(),
+                },
+            });
+        }
+        Ok(Value::Boolean(matches!(args[0], Value::Symbol(_))))
+    }
+
+    pub fn error(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        let msg = args.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
+        Err(SelError {
+            loc: Loc::default(),
+            kind: SelErrorKind::Generic(msg),
+        })
+    }
+
+    pub fn type_of(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+        if args.len() != 1 {
+            return Err(SelError {
+                loc: Loc::default(),
+                kind: SelErrorKind::ArityMismatch {
+                    expected: 1,
+                    actual: args.len(),
+                },
+            });
+        }
+        let t = match args[0] {
+            Value::Nil => "nil",
+            Value::Integer(_) => "int",
+            Value::Float(_) => "float",
+            Value::String(_) => "string",
+            Value::Boolean(_) => "bool",
+            Value::Symbol(_) => "symbol",
+            Value::List(_) => "list",
+            Value::NativeFunction(_) | Value::Closure { .. } => "function",
+            Value::Macro { .. } => "macro",
+            Value::Pointer(_) => "pointer",
+            Value::Library(_) => "library",
+        };
+        Ok(Value::Symbol(crate::intern(t)))
+    }
+
     pub fn not(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         if args.len() != 1 {
             return Err(crate::SelError {
@@ -3135,10 +3182,13 @@ mod sel_core {
         e.insert(crate::intern("list?"), Value::NativeFunction(is_list));
         e.insert(crate::intern("number?"), Value::NativeFunction(is_number));
         e.insert(crate::intern("string?"), Value::NativeFunction(is_string));
+        e.insert(crate::intern("symbol?"), Value::NativeFunction(is_symbol));
         e.insert(
             crate::intern("function?"),
             Value::NativeFunction(is_function),
         );
+        e.insert(crate::intern("type-of"), Value::NativeFunction(type_of));
+        e.insert(crate::intern("error"), Value::NativeFunction(error));
 
         e.insert(crate::intern("not"), Value::NativeFunction(not));
         e.insert(crate::intern("display"), Value::NativeFunction(display));

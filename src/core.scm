@@ -30,7 +30,7 @@
     (list 'if (car xs)
     (if (> (count xs) 1)
     (nth xs 1)
-    (throw "odd number of forms to cond")) (cons 'cond (cdr (cdr xs))))))
+    (error "odd number of forms to cond")) (cons 'cond (cdr (cdr xs))))))
 
 (defmacro ffi-func (sym ret arg-types)
     (list 'lambda '(&args) `(ffi-call ~sym ~ret ~arg-types args)))
