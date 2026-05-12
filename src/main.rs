@@ -12,7 +12,7 @@ mod lexer;
 mod ast;
 mod compiler;
 mod runtime;
-mod sel_core;
+mod sel_internal;
 
 thread_local! {
     static SYMBOLS: RefCell<SymbolTable> = RefCell::new(SymbolTable::default());
@@ -20,8 +20,7 @@ thread_local! {
 
 fn main() -> AnyhowResult<()> {
     let env = Rc::new(RefCell::new(Env::default()));
-    sel_core::load(env.clone());
-    load_core_lib(&env);
+    load_core_lib(env.clone());
 
     let mut args: Vec<String> = std::env::args().collect();
     if args.len() > 1 {
@@ -45,14 +44,17 @@ fn main() -> AnyhowResult<()> {
     }
 }
 
-fn load_core_lib(env: &Rc<RefCell<Env>>) {
+fn load_core_lib(env: Rc<RefCell<Env>>) {
+    // Load internal library
+    sel_internal::load(env.clone());
+
     // Load core library if exists
     {
         let core_src = include_str!("core.scm");
 
         match read_all(core_src) {
             Ok(asts) => {
-                if let Err(e) = execute_asts(asts, env.clone()) {
+                if let Err(e) = execute_asts(asts, env) {
                     eprintln!("Error loading core.scm: {}", e);
                 }
             }
@@ -147,8 +149,7 @@ mod tests {
                     && entry.path().extension().is_some_and(|ext| ext == "scm")
                 {
                     let env = Rc::new(RefCell::new(Env::default()));
-                    sel_core::load(env.clone());
-                    load_core_lib(&env);
+                    load_core_lib(env.clone());
                     println!("TEST: {}", entry.path().display());
                     let src = fs::read_to_string(entry.path())?;
                     let asts = read_all(&src)?;
@@ -179,8 +180,7 @@ mod tests {
                     && entry.path().extension().is_some_and(|ext| ext == "scm")
                 {
                     let env = Rc::new(RefCell::new(Env::default()));
-                    sel_core::load(env.clone());
-                    load_core_lib(&env);
+                    load_core_lib(env.clone());
                     println!("TEST: {}", entry.path().display());
                     let src = fs::read_to_string(entry.path())?;
                     let asts = read_all(&src)?;
