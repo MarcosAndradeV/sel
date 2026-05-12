@@ -65,29 +65,26 @@
               (< 0 (- y radius))
               (< (+ y radius) h))))
 
-(define (loop)
-    (when (not (window-should-close))
-        (define x  (nth ball 0))
-        (define dx (nth ball 1))
-        (define y  (nth ball 2))
-        (define dy (nth ball 3))
 
-        (define nx (+ x dx))
-        (define ny (+ y dy))
+(while (not (window-should-close))
+    (define x  (nth ball 0))
+    (define dx (nth ball 1))
+    (define y  (nth ball 2))
+    (define dy (nth ball 3))
 
-        (set! ball
-            (append (if (collides-with-walls nx y w h) (list x (* -1 dx)) (list nx dx))
-                    (if (collides-with-walls x ny w h) (list y (* -1 dy)) (list ny dy))))
+    (define nx (+ x dx))
+    (define ny (+ y dy))
 
-        (begin-drawing)
-            (clear-background 0xFF181818)
-            (draw-circle (nth ball 0) (nth ball 2) radius 0xFF0000FF)
-            (draw-fps 10 10)
-        (end-drawing)
-        (loop)
-    )
+    (set! ball
+        (append (if (collides-with-walls nx y w h) (list x (* -1 dx)) (list nx dx))
+                (if (collides-with-walls x ny w h) (list y (* -1 dy)) (list ny dy))))
+
+    (begin-drawing)
+        (clear-background 0xFF181818)
+        (draw-circle (nth ball 0) (nth ball 2) radius 0xFF0000FF)
+        (draw-fps 10 10)
+    (end-drawing)
 )
 
-(loop)
 
 (close-window)

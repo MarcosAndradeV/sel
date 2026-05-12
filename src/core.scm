@@ -6,6 +6,22 @@
 (defmacro unless (test &body)
   (list 'if test 'nil (cons 'begin body)))
 
+(defmacro while (test &body)
+  (list (list 'lambda '(_while_loop_fn_)
+              (list '_while_loop_fn_ '_while_loop_fn_))
+        (list 'lambda '(_while_loop_fn_)
+              (list 'when test
+                    (cons 'begin body)
+                    (list '_while_loop_fn_ '_while_loop_fn_)))))
+
+(defmacro until (test &body)
+  (list (list 'lambda '(_until_loop_fn_)
+              (list '_until_loop_fn_ '_until_loop_fn_))
+        (list 'lambda '(_until_loop_fn_)
+              (list 'unless test
+                    (cons 'begin body)
+                    (list '_until_loop_fn_ '_until_loop_fn_)))))
+
 (defmacro defun (name args &body)
     (list 'define `(~name ~@args) (cons 'begin body)))
 
