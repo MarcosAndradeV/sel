@@ -1708,12 +1708,12 @@ impl VM {
                             if !has_rest {
                                 self.stack.truncate(self.stack.len() - arg_count);
                             }
+                            self.stack.pop(); // pop callee
                             if is_tail_call {
                                 frame.chunk = chunk;
                                 frame.ip = 0;
                                 frame.env = Rc::new(RefCell::new(call_env));
                             } else {
-                                self.stack.pop(); // pop callee
                                 frames.push(CallFrame {
                                     chunk,
                                     ip: 0,
