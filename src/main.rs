@@ -4,6 +4,7 @@ use std::rc::Rc;
 use std::{env, fs};
 
 use crate::compiler::read_all;
+use crate::diagnostics::SelError;
 use crate::runtime::Env;
 use crate::runtime::execute_asts;
 use crate::types::intern;
@@ -17,7 +18,14 @@ mod lexer;
 mod runtime;
 mod types;
 
-fn main() -> Result<(), ()> {
+fn main() {
+    match entry() {
+        Ok(_) => (),
+        Err(e) => println!("{e}"),
+    }
+}
+
+fn entry() -> Result<(), SelError> {
     let env = Rc::new(RefCell::new(Env::default()));
     load_core_lib(env.clone());
 
@@ -25,8 +33,8 @@ fn main() -> Result<(), ()> {
     if args.len() > 1 {
         let script_path = args.remove(1);
 
-        let mut src = fs::read_to_string(&script_path)
-            .map_err(|e| eprintln!("Error: cannot read file {} because {e}", script_path))?;
+        let mut src =
+            fs::read_to_string(&script_path).map_err(|e| SelError::Internal(e.to_string()))?;
         if src.starts_with("#!") {
             if let Some(newline_idx) = src.find('\n') {
                 src = src[newline_idx + 1..].to_string();
@@ -35,11 +43,8 @@ fn main() -> Result<(), ()> {
             }
         }
 
-        let asts =
-            read_all(&src, intern(&script_path.to_string())).map_err(|e| eprintln!("{e}"))?;
-        execute_asts(asts, env)
-            .map_err(|e| eprintln!("{e}"))
-            .map(|_| ())
+        let asts = read_all(&src, intern(&script_path.to_string()))?;
+        execute_asts(asts, env).map(|_| ())
     } else {
         repl("sel> ", env)
     }
@@ -64,23 +69,15 @@ fn load_core_lib(env: Rc<RefCell<Env>>) {
     }
 }
 
-fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), ()> {
+fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
     const QUIT_COMMAND: &str = ":quit";
     let repl_file_id = intern("<repl>");
     println!("Welcome to the Sel Scheme repl. (Use `{QUIT_COMMAND}` to exit)");
 
-    let sel_path = env::home_dir().unwrap_or_default().join(".sel");
-    fs::create_dir_all(&sel_path).map_err(|e| {
-        eprintln!(
-            "Error: cannot create directory {} because {e}",
-            sel_path.display()
-        )
-    })?;
-    let hist_path = sel_path.join("history");
-    let mut rl = rustyline::DefaultEditor::new().map_err(|e| {
-        eprintln!("Error: cannot create default rustyline::DefaultEditor because {e}")
-    })?;
-    if rl.load_history(&hist_path).is_err() {
+    let sel_history_path = env::home_dir().unwrap_or_default().join(".sel_history");
+    let mut rl =
+        rustyline::DefaultEditor::new().expect("cannot create default rustyline::DefaultEditor");
+    if rl.load_history(&sel_history_path).is_err() {
         println!("No previous history.");
     }
     loop {
@@ -137,7 +134,7 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), ()> {
             }
         }
     }
-    _ = rl.save_history(&hist_path);
+    _ = rl.save_history(&sel_history_path);
     Ok(())
 }
 

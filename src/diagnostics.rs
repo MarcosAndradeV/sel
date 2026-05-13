@@ -103,7 +103,7 @@ impl std::fmt::Display for SelError {
             ),
             Self::Runtime(loc, s) => write!(f, "runtime error at {}:\n\nCaused by:\n    {}", loc, s),
             Self::TypeError(loc, s) => write!(f, "type error at {}:\n\nCaused by:\n    {}", loc, s),
-            Self::Internal(s) => write!(f, "internal error:\n\nCaused by:\n    {}", s),
+            Self::Internal(s) => write!(f, "internal error caused by:\n    {}", s),
         }
     }
 }
