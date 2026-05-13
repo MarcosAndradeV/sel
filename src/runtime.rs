@@ -173,18 +173,18 @@ impl VM {
                                     has_rest = true;
                                     break;
                                 } else {
-                                    if params.len() != arg_count {
-                                        return Err(SelError::ArityMismatch {
-                                            loc,
-                                            expected: params.len(),
-                                            actual: arg_count,
-                                        });
-                                    }
                                     let arg_idx = self.stack.len() - arg_count + i;
                                     call_env.insert(*id, self.stack[arg_idx].clone());
                                 }
                             }
                             if !has_rest {
+                                if params.len() != arg_count {
+                                    return Err(SelError::ArityMismatch {
+                                        loc,
+                                        expected: params.len(),
+                                        actual: arg_count,
+                                    });
+                                }
                                 self.stack.truncate(self.stack.len() - arg_count);
                             }
                             self.stack.pop(); // pop callee
