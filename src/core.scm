@@ -90,3 +90,21 @@
       (cons (car l1) (append (cdr l1) l2))))
 
 (define (even? x) (= (mod x 2) 0))
+
+(define (range-impl end begin step acc)
+    (if (>= begin end)
+        acc
+        (range-impl end (+ step begin) step (cons begin acc))))
+
+; Just a convinient wrapper
+(define (range &args)
+    (cond
+        (= (count args) 1)
+            (reverse (range-impl (car args) 0 1 '()))
+        (= (count args) 2)
+            (reverse (range-impl (car args) (nth args 1) 1 '()))
+        (= (count args) 3)
+            (reverse (range-impl (car args) (nth args 1) (nth args 2) '()))
+        #t (error "Arity mismatch in range function\nHint: (range end) (range end begin) (range end begin step)")
+    )
+)
