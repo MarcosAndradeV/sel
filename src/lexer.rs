@@ -2,24 +2,26 @@ use std::iter::Peekable;
 use std::str::Chars;
 
 use crate::diagnostics::*;
+use crate::types::lookup;
 
 type Result<T> = std::result::Result<T, SelError>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Loc {
-    pub line: usize,
-    pub col: usize,
+    pub file_id: u32,
+    pub line: u32,
+    pub col: u32,
 }
 
 impl Default for Loc {
     fn default() -> Self {
-        Self { line: 1, col: 1 }
+        Self { file_id: 0, line: 1, col: 1 }
     }
 }
 
 impl std::fmt::Display for Loc {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.line, self.col)
+        write!(f, "{}:{}:{}", lookup(self.file_id), self.line, self.col)
     }
 }
 
@@ -90,16 +92,18 @@ pub struct Token {
 
 pub struct Lexer<'a> {
     chars: Peekable<Chars<'a>>,
-    line: usize,
-    col: usize,
+    line: u32,
+    col: u32,
+    file_id: u32,
 }
 
 impl<'a> Lexer<'a> {
-    pub fn new(input: &'a str) -> Self {
+    pub fn new(input: &'a str, file_id: u32) -> Self {
         Self {
             chars: input.chars().peekable(),
             line: 1,
             col: 1,
+            file_id
         }
     }
 
@@ -138,8 +142,9 @@ impl<'a> Lexer<'a> {
         self.skip_whitespace_and_comments();
 
         let start_loc = Loc {
-            line: self.line,
-            col: self.col,
+            file_id: self.file_id,
+            line: self.line as _,
+            col: self.col as _,
         };
         let Some(&c) = self.peek() else {
             return Ok(None);
@@ -223,10 +228,7 @@ impl<'a> Lexer<'a> {
                                 _ => string.push(escaped),
                             }
                         } else {
-                            return Err(SelError {
-                                loc: start_loc,
-                                kind: SelErrorKind::UnterminatedString,
-                            });
+                            return Err(SelError::UnterminatedString(start_loc));
                         }
                     } else {
                         string.push(self.advance().unwrap());
@@ -241,18 +243,19 @@ impl<'a> Lexer<'a> {
             '#' => {
                 self.advance();
                 if let Some(&c2) = self.peek()
-                    && (c2 == 't' || c2 == 'f') {
-                        self.advance();
-                        return Ok(Some(Token {
-                            kind: TokenKind::Boolean,
-                            source: format!("#{}", c2),
-                            loc: start_loc,
-                        }));
-                    }
-                Err(SelError {
-                    loc: start_loc,
-                    kind: SelErrorKind::Generic("Invalid character following #".into()),
-                })
+                    && (c2 == 't' || c2 == 'f')
+                {
+                    self.advance();
+                    return Ok(Some(Token {
+                        kind: TokenKind::Boolean,
+                        source: format!("#{}", c2),
+                        loc: start_loc,
+                    }));
+                }
+                Err(SelError::Runtime(
+                    start_loc,
+                    "Invalid character following #".into(),
+                ))
             }
             _ => {
                 let mut ident = String::new();
@@ -263,12 +266,10 @@ impl<'a> Lexer<'a> {
                     ident.push(self.advance().unwrap());
                 }
                 if ident.is_empty() {
-                    return Err(SelError {
-                        loc: start_loc,
-                        kind: SelErrorKind::UnexpectedToken(
-                            self.advance().unwrap().to_string(),
-                        ),
-                    });
+                    return Err(SelError::UnexpectedToken(
+                        start_loc,
+                        self.advance().unwrap().to_string(),
+                    ));
                 }
 
                 let (is_num, base) = if let Some(stripped) = ident

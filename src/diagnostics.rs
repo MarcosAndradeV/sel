@@ -1,47 +1,109 @@
-use crate::lexer::Loc;
-use crate::runtime::*;
+use crate::lexer::{Loc, Token};
+use crate::types::lookup;
 
 #[derive(Debug, Clone)]
-pub enum SelErrorKind {
-    UnexpectedEOF,
-    UnexpectedToken(String),
-    UndefinedVariable(u32),
-    ArityMismatch { expected: usize, actual: usize },
-    UnboundVariable(u32),
-    InvalidNumber(String),
-    UnterminatedString,
-    Generic(String),
+pub enum SelError {
+    UnexpectedEOF(Loc),
+    UnexpectedToken(Loc, String),
+    SyntaxError(Loc, String),
+    UndefinedVariable(Loc, u32),
+    ArityMismatch {
+        loc: Loc,
+        expected: usize,
+        actual: usize,
+    },
+    UnboundVariable(Loc, u32),
+    InvalidNumber(Token),
+    UnterminatedString(Loc),
+    Internal(String),
+    Runtime(Loc, String),
+    TypeError(Loc, String),
 }
 
-#[derive(Debug, Clone)]
-pub struct SelError {
-    pub loc: Loc,
-    pub kind: SelErrorKind,
+impl SelError {
+    pub fn with_loc(self, loc: Loc) -> SelError {
+        match self {
+            SelError::UnexpectedEOF(_) => SelError::UnexpectedEOF(loc),
+            SelError::UnexpectedToken(_, e) => SelError::UnexpectedToken(loc, e),
+            SelError::SyntaxError(_, e) => SelError::SyntaxError(loc, e),
+            SelError::UndefinedVariable(_, e) => SelError::UndefinedVariable(loc, e),
+            SelError::ArityMismatch {
+                loc: _,
+                expected,
+                actual,
+            } => SelError::ArityMismatch {
+                loc,
+                expected,
+                actual,
+            },
+            SelError::UnboundVariable(_, e) => SelError::UnboundVariable(loc, e),
+            SelError::InvalidNumber(token) => SelError::InvalidNumber(token),
+            SelError::UnterminatedString(_) => SelError::UnterminatedString(loc),
+            SelError::Internal(e) => SelError::Internal(e),
+            SelError::Runtime(_, e) => SelError::Runtime(loc, e),
+            SelError::TypeError(_, e) => SelError::TypeError(loc, e),
+        }
+    }
 }
 
 impl std::fmt::Display for SelError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.kind {
-            SelErrorKind::UnexpectedEOF => write!(f, "{}: Unexpected EOF", self.loc),
-            SelErrorKind::UnexpectedToken(s) => {
-                write!(f, "{}: Unexpected token `{}`", self.loc, s)
-            }
-            SelErrorKind::UndefinedVariable(id) => {
-                write!(f, "{}: Undefined variable `{}`", self.loc, lookup(*id))
-            }
-            SelErrorKind::ArityMismatch { expected, actual } => write!(
+        match &self {
+            Self::UnexpectedEOF(loc) => write!(
                 f,
-                "{}: Arity mismatch: expected {}, got {}",
-                self.loc, expected, actual
+                "syntax error at {}:\n\nCaused by:\n    Unexpected EOF",
+                loc
             ),
-            SelErrorKind::UnboundVariable(id) => {
-                write!(f, "{}: Unbound variable in set!: {}", self.loc, lookup(*id))
+            Self::UnexpectedToken(loc, s) => {
+                write!(
+                    f,
+                    "syntax error at {}:\n\nCaused by:\n    Unexpected token `{}`",
+                    loc, s
+                )
             }
-            SelErrorKind::InvalidNumber(s) => {
-                write!(f, "{}: Invalid number format `{}`", self.loc, s)
+            Self::SyntaxError(loc, msg) => {
+                write!(f, "syntax error at {}:\n\nCaused by:\n    {}", loc, msg)
             }
-            SelErrorKind::UnterminatedString => write!(f, "{}: Unterminated string", self.loc),
-            SelErrorKind::Generic(s) => write!(f, "{}: {}", self.loc, s),
+            Self::UndefinedVariable(loc, id) => {
+                write!(
+                    f,
+                    "name error at {}:\n\nCaused by:\n    Undefined variable `{}`",
+                    loc,
+                    lookup(*id)
+                )
+            }
+            Self::ArityMismatch {
+                loc,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "argument error at {}:\n\nCaused by:\n    Arity mismatch: expected {}, got {}",
+                loc, expected, actual
+            ),
+            Self::UnboundVariable(loc, id) => {
+                write!(
+                    f,
+                    "assignment error at {}:\n\nCaused by:\n    Unbound variable in set!: {}",
+                    loc,
+                    lookup(*id)
+                )
+            }
+            Self::InvalidNumber(t) => {
+                write!(
+                    f,
+                    "syntax error at {}:\n\nCaused by:\n    Invalid number format `{}`",
+                    t.loc, t.source
+                )
+            }
+            Self::UnterminatedString(loc) => write!(
+                f,
+                "syntax error at {}:\n\nCaused by:\n    Unterminated string",
+                loc
+            ),
+            Self::Runtime(loc, s) => write!(f, "runtime error at {}:\n\nCaused by:\n    {}", loc, s),
+            Self::TypeError(loc, s) => write!(f, "type error at {}:\n\nCaused by:\n    {}", loc, s),
+            Self::Internal(s) => write!(f, "internal error:\n\nCaused by:\n    {}", s),
         }
     }
 }

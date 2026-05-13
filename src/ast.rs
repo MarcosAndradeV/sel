@@ -1,26 +1,23 @@
 use crate::compiler::*;
 use crate::diagnostics::*;
 use crate::lexer::*;
-use crate::runtime::*;
+use crate::types::intern;
+use crate::types::lookup;
 
 type Result<T> = std::result::Result<T, SelError>;
 
 pub fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
     if *pos >= tokens.len() {
-        return Err(SelError {
-            loc: Loc::default(),
-            kind: SelErrorKind::UnexpectedEOF,
-        });
+        return Err(SelError::UnexpectedEOF(
+            tokens.last().map(|t| t.loc).unwrap_or_default(),
+        ));
     }
     let t = &tokens[*pos];
     *pos += 1;
 
     match t.kind {
         TokenKind::OpenParen => parse_list(tokens, pos, t),
-        TokenKind::CloseParen => Err(SelError {
-            loc: t.loc,
-            kind: SelErrorKind::UnexpectedToken(")".into()),
-        }),
+        TokenKind::CloseParen => Err(SelError::SyntaxError(t.loc, format!("Unexpected `)`"))),
         TokenKind::Quote => {
             let expr = parse_expr(tokens, pos)?;
             Ok(Ast::Quote(t.loc, Box::new(expr)))
@@ -29,10 +26,10 @@ pub fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
             if let Ast::Symbol(loc, id) = parse_expr(tokens, pos)? {
                 return Ok(Ast::Bind(loc, id));
             }
-            Err(SelError {
-                loc: t.loc,
-                kind: SelErrorKind::Generic("Expected identifier after &".into()),
-            })
+            Err(SelError::SyntaxError(
+                t.loc,
+                "Expected identifier after &".into(),
+            ))
         }
         TokenKind::QuasiQuote => {
             let expr = parse_expr(tokens, pos)?;
@@ -57,22 +54,13 @@ pub fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
             };
 
             if let Ok(i) = i64::from_str_radix(s, base.radix()) {
-                Ok(Ast::Integer(t.loc, i))
+                return Ok(Ast::Integer(t.loc, i));
             } else if base == NumberBase::D {
                 if let Ok(f) = t.source.parse::<f64>() {
-                    Ok(Ast::Float(t.loc, f))
-                } else {
-                    Err(SelError {
-                        loc: t.loc,
-                        kind: SelErrorKind::InvalidNumber(t.source.clone()),
-                    })
+                    return Ok(Ast::Float(t.loc, f));
                 }
-            } else {
-                Err(SelError {
-                    loc: t.loc,
-                    kind: SelErrorKind::InvalidNumber(t.source.clone()),
-                })
             }
+            Err(SelError::InvalidNumber(t.clone()))
         }
         TokenKind::Identifier => match t.source.as_str() {
             "nil" => Ok(Ast::Nil(t.loc)),
@@ -87,10 +75,10 @@ fn parse_list(tokens: &[Token], pos: &mut usize, open_token: &Token) -> Result<A
         list.push(parse_expr(tokens, pos)?);
     }
     if *pos >= tokens.len() {
-        return Err(SelError {
-            loc: open_token.loc,
-            kind: SelErrorKind::Generic("Missing closing parenthesis".into()),
-        });
+        return Err(SelError::SyntaxError(
+            open_token.loc,
+            "Missing closing parenthesis".into(),
+        ));
     }
     *pos += 1; // consume ')'
     optimize_ast(list, open_token.loc)
@@ -105,13 +93,11 @@ fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
         match lookup(id).as_str() {
             "if" => {
                 let mut iter = list.into_iter().skip(1);
-                let cond = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc,
-                    kind: SelErrorKind::Generic("Missing condition in if".into()),
+                let cond = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Missing condition in if".into())
                 })?;
-                let true_branch = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc,
-                    kind: SelErrorKind::Generic("Missing true branch in if".into()),
+                let true_branch = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Missing true branch in if".into())
                 })?;
                 let false_branch = iter.next();
                 Ok(Ast::If(
@@ -123,9 +109,8 @@ fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
             }
             "lambda" => {
                 let mut iter = list.into_iter().skip(1);
-                let params_ast = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc,
-                    kind: SelErrorKind::Generic("Missing parameters in lambda".into()),
+                let params_ast = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Missing parameters in lambda".into())
                 })?;
                 let mut params = Vec::new();
                 match params_ast {
@@ -137,23 +122,19 @@ fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                                 let name = lookup(id);
                                 params.push(intern(&format!("&{}", name)));
                             } else {
-                                return Err(SelError {
+                                return Err(SelError::SyntaxError(
                                     loc,
-                                    kind: SelErrorKind::Generic(
-                                        "Expected identifier in lambda parameters".into(),
-                                    ),
-                                });
+                                    "Expected identifier in lambda parameters".into(),
+                                ));
                             }
                         }
                     }
                     Ast::Nil(_) => {}
                     _ => {
-                        return Err(SelError {
-                            loc: s_loc,
-                            kind: SelErrorKind::Generic(
-                                "Expected parameter list in lambda".into(),
-                            ),
-                        });
+                        return Err(SelError::SyntaxError(
+                            s_loc,
+                            "Expected parameter list in lambda".into(),
+                        ));
                     }
                 }
                 let body = iter.collect();
@@ -165,29 +146,23 @@ fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
             }
             "define" => {
                 let mut iter = list.into_iter().skip(1);
-                let name_ast = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc,
-                    kind: SelErrorKind::Generic("Expected identifier in define".into()),
+                let name_ast = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Expected identifier in define".into())
                 })?;
 
-                if let Ast::List(loc, mut p_list) = name_ast {
+                if let Ast::List(l_loc, mut p_list) = name_ast {
                     if p_list.is_empty() {
-                        return Err(SelError {
-                            loc,
-                            kind: SelErrorKind::Generic(
-                                "Empty parameter list in define".into(),
-                            ),
-                        });
+                        return Err(SelError::SyntaxError(
+                            l_loc,
+                            "Empty parameter list in define".into(),
+                        ));
                     }
                     let head = p_list.remove(0);
                     let Ast::Symbol(_, name_id) = head else {
-                        return Err(SelError {
-                            loc: s_loc,
-                            kind: SelErrorKind::Generic(
-                                "Expected identifier at head of parameter list in define"
-                                    .into(),
-                            ),
-                        });
+                        return Err(SelError::SyntaxError(
+                            l_loc,
+                            "Expected identifier at head of parameter list in define".into(),
+                        ));
                     };
                     let mut params = Vec::new();
                     for p in p_list {
@@ -198,21 +173,19 @@ fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                                 params.push(intern(&format!("&{}", name)));
                             }
                             _ => {
-                                return Err(SelError {
-                                    loc: s_loc,
-                                    kind: SelErrorKind::Generic(
-                                        "Expected identifier in parameter list".into(),
-                                    ),
-                                });
+                                return Err(SelError::SyntaxError(
+                                    l_loc,
+                                    "Expected identifier in parameter list".into(),
+                                ));
                             }
                         }
                     }
                     let body: Vec<Ast> = iter.collect();
                     if body.is_empty() {
-                        return Err(SelError {
-                            loc: s_loc,
-                            kind: SelErrorKind::Generic("Missing body in define".into()),
-                        });
+                        return Err(SelError::SyntaxError(
+                            s_loc,
+                            "Missing body in define".into(),
+                        ));
                     }
                     return Ok(Ast::Define(
                         s_loc,
@@ -221,27 +194,24 @@ fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                     ));
                 }
 
-                let value_ast = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc,
-                    kind: SelErrorKind::Generic("Expected expression in define".into()),
+                let value_ast = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Expected expression in define".into())
                 })?;
                 let Ast::Symbol(_, name_id) = name_ast else {
-                    return Err(SelError {
-                        loc: s_loc,
-                        kind: SelErrorKind::Generic("Expected identifier in define".into()),
-                    });
+                    return Err(SelError::SyntaxError(
+                        s_loc,
+                        "Expected identifier in define".into(),
+                    ));
                 };
                 Ok(Ast::Define(s_loc, name_id, Box::new(value_ast)))
             }
             "defmacro" => {
                 let mut iter = list.into_iter().skip(1);
-                let name_ast = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc,
-                    kind: SelErrorKind::Generic("Expected identifier in defmacro".into()),
+                let name_ast = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Expected identifier in defmacro".into())
                 })?;
-                let params_ast = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc,
-                    kind: SelErrorKind::Generic("Expected parameters in defmacro".into()),
+                let params_ast = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Expected parameters in defmacro".into())
                 })?;
 
                 let mut params = Vec::new();
@@ -254,31 +224,27 @@ fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                                 let name = lookup(id);
                                 params.push(intern(&format!("&{}", name)));
                             } else {
-                                return Err(SelError {
-                                    loc: s_loc,
-                                    kind: SelErrorKind::Generic(
-                                        "Expected identifier in defmacro parameters".into(),
-                                    ),
-                                });
+                                return Err(SelError::SyntaxError(
+                                    param.loc(),
+                                    "Expected identifier in defmacro parameters".into(),
+                                ));
                             }
                         }
                     }
                     Ast::Nil(_) => {}
                     _ => {
-                        return Err(SelError {
-                            loc: s_loc,
-                            kind: SelErrorKind::Generic(
-                                "Expected parameter list in defmacro".into(),
-                            ),
-                        });
+                        return Err(SelError::SyntaxError(
+                            s_loc,
+                            "Expected parameter list in defmacro".into(),
+                        ));
                     }
                 }
                 let body: Vec<Ast> = iter.collect();
                 let Ast::Symbol(_, name_id) = name_ast else {
-                    return Err(SelError {
-                        loc: s_loc,
-                        kind: SelErrorKind::Generic("Expected identifier in defmacro".into()),
-                    });
+                    return Err(SelError::SyntaxError(
+                        s_loc,
+                        "Expected identifier in defmacro".into(),
+                    ));
                 };
                 Ok(Ast::DefMacro(
                     s_loc,
@@ -288,27 +254,21 @@ fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
             }
             "set!" => {
                 let mut iter = list.into_iter().skip(1);
-                let name_ast = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc,
-                    kind: SelErrorKind::Generic("Expected identifier in set!".into()),
-                })?;
-                let value_ast = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc,
-                    kind: SelErrorKind::Generic("Expected expression in set!".into()),
-                })?;
-                let Ast::Symbol(_, name_id) = name_ast else {
-                    return Err(SelError {
-                        loc: s_loc,
-                        kind: SelErrorKind::Generic("Expected identifier in set!".into()),
-                    });
+                let Some(Ast::Symbol(_, name_id)) = iter.next() else {
+                    return Err(SelError::SyntaxError(
+                        s_loc,
+                        "Expected identifier in set!".into(),
+                    ));
                 };
+                let value_ast = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Expected expression in set!".into())
+                })?;
                 Ok(Ast::Set(s_loc, name_id, Box::new(value_ast)))
             }
             "let" => {
                 let mut iter = list.into_iter().skip(1);
-                let bindings_ast = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc,
-                    kind: SelErrorKind::Generic("Expected bindings in let".into()),
+                let bindings_ast = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Expected bindings in let".into())
                 })?;
                 let mut bindings = Vec::new();
                 match bindings_ast {
@@ -316,41 +276,35 @@ fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                         for bind in b {
                             if let Ast::List(loc, mut pair) = bind {
                                 if pair.len() != 2 {
-                                    return Err(SelError {
+                                    return Err(SelError::SyntaxError(
                                         loc,
-                                        kind: SelErrorKind::Generic(
-                                            "Invalid binding pair in let".into(),
-                                        ),
-                                    });
+                                        "Invalid binding pair in let".into(),
+                                    ));
                                 }
                                 let val = pair.pop().unwrap();
                                 let name = pair.pop().unwrap();
                                 if let Ast::Symbol(_, name_id) = name {
                                     bindings.push((name_id, val));
                                 } else {
-                                    return Err(SelError {
+                                    return Err(SelError::SyntaxError(
                                         loc,
-                                        kind: SelErrorKind::Generic(
-                                            "Expected identifier in let binding".into(),
-                                        ),
-                                    });
+                                        "Expected identifier in let binding".into(),
+                                    ));
                                 }
                             } else {
-                                return Err(SelError {
+                                return Err(SelError::SyntaxError(
                                     loc,
-                                    kind: SelErrorKind::Generic(
-                                        "Expected binding pair in let".into(),
-                                    ),
-                                });
+                                    "Expected binding pair in let".into(),
+                                ));
                             }
                         }
                     }
                     Ast::Nil(_) => {}
                     _ => {
-                        return Err(SelError {
-                            loc: s_loc,
-                            kind: SelErrorKind::Generic("Expected binding list in let".into()),
-                        });
+                        return Err(SelError::SyntaxError(
+                            s_loc,
+                            "Expected binding list in let".into(),
+                        ));
                     }
                 }
                 let body = iter.collect();
@@ -358,17 +312,15 @@ fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
             }
             "quote" => {
                 let mut iter = list.into_iter().skip(1);
-                let expr = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc,
-                    kind: SelErrorKind::Generic("Expected expression in quote".into()),
+                let expr = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Expected expression in quote".into())
                 })?;
                 Ok(Ast::Quote(s_loc, Box::new(expr)))
             }
             "quasiquote" => {
                 let mut iter = list.into_iter().skip(1);
-                let expr = iter.next().ok_or_else(|| SelError {
-                    loc: s_loc,
-                    kind: SelErrorKind::Generic("Expected expression in quasiquote".into()),
+                let expr = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Expected expression in quasiquote".into())
                 })?;
                 Ok(Ast::Quasiquote(s_loc, Box::new(expr)))
             }
@@ -410,6 +362,34 @@ pub enum Ast {
     String(Loc, String),
     Boolean(Loc, bool),
     List(Loc, Vec<Self>),
+}
+
+impl Ast {
+    pub fn loc(&self) -> Loc {
+        match self {
+            Ast::Define(loc, ..) => *loc,
+            Ast::DefMacro(loc, ..) => *loc,
+            Ast::Let(loc, ..) => *loc,
+            Ast::Set(loc, ..) => *loc,
+            Ast::If(loc, ..) => *loc,
+            Ast::Lambda(loc, ..) => *loc,
+            Ast::Begin(loc, ..) => *loc,
+            Ast::Quote(loc, ..) => *loc,
+            Ast::Quasiquote(loc, ..) => *loc,
+            Ast::Unquote(loc, ..) => *loc,
+            Ast::UnquoteSplicing(loc, ..) => *loc,
+            Ast::And(loc, ..) => *loc,
+            Ast::Or(loc, ..) => *loc,
+            Ast::Nil(loc, ..) => *loc,
+            Ast::Symbol(loc, ..) => *loc,
+            Ast::Integer(loc, ..) => *loc,
+            Ast::Float(loc, ..) => *loc,
+            Ast::String(loc, ..) => *loc,
+            Ast::Boolean(loc, ..) => *loc,
+            Ast::List(loc, ..) => *loc,
+            Ast::Bind(loc, ..) => *loc,
+        }
+    }
 }
 
 impl std::fmt::Display for Ast {
@@ -568,11 +548,9 @@ pub fn value_to_ast(val: Value, loc: Loc) -> Result<Ast> {
             }
             optimize_ast(ast_list, loc)
         }
-        v => Err(SelError {
+        v => Err(SelError::SyntaxError(
             loc,
-            kind: SelErrorKind::Generic(format!(
-                "Cannot convert function or macro to AST ({v})"
-            )),
-        }),
+            format!("Cannot convert function or macro to AST ({v})"),
+        )),
     }
 }

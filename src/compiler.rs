@@ -3,8 +3,10 @@ use std::rc::Rc;
 
 use crate::ast::*;
 use crate::diagnostics::*;
+use crate::lexer::Lexer;
 use crate::lexer::Loc;
 use crate::runtime::*;
+use crate::types::lookup;
 
 type Result<T> = std::result::Result<T, SelError>;
 
@@ -224,10 +226,10 @@ impl<'a> Compiler<'a> {
                     let idx = self.chunk.add_constant(stub);
                     self.chunk.write((loc, OpCode::MakeMacro(id, idx)));
                 } else {
-                    return Err(SelError {
+                    return Err(SelError::SyntaxError(
                         loc,
-                        kind: SelErrorKind::Generic("defmacro expects a lambda".into()),
-                    });
+                        "defmacro expects a lambda".into(),
+                    ));
                 }
             }
             Ast::List(loc, list) => {
@@ -308,20 +310,16 @@ impl<'a> Compiler<'a> {
                 }
             }
             Ast::Unquote(loc, _) | Ast::UnquoteSplicing(loc, _) => {
-                return Err(SelError {
+                return Err(SelError::SyntaxError(
                     loc,
-                    kind: SelErrorKind::Generic(
-                        "unquote/unquote-splicing outside of quasiquote".into(),
-                    ),
-                });
+                    "unquote/unquote-splicing outside of quasiquote".into(),
+                ));
             }
             Ast::Bind(loc, _) => {
-                return Err(SelError {
+                return Err(SelError::SyntaxError(
                     loc,
-                    kind: SelErrorKind::Generic(
-                        "unexpected & binding in normal expression".into(),
-                    ),
-                });
+                    "unexpected & binding in normal expression".into(),
+                ));
             }
         }
         Ok(())
@@ -333,12 +331,10 @@ impl<'a> Compiler<'a> {
                 self.compile(*expr)?;
             }
             Ast::UnquoteSplicing(loc, _) => {
-                return Err(SelError {
+                return Err(SelError::SyntaxError(
                     loc,
-                    kind: SelErrorKind::Generic(
-                        "unquote-splicing invalid at top level of quasiquote".into(),
-                    ),
-                });
+                    "unquote-splicing invalid at top level of quasiquote".into(),
+                ));
             }
             Ast::List(loc, list) => {
                 let mut parts = 0;
@@ -411,4 +407,18 @@ impl Chunk {
         self.constants.push(value);
         self.constants.len() - 1
     }
+}
+
+pub fn read_all(line: &str, file_id: u32) -> Result<Vec<Ast>> {
+    let mut lex = Lexer::new(line, file_id);
+    let mut tokens = Vec::new();
+    while let Some(t) = lex.next_token()? {
+        tokens.push(t);
+    }
+    let mut pos = 0;
+    let mut asts = Vec::new();
+    while pos < tokens.len() {
+        asts.push(parse_expr(&tokens, &mut pos)?);
+    }
+    Ok(asts)
 }

@@ -4,19 +4,19 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::{env, fs};
 
-use crate::diagnostics::*;
-use crate::runtime::*;
+use crate::compiler::read_all;
+use crate::runtime::Env;
+use crate::runtime::execute_asts;
+use crate::types::intern;
+use crate::types::lookup;
 
-mod diagnostics;
-mod lexer;
 mod ast;
 mod compiler;
+mod diagnostics;
+mod internal;
+mod lexer;
 mod runtime;
-mod sel_internal;
-
-thread_local! {
-    static SYMBOLS: RefCell<SymbolTable> = RefCell::new(SymbolTable::default());
-}
+mod types;
 
 fn main() -> AnyhowResult<()> {
     let env = Rc::new(RefCell::new(Env::default()));
@@ -26,7 +26,7 @@ fn main() -> AnyhowResult<()> {
     if args.len() > 1 {
         let script_path = args.remove(1);
 
-        let mut src = fs::read_to_string(script_path)?;
+        let mut src = fs::read_to_string(&script_path)?;
         if src.starts_with("#!") {
             if let Some(newline_idx) = src.find('\n') {
                 src = src[newline_idx + 1..].to_string();
@@ -35,7 +35,7 @@ fn main() -> AnyhowResult<()> {
             }
         }
 
-        let asts = read_all(&src)?;
+        let asts = read_all(&src, intern(&script_path.to_string()))?;
         execute_asts(asts, env)
             .map_err(|e| anyhow::anyhow!("{}", e))
             .map(|_| ())
@@ -46,13 +46,13 @@ fn main() -> AnyhowResult<()> {
 
 fn load_core_lib(env: Rc<RefCell<Env>>) {
     // Load internal library
-    sel_internal::load(env.clone());
+    internal::load(env.clone());
 
     // Load core library if exists
     {
         let core_src = include_str!("core.scm");
 
-        match read_all(core_src) {
+        match read_all(core_src, intern("<core>")) {
             Ok(asts) => {
                 if let Err(e) = execute_asts(asts, env) {
                     eprintln!("Error loading core.scm: {}", e);
@@ -65,6 +65,7 @@ fn load_core_lib(env: Rc<RefCell<Env>>) {
 
 fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> AnyhowResult<()> {
     const QUIT_COMMAND: &str = ":quit";
+    let repl_file_id = intern("<repl>");
     println!("Welcome to the Sel Scheme repl. (Use `{QUIT_COMMAND}` to exit)");
 
     let sel_path = env::home_dir().unwrap_or_default().join(".sel");
@@ -98,7 +99,7 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> AnyhowResult<()> {
                     _ => (),
                 }
 
-                let asts = match read_all(line) {
+                let asts = match read_all(line, repl_file_id) {
                     Ok(asts) => asts,
                     Err(e) => {
                         println!("Error: {e}");
@@ -132,7 +133,6 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> AnyhowResult<()> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::fs::read_dir;
@@ -152,7 +152,7 @@ mod tests {
                     load_core_lib(env.clone());
                     println!("TEST: {}", entry.path().display());
                     let src = fs::read_to_string(entry.path())?;
-                    let asts = read_all(&src)?;
+                    let asts = read_all(&src, intern("<test-all-folders>"))?;
                     execute_asts(asts, env)
                         .map_err(|e| anyhow::anyhow!("{}", e))
                         .map(|_| ())?;
@@ -183,7 +183,7 @@ mod tests {
                     load_core_lib(env.clone());
                     println!("TEST: {}", entry.path().display());
                     let src = fs::read_to_string(entry.path())?;
-                    let asts = read_all(&src)?;
+                    let asts = read_all(&src, intern("<test-errors-folder>"))?;
                     execute_asts(asts, env)
                         .map_err(|e| anyhow::anyhow!("{}", e))
                         .map(|_| ())?;

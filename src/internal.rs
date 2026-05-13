@@ -5,6 +5,7 @@ use crate::compiler::*;
 use crate::diagnostics::*;
 use crate::lexer::Loc;
 use crate::runtime::*;
+use crate::types::intern;
 
 type Result<T> = std::result::Result<T, SelError>;
 
@@ -30,13 +31,14 @@ pub fn sum(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                     float_sum += f;
                 }
             }
-            _ => {
-                return Err(SelError {
-                    loc: Loc::default(),
-                    kind: SelErrorKind::Generic(
-                        "Invalid argument to +: expected number".into(),
+            v => {
+                return Err(SelError::TypeError(
+                    Loc::default(),
+                    format!(
+                        "Invalid argument to +: expected number but got {}",
+                        value_type_name(&v)
                     ),
-                });
+                ));
             }
         }
     }
@@ -49,26 +51,29 @@ pub fn sum(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
 
 pub fn sub(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.is_empty() {
-        return Err(crate::SelError {
-            loc: Loc::default(),
-            kind: crate::SelErrorKind::Generic("Expected at least 1 argument to -".into()),
-        });
+        return Err(SelError::Runtime(
+            Loc::default(),
+            "Expected at least 1 argument to -".into(),
+        ));
     }
     let mut is_float = false;
     let mut int_val = 0;
     let mut float_val = 0.0;
 
-    match args[0] {
-        Value::Integer(i) => int_val = i,
+    match &args[0] {
+        Value::Integer(i) => int_val = *i,
         Value::Float(f) => {
             is_float = true;
-            float_val = f;
+            float_val = *f;
         }
-        _ => {
-            return Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic("Invalid argument to -: expected number".into()),
-            });
+        v => {
+            return Err(SelError::TypeError(
+                Loc::default(),
+                format!(
+                    "Invalid argument to -: expected number but got {}",
+                    value_type_name(&v)
+                ),
+            ));
         }
     }
 
@@ -98,12 +103,10 @@ pub fn sub(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                 }
             }
             _ => {
-                return Err(SelError {
-                    loc: Loc::default(),
-                    kind: SelErrorKind::Generic(
-                        "Invalid argument to -: expected number".into(),
-                    ),
-                });
+                return Err(SelError::Runtime(
+                    Loc::default(),
+                    "Invalid argument to -: expected number".into(),
+                ));
             }
         }
     }
@@ -137,12 +140,10 @@ pub fn mul(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                 }
             }
             _ => {
-                return Err(SelError {
-                    loc: Loc::default(),
-                    kind: SelErrorKind::Generic(
-                        "Invalid argument to *: expected number".into(),
-                    ),
-                });
+                return Err(SelError::Runtime(
+                    Loc::default(),
+                    "Invalid argument to *: expected number".into(),
+                ));
             }
         }
     }
@@ -155,10 +156,10 @@ pub fn mul(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
 
 pub fn div(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.is_empty() {
-        return Err(crate::SelError {
-            loc: Loc::default(),
-            kind: crate::SelErrorKind::Generic("Expected at least 1 argument to /".into()),
-        });
+        return Err(SelError::Runtime(
+            Loc::default(),
+            "Expected at least 1 argument to /".into(),
+        ));
     }
 
     if args.len() == 1 {
@@ -166,12 +167,10 @@ pub fn div(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
             Value::Integer(i) => return Ok(Value::Float(1.0 / i as f64)),
             Value::Float(f) => return Ok(Value::Float(1.0 / f)),
             _ => {
-                return Err(SelError {
-                    loc: Loc::default(),
-                    kind: SelErrorKind::Generic(
-                        "Invalid argument to /: expected number".into(),
-                    ),
-                });
+                return Err(SelError::Runtime(
+                    Loc::default(),
+                    "Invalid argument to /: expected number".into(),
+                ));
             }
         }
     }
@@ -180,10 +179,10 @@ pub fn div(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         Value::Integer(i) => i as f64,
         Value::Float(f) => f,
         _ => {
-            return Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic("Invalid argument to /: expected number".into()),
-            });
+            return Err(SelError::Runtime(
+                Loc::default(),
+                "Invalid argument to /: expected number".into(),
+            ));
         }
     };
 
@@ -192,12 +191,10 @@ pub fn div(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
             Value::Integer(i) => float_val /= i as f64,
             Value::Float(f) => float_val /= f,
             _ => {
-                return Err(SelError {
-                    loc: Loc::default(),
-                    kind: SelErrorKind::Generic(
-                        "Invalid argument to /: expected number".into(),
-                    ),
-                });
+                return Err(SelError::Runtime(
+                    Loc::default(),
+                    "Invalid argument to /: expected number".into(),
+                ));
             }
         }
     }
@@ -206,30 +203,28 @@ pub fn div(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
 
 pub fn modulo(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 2 {
-        return Err(crate::SelError {
+        return Err(SelError::ArityMismatch {
             loc: Loc::default(),
-            kind: crate::SelErrorKind::ArityMismatch {
-                expected: 2,
-                actual: args.len(),
-            },
+            expected: 2,
+            actual: args.len(),
         });
     }
     let a = match args[0] {
         Value::Integer(i) => i,
         _ => {
-            return Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic("modulo requires integer".into()),
-            });
+            return Err(SelError::Runtime(
+                Loc::default(),
+                "modulo requires integer".into(),
+            ));
         }
     };
     let b = match args[1] {
         Value::Integer(i) => i,
         _ => {
-            return Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic("modulo requires integer".into()),
-            });
+            return Err(SelError::Runtime(
+                Loc::default(),
+                "modulo requires integer".into(),
+            ));
         }
     };
     Ok(Value::Integer(a % b))
@@ -237,21 +232,19 @@ pub fn modulo(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
 
 fn compare_nums(args: Vec<Value>, op: fn(f64, f64) -> bool) -> Result<Value> {
     if args.len() < 2 {
-        return Err(crate::SelError {
-            loc: Loc::default(),
-            kind: crate::SelErrorKind::Generic(
-                "comparison requires at least 2 arguments".into(),
-            ),
-        });
+        return Err(SelError::Runtime(
+            Loc::default(),
+            "comparison requires at least 2 arguments".into(),
+        ));
     }
     let mut prev = match args[0] {
         Value::Integer(i) => i as f64,
         Value::Float(f) => f,
         _ => {
-            return Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic("comparison requires numbers".into()),
-            });
+            return Err(SelError::Runtime(
+                Loc::default(),
+                "comparison requires numbers".into(),
+            ));
         }
     };
     for arg in args.into_iter().skip(1) {
@@ -259,10 +252,10 @@ fn compare_nums(args: Vec<Value>, op: fn(f64, f64) -> bool) -> Result<Value> {
             Value::Integer(i) => i as f64,
             Value::Float(f) => f,
             _ => {
-                return Err(SelError {
-                    loc: Loc::default(),
-                    kind: SelErrorKind::Generic("comparison requires numbers".into()),
-                });
+                return Err(SelError::Runtime(
+                    Loc::default(),
+                    "comparison requires numbers".into(),
+                ));
             }
         };
         if !op(prev, curr) {
@@ -317,12 +310,10 @@ pub fn num_gte(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
 
 pub fn cons(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 2 {
-        return Err(crate::SelError {
+        return Err(SelError::ArityMismatch {
             loc: Loc::default(),
-            kind: crate::SelErrorKind::ArityMismatch {
-                expected: 2,
-                actual: args.len(),
-            },
+            expected: 2,
+            actual: args.len(),
         });
     }
     let tail = args.pop().unwrap();
@@ -340,41 +331,35 @@ pub fn cons(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
 
 pub fn car(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(crate::SelError {
+        return Err(SelError::ArityMismatch {
             loc: Loc::default(),
-            kind: crate::SelErrorKind::ArityMismatch {
-                expected: 1,
-                actual: args.len(),
-            },
+            expected: 1,
+            actual: args.len(),
         });
     }
     match args.pop().unwrap() {
         Value::List(mut l) => {
             if l.is_empty() {
-                return Err(crate::SelError {
-                    loc: Loc::default(),
-                    kind: crate::SelErrorKind::Generic("car on empty list".into()),
-                });
+                return Err(SelError::Runtime(
+                    Loc::default(),
+                    "car on empty list".into(),
+                ));
             }
             Ok(l.remove(0))
         }
-        _ => {
-            Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic("car requires a list".into()),
-            })
-        }
+        _ => Err(SelError::Runtime(
+            Loc::default(),
+            "car requires a list".into(),
+        )),
     }
 }
 
 pub fn nth(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 2 {
-        return Err(crate::SelError {
+        return Err(SelError::ArityMismatch {
             loc: Loc::default(),
-            kind: crate::SelErrorKind::ArityMismatch {
-                expected: 2,
-                actual: args.len(),
-            },
+            expected: 2,
+            actual: args.len(),
         });
     }
     let index = args.pop().unwrap();
@@ -387,39 +372,33 @@ pub fn nth(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                     Ok(Value::Nil)
                 }
             }
-            _ => {
-                Err(SelError {
-                    loc: Loc::default(),
-                    kind: SelErrorKind::Generic("nth requires a interger".into()),
-                })
-            }
+            _ => Err(SelError::Runtime(
+                Loc::default(),
+                "nth requires a interger".into(),
+            )),
         },
-        _ => {
-            Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic("nth requires a list".into()),
-            })
-        }
+        _ => Err(SelError::Runtime(
+            Loc::default(),
+            "nth requires a list".into(),
+        )),
     }
 }
 
 pub fn cdr(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(crate::SelError {
+        return Err(SelError::ArityMismatch {
             loc: Loc::default(),
-            kind: crate::SelErrorKind::ArityMismatch {
-                expected: 1,
-                actual: args.len(),
-            },
+            expected: 1,
+            actual: args.len(),
         });
     }
     match args.pop().unwrap() {
         Value::List(mut l) => {
             if l.is_empty() {
-                return Err(crate::SelError {
-                    loc: Loc::default(),
-                    kind: crate::SelErrorKind::Generic("cdr on empty list".into()),
-                });
+                return Err(SelError::Runtime(
+                    Loc::default(),
+                    "cdr on empty list".into(),
+                ));
             }
             l.remove(0);
             Ok(if l.is_empty() {
@@ -428,56 +407,46 @@ pub fn cdr(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                 Value::List(l)
             })
         }
-        _ => {
-            Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic("cdr requires a list".into()),
-            })
-        }
+        _ => Err(SelError::Runtime(
+            Loc::default(),
+            "cdr requires a list".into(),
+        )),
     }
 }
 
 pub fn count(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(crate::SelError {
+        return Err(SelError::ArityMismatch {
             loc: Loc::default(),
-            kind: crate::SelErrorKind::ArityMismatch {
-                expected: 1,
-                actual: args.len(),
-            },
+            expected: 1,
+            actual: args.len(),
         });
     }
     match args.pop().unwrap() {
         Value::List(l) => Ok(Value::Integer(l.len() as _)),
         Value::Nil => Ok(Value::Integer(0)),
-        _ => {
-            Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic("count requires a list".into()),
-            })
-        }
+        _ => Err(SelError::Runtime(
+            Loc::default(),
+            "count requires a list".into(),
+        )),
     }
 }
 
 pub fn empty(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(crate::SelError {
+        return Err(SelError::ArityMismatch {
             loc: Loc::default(),
-            kind: crate::SelErrorKind::ArityMismatch {
-                expected: 1,
-                actual: args.len(),
-            },
+            expected: 1,
+            actual: args.len(),
         });
     }
     match args.pop().unwrap() {
         Value::List(l) => Ok(Value::Boolean(l.is_empty())),
         Value::Nil => Ok(Value::Boolean(true)),
-        _ => {
-            Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic("empty requires a list".into()),
-            })
-        }
+        _ => Err(SelError::Runtime(
+            Loc::default(),
+            "empty requires a list".into(),
+        )),
     }
 }
 
@@ -491,12 +460,10 @@ pub fn list(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
 
 pub fn is_nil(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(crate::SelError {
+        return Err(SelError::ArityMismatch {
             loc: Loc::default(),
-            kind: crate::SelErrorKind::ArityMismatch {
-                expected: 1,
-                actual: args.len(),
-            },
+            expected: 1,
+            actual: args.len(),
         });
     }
     match &args[0] {
@@ -508,12 +475,10 @@ pub fn is_nil(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
 
 pub fn is_list(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(crate::SelError {
+        return Err(SelError::ArityMismatch {
             loc: Loc::default(),
-            kind: crate::SelErrorKind::ArityMismatch {
-                expected: 1,
-                actual: args.len(),
-            },
+            expected: 1,
+            actual: args.len(),
         });
     }
     match &args[0] {
@@ -524,12 +489,10 @@ pub fn is_list(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
 
 pub fn is_number(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(crate::SelError {
+        return Err(SelError::ArityMismatch {
             loc: Loc::default(),
-            kind: crate::SelErrorKind::ArityMismatch {
-                expected: 1,
-                actual: args.len(),
-            },
+            expected: 1,
+            actual: args.len(),
         });
     }
     Ok(Value::Boolean(matches!(
@@ -540,12 +503,10 @@ pub fn is_number(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
 
 pub fn is_string(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(crate::SelError {
+        return Err(SelError::ArityMismatch {
             loc: Loc::default(),
-            kind: crate::SelErrorKind::ArityMismatch {
-                expected: 1,
-                actual: args.len(),
-            },
+            expected: 1,
+            actual: args.len(),
         });
     }
     Ok(Value::Boolean(matches!(args[0], Value::String(_))))
@@ -553,12 +514,10 @@ pub fn is_string(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
 
 pub fn is_function(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(crate::SelError {
+        return Err(SelError::ArityMismatch {
             loc: Loc::default(),
-            kind: crate::SelErrorKind::ArityMismatch {
-                expected: 1,
-                actual: args.len(),
-            },
+            expected: 1,
+            actual: args.len(),
         });
     }
     Ok(Value::Boolean(matches!(
@@ -569,12 +528,10 @@ pub fn is_function(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
 
 pub fn is_symbol(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(crate::SelError {
+        return Err(SelError::ArityMismatch {
             loc: Loc::default(),
-            kind: crate::SelErrorKind::ArityMismatch {
-                expected: 1,
-                actual: args.len(),
-            },
+            expected: 1,
+            actual: args.len(),
         });
     }
     Ok(Value::Boolean(matches!(args[0], Value::Symbol(_))))
@@ -586,23 +543,22 @@ pub fn error(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         .map(|v| v.to_string())
         .collect::<Vec<_>>()
         .join(" ");
-    Err(SelError {
-        loc: Loc::default(),
-        kind: SelErrorKind::Generic(msg),
-    })
+    Err(SelError::Runtime(Loc::default(), msg))
 }
 
 pub fn type_of(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError {
+        return Err(SelError::ArityMismatch {
             loc: Loc::default(),
-            kind: SelErrorKind::ArityMismatch {
-                expected: 1,
-                actual: args.len(),
-            },
+            expected: 1,
+            actual: args.len(),
         });
     }
-    let t = match args[0] {
+    Ok(Value::Symbol(intern(value_type_name(&args[0]))))
+}
+
+fn value_type_name(v: &Value) -> &str {
+    match v {
         Value::Nil => "nil",
         Value::Integer(_) => "int",
         Value::Float(_) => "float",
@@ -614,18 +570,15 @@ pub fn type_of(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         Value::Macro { .. } => "macro",
         Value::Pointer(_) => "pointer",
         Value::Library(_) => "library",
-    };
-    Ok(Value::Symbol(intern(t)))
+    }
 }
 
 pub fn not(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(crate::SelError {
+        return Err(SelError::ArityMismatch {
             loc: Loc::default(),
-            kind: crate::SelErrorKind::ArityMismatch {
-                expected: 1,
-                actual: args.len(),
-            },
+            expected: 1,
+            actual: args.len(),
         });
     }
     match args[0] {
@@ -659,58 +612,54 @@ pub fn newline(_args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
 
 pub fn ffi_dlopen(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError {
+        return Err(SelError::ArityMismatch {
             loc: Loc::default(),
-            kind: SelErrorKind::ArityMismatch {
-                expected: 1,
-                actual: args.len(),
-            },
+            expected: 1,
+            actual: args.len(),
         });
     }
     if let Value::String(s) = &args[0] {
         unsafe {
             match libloading::Library::new(s) {
                 Ok(lib) => Ok(Value::Library(Rc::new(lib))),
-                Err(e) => Err(SelError {
-                    loc: Loc::default(),
-                    kind: SelErrorKind::Generic(format!("dlopen failed: {}", e)),
-                }),
+                Err(e) => Err(SelError::Runtime(
+                    Loc::default(),
+                    format!("dlopen failed: {}", e),
+                )),
             }
         }
     } else {
-        Err(SelError {
-            loc: Loc::default(),
-            kind: SelErrorKind::Generic("ffi-dlopen requires a string".into()),
-        })
+        Err(SelError::Runtime(
+            Loc::default(),
+            "ffi-dlopen requires a string".into(),
+        ))
     }
 }
 
 pub fn ffi_dlsym(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 2 {
-        return Err(SelError {
+        return Err(SelError::ArityMismatch {
             loc: Loc::default(),
-            kind: SelErrorKind::ArityMismatch {
-                expected: 2,
-                actual: args.len(),
-            },
+            expected: 2,
+            actual: args.len(),
         });
     }
     let lib = match &args[0] {
         Value::Library(l) => l,
         _ => {
-            return Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic("ffi-dlsym requires a library".into()),
-            });
+            return Err(SelError::Runtime(
+                Loc::default(),
+                "ffi-dlsym requires a library".into(),
+            ));
         }
     };
     let sym_name = match &args[1] {
         Value::String(s) => s,
         _ => {
-            return Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic("ffi-dlsym requires a string symbol name".into()),
-            });
+            return Err(SelError::Runtime(
+                Loc::default(),
+                "ffi-dlsym requires a string symbol name".into(),
+            ));
         }
     };
 
@@ -723,41 +672,39 @@ pub fn ffi_dlsym(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                 let ptr = *sym as usize;
                 Ok(Value::Pointer(ptr))
             }
-            Err(e) => Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic(format!("dlsym failed: {}", e)),
-            }),
+            Err(e) => Err(SelError::Runtime(
+                Loc::default(),
+                format!("dlsym failed: {}", e),
+            )),
         }
     }
 }
 
 pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-    if args.len() == 4 + 1 {
-        return Err(SelError {
-            loc: Loc::default(),
-            kind: SelErrorKind::Generic(
-                "ffi-call requires (ptr, ret_type, arg_types, arg_vals)".into(),
-            ),
-        });
+    if args.len() != 4 {
+        return Err(SelError::Runtime(
+            Loc::default(),
+            "ffi-call requires (ptr, ret_type, arg_types, arg_vals)".into(),
+        ));
     }
 
     let ptr = match args[0] {
         Value::Pointer(p) => p,
         _ => {
-            return Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic("ffi-call requires a pointer".into()),
-            });
+            return Err(SelError::Runtime(
+                Loc::default(),
+                "ffi-call requires a pointer".into(),
+            ));
         }
     };
 
     let ret_type_sym = match args[1] {
         Value::Symbol(s) => crate::lookup(s),
         _ => {
-            return Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic("ffi-call requires a return type symbol".into()),
-            });
+            return Err(SelError::Runtime(
+                Loc::default(),
+                "ffi-call requires a return type symbol".into(),
+            ));
         }
     };
 
@@ -768,22 +715,20 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                 if let Value::Symbol(s) = v {
                     syms.push(crate::lookup(*s));
                 } else {
-                    return Err(SelError {
-                        loc: Loc::default(),
-                        kind: SelErrorKind::Generic(format!(
-                            "arg_types must be a list of symbols {v}"
-                        )),
-                    });
+                    return Err(SelError::Runtime(
+                        Loc::default(),
+                        format!("arg_types must be a list of symbols {v}"),
+                    ));
                 }
             }
             syms
         }
         Value::Nil => Vec::new(),
         _ => {
-            return Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic("arg_types must be a list".into()),
-            });
+            return Err(SelError::Runtime(
+                Loc::default(),
+                "arg_types must be a list".into(),
+            ));
         }
     };
 
@@ -791,10 +736,10 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         Value::List(l) => l,
         Value::Nil => Vec::new(),
         _ => {
-            return Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic("arg_vals must be a list".into()),
-            });
+            return Err(SelError::Runtime(
+                Loc::default(),
+                "arg_vals must be a list".into(),
+            ));
         }
     };
 
@@ -809,13 +754,10 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         "bool" => libffi::middle::Type::u8(),
         "*u8" => libffi::middle::Type::pointer(),
         _ => {
-            return Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic(format!(
-                    "Unsupported return type: {}",
-                    ret_type_sym
-                )),
-            });
+            return Err(SelError::Runtime(
+                Loc::default(),
+                format!("Unsupported return type: {}", ret_type_sym),
+            ));
         }
     };
 
@@ -831,10 +773,10 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
             "bool" => libffi::middle::Type::u8(),
             "*u8" => libffi::middle::Type::pointer(),
             _ => {
-                return Err(SelError {
-                    loc: Loc::default(),
-                    kind: SelErrorKind::Generic(format!("Unsupported arg type: {}", sym)),
-                });
+                return Err(SelError::Runtime(
+                    Loc::default(),
+                    format!("Unsupported arg type: {}", sym),
+                ));
             }
         };
         arg_types.push(t);
@@ -865,13 +807,10 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                     Value::Integer(n) => *n as i32,
                     Value::Float(f) => *f as i32,
                     _ => {
-                        return Err(SelError {
-                            loc: Loc::default(),
-                            kind: SelErrorKind::Generic(format!(
-                                "Expected integer for arg {}",
-                                i
-                            )),
-                        });
+                        return Err(SelError::Runtime(
+                            Loc::default(),
+                            format!("Expected integer for arg {}", i),
+                        ));
                     }
                 };
                 ffi_args_storage.push(FfiArg::I32(v));
@@ -893,13 +832,10 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                         }
                     }
                     _ => {
-                        return Err(SelError {
-                            loc: Loc::default(),
-                            kind: SelErrorKind::Generic(format!(
-                                "Expected boolean for arg {}",
-                                i
-                            )),
-                        });
+                        return Err(SelError::Runtime(
+                            Loc::default(),
+                            format!("Expected boolean for arg {}", i),
+                        ));
                     }
                 };
                 ffi_args_storage.push(FfiArg::U8(v));
@@ -909,13 +845,10 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                     Value::Integer(n) => *n,
                     Value::Float(f) => *f as i64,
                     _ => {
-                        return Err(SelError {
-                            loc: Loc::default(),
-                            kind: SelErrorKind::Generic(format!(
-                                "Expected integer for arg {}",
-                                i
-                            )),
-                        });
+                        return Err(SelError::Runtime(
+                            Loc::default(),
+                            format!("Expected integer for arg {}", i),
+                        ));
                     }
                 };
                 ffi_args_storage.push(FfiArg::I64(v));
@@ -925,13 +858,10 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                     Value::Integer(n) => *n as u32,
                     Value::Float(f) => *f as u32,
                     _ => {
-                        return Err(SelError {
-                            loc: Loc::default(),
-                            kind: SelErrorKind::Generic(format!(
-                                "Expected integer for arg {}",
-                                i
-                            )),
-                        });
+                        return Err(SelError::Runtime(
+                            Loc::default(),
+                            format!("Expected integer for arg {}", i),
+                        ));
                     }
                 };
                 ffi_args_storage.push(FfiArg::U32(v));
@@ -941,13 +871,10 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                     Value::Integer(n) => *n as u64,
                     Value::Float(f) => *f as u64,
                     _ => {
-                        return Err(SelError {
-                            loc: Loc::default(),
-                            kind: SelErrorKind::Generic(format!(
-                                "Expected integer for arg {}",
-                                i
-                            )),
-                        });
+                        return Err(SelError::Runtime(
+                            Loc::default(),
+                            format!("Expected integer for arg {}", i),
+                        ));
                     }
                 };
                 ffi_args_storage.push(FfiArg::U64(v));
@@ -957,13 +884,10 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                     Value::Integer(n) => *n as f32,
                     Value::Float(f) => *f as f32,
                     _ => {
-                        return Err(SelError {
-                            loc: Loc::default(),
-                            kind: SelErrorKind::Generic(format!(
-                                "Expected float for arg {}",
-                                i
-                            )),
-                        });
+                        return Err(SelError::Runtime(
+                            Loc::default(),
+                            format!("Expected float for arg {}", i),
+                        ));
                     }
                 };
                 ffi_args_storage.push(FfiArg::F32(v));
@@ -973,13 +897,10 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                     Value::Integer(n) => *n as f64,
                     Value::Float(f) => *f,
                     _ => {
-                        return Err(SelError {
-                            loc: Loc::default(),
-                            kind: SelErrorKind::Generic(format!(
-                                "Expected float for arg {}",
-                                i
-                            )),
-                        });
+                        return Err(SelError::Runtime(
+                            Loc::default(),
+                            format!("Expected float for arg {}", i),
+                        ));
                     }
                 };
                 ffi_args_storage.push(FfiArg::F64(v));
@@ -999,13 +920,10 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                         ffi_args_storage.push(FfiArg::Ptr(std::ptr::null()));
                     }
                     _ => {
-                        return Err(SelError {
-                            loc: Loc::default(),
-                            kind: SelErrorKind::Generic(format!(
-                                "Expected string or pointer for arg {}",
-                                i
-                            )),
-                        });
+                        return Err(SelError::Runtime(
+                            Loc::default(),
+                            format!("Expected string or pointer for arg {}", i),
+                        ));
                     }
                 }
             }
@@ -1079,73 +997,73 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
 
 pub fn io_read_string(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError {
-            loc: Loc::default(),
-            kind: SelErrorKind::Generic("io/read-string requires exactly 1 argument".into()),
-        });
+        return Err(SelError::Runtime(
+            Loc::default(),
+            "io/read-string requires exactly 1 argument".into(),
+        ));
     }
     if let Value::String(path) = &args[0] {
         match std::fs::read_to_string(path) {
             Ok(content) => Ok(Value::String(content)),
-            Err(e) => Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic(format!("io/read-string failed: {}", e)),
-            }),
+            Err(e) => Err(SelError::Runtime(
+                Loc::default(),
+                format!("io/read-string failed: {}", e),
+            )),
         }
     } else {
-        Err(SelError {
-            loc: Loc::default(),
-            kind: SelErrorKind::Generic("io/read-string requires a string argument".into()),
-        })
+        Err(SelError::Runtime(
+            Loc::default(),
+            "io/read-string requires a string argument".into(),
+        ))
     }
 }
 
 pub fn io_write_string(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 2 {
-        return Err(SelError {
-            loc: Loc::default(),
-            kind: SelErrorKind::Generic("io/write-string requires exactly 2 arguments".into()),
-        });
+        return Err(SelError::Runtime(
+            Loc::default(),
+            "io/write-string requires exactly 2 arguments".into(),
+        ));
     }
     if let (Value::String(path), Value::String(content)) = (&args[0], &args[1]) {
         match std::fs::write(path, content) {
             Ok(_) => Ok(Value::Nil),
-            Err(e) => Err(SelError {
-                loc: Loc::default(),
-                kind: SelErrorKind::Generic(format!("io/write-string failed: {}", e)),
-            }),
+            Err(e) => Err(SelError::Runtime(
+                Loc::default(),
+                format!("io/write-string failed: {}", e),
+            )),
         }
     } else {
-        Err(SelError {
-            loc: Loc::default(),
-            kind: SelErrorKind::Generic("io/write-string requires string arguments".into()),
-        })
+        Err(SelError::Runtime(
+            Loc::default(),
+            "io/write-string requires string arguments".into(),
+        ))
     }
 }
 
 pub fn io_file_exists(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError {
-            loc: Loc::default(),
-            kind: SelErrorKind::Generic("io/file-exists? requires exactly 1 argument".into()),
-        });
+        return Err(SelError::Runtime(
+            Loc::default(),
+            "io/file-exists? requires exactly 1 argument".into(),
+        ));
     }
     if let Value::String(path) = &args[0] {
         Ok(Value::Boolean(std::path::Path::new(path).exists()))
     } else {
-        Err(SelError {
-            loc: Loc::default(),
-            kind: SelErrorKind::Generic("io/file-exists? requires a string argument".into()),
-        })
+        Err(SelError::Runtime(
+            Loc::default(),
+            "io/file-exists? requires a string argument".into(),
+        ))
     }
 }
 
 pub fn os_getenv(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError {
-            loc: Loc::default(),
-            kind: SelErrorKind::Generic("os/getenv requires exactly 1 argument".into()),
-        });
+        return Err(SelError::Runtime(
+            Loc::default(),
+            "os/getenv requires exactly 1 argument".into(),
+        ));
     }
     if let Value::String(key) = &args[0] {
         match std::env::var(key) {
@@ -1153,19 +1071,19 @@ pub fn os_getenv(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
             Err(_) => Ok(Value::Nil),
         }
     } else {
-        Err(SelError {
-            loc: Loc::default(),
-            kind: SelErrorKind::Generic("os/getenv requires a string argument".into()),
-        })
+        Err(SelError::Runtime(
+            Loc::default(),
+            "os/getenv requires a string argument".into(),
+        ))
     }
 }
 
 pub fn os_args(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if !args.is_empty() {
-        return Err(SelError {
-            loc: Loc::default(),
-            kind: SelErrorKind::Generic("os/args takes no arguments".into()),
-        });
+        return Err(SelError::Runtime(
+            Loc::default(),
+            "os/args takes no arguments".into(),
+        ));
     }
     let args_vec = std::env::args()
         .skip(1)
@@ -1176,10 +1094,10 @@ pub fn os_args(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
 
 pub fn os_orig_args(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     if !args.is_empty() {
-        return Err(SelError {
-            loc: Loc::default(),
-            kind: SelErrorKind::Generic("os/args takes no arguments".into()),
-        });
+        return Err(SelError::Runtime(
+            Loc::default(),
+            "os/args takes no arguments".into(),
+        ));
     }
     let args_vec = std::env::args().map(Value::String).collect::<Vec<_>>();
     Ok(Value::List(args_vec))
