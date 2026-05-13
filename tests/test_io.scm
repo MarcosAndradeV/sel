@@ -8,5 +8,6 @@
 (println "--- Testing File I/O ---")
 (define filename "tests/test_output.txt")
 (io/write-string filename "Hello from sel Native I/O!")
-(println (io/file-exists? filename))
-(println (io/read-string filename))
+(assert (io/file-exists? filename))
+(assert (eq? (io/read-string filename) "Hello from sel Native I/O!"))
+

@@ -10,11 +10,12 @@
 (define strlen (ffi-func strlen-sym 'u64 '(*u8)))
 
 (println "Testing strlen via FFI:")
-(println (strlen "Hello, FFI!")) ; Should print 11
+(assert (eq? (strlen "Hello, FFI!") 11))
 
 ;; math
 
 (define libm (ffi-dlopen "libm.so.6"))
 (define my_pow (ffi-dlsym libm "pow"))
 (println "Testing pow via FFI (2.0 ^ 3.0):")
-(println (ffi-call my_pow 'f64 '(f64 f64) '(2.0 3.0))) ; Should print 8.0
+(assert (eq? (ffi-call my_pow 'f64 '(f64 f64) '(2.0 3.0)) 8.0))
+
