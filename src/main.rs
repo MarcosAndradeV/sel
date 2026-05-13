@@ -1,4 +1,3 @@
-use anyhow::Result as AnyhowResult;
 use rustyline::error::ReadlineError;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -18,7 +17,7 @@ mod lexer;
 mod runtime;
 mod types;
 
-fn main() -> AnyhowResult<()> {
+fn main() -> Result<(), ()> {
     let env = Rc::new(RefCell::new(Env::default()));
     load_core_lib(env.clone());
 
@@ -26,7 +25,8 @@ fn main() -> AnyhowResult<()> {
     if args.len() > 1 {
         let script_path = args.remove(1);
 
-        let mut src = fs::read_to_string(&script_path)?;
+        let mut src = fs::read_to_string(&script_path)
+            .map_err(|e| eprintln!("Error: cannot read file {} because {e}", script_path))?;
         if src.starts_with("#!") {
             if let Some(newline_idx) = src.find('\n') {
                 src = src[newline_idx + 1..].to_string();
@@ -35,9 +35,10 @@ fn main() -> AnyhowResult<()> {
             }
         }
 
-        let asts = read_all(&src, intern(&script_path.to_string()))?;
+        let asts =
+            read_all(&src, intern(&script_path.to_string())).map_err(|e| eprintln!("{e}"))?;
         execute_asts(asts, env)
-            .map_err(|e| anyhow::anyhow!("{}", e))
+            .map_err(|e| eprintln!("{e}"))
             .map(|_| ())
     } else {
         repl("sel> ", env)
@@ -63,15 +64,22 @@ fn load_core_lib(env: Rc<RefCell<Env>>) {
     }
 }
 
-fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> AnyhowResult<()> {
+fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), ()> {
     const QUIT_COMMAND: &str = ":quit";
     let repl_file_id = intern("<repl>");
     println!("Welcome to the Sel Scheme repl. (Use `{QUIT_COMMAND}` to exit)");
 
     let sel_path = env::home_dir().unwrap_or_default().join(".sel");
-    fs::create_dir_all(&sel_path)?;
+    fs::create_dir_all(&sel_path).map_err(|e| {
+        eprintln!(
+            "Error: cannot create directory {} because {e}",
+            sel_path.display()
+        )
+    })?;
     let hist_path = sel_path.join("history");
-    let mut rl = rustyline::DefaultEditor::new()?;
+    let mut rl = rustyline::DefaultEditor::new().map_err(|e| {
+        eprintln!("Error: cannot create default rustyline::DefaultEditor because {e}")
+    })?;
     if rl.load_history(&hist_path).is_err() {
         println!("No previous history.");
     }
@@ -79,7 +87,7 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> AnyhowResult<()> {
         match rl.readline(prompt) {
             Ok(line) => {
                 let line = line.trim();
-                rl.add_history_entry(line)?;
+                _ = rl.add_history_entry(line);
                 match line {
                     "" => continue,
                     QUIT_COMMAND => break,
@@ -129,7 +137,7 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> AnyhowResult<()> {
             }
         }
     }
-    rl.save_history(&hist_path)?;
+    _ = rl.save_history(&hist_path);
     Ok(())
 }
 
@@ -141,63 +149,69 @@ mod tests {
 
     #[test]
     fn test_all_folders() {
-        fn test_all_folders_impl() -> AnyhowResult<()> {
-            let tests_dir = read_dir("tests")?;
+        fn test_all_folders_impl() -> Result<(), ()> {
+            let tests_dir = read_dir("tests")
+                .map_err(|e| eprintln!("Error: cannot read directory tests because {e}"))?;
             for res_entry in tests_dir {
-                let entry = res_entry?;
-                if entry.file_type()?.is_file()
+                let entry = res_entry
+                    .map_err(|e| eprintln!("Error: cannot read directory tests because {e}"))?;
+                if entry
+                    .file_type()
+                    .map_err(|e| eprintln!("Error: cannot get type of file because {e}"))?
+                    .is_file()
                     && entry.path().extension().is_some_and(|ext| ext == "scm")
                 {
                     let env = Rc::new(RefCell::new(Env::default()));
                     load_core_lib(env.clone());
                     println!("TEST: {}", entry.path().display());
-                    let src = fs::read_to_string(entry.path())?;
-                    let asts = read_all(&src, intern("<test-all-folders>"))?;
+                    let epath = entry.path();
+                    let src = fs::read_to_string(&epath).map_err(|e| {
+                        eprintln!("Error: cannot read file {} because {e}", epath.display())
+                    })?;
+                    let asts = read_all(&src, intern("<test-all-folders>"))
+                        .map_err(|e| eprintln!("{e}"))?;
                     execute_asts(asts, env)
-                        .map_err(|e| anyhow::anyhow!("{}", e))
+                        .map_err(|e| eprintln!("{}", e))
                         .map(|_| ())?;
                 }
             }
             Ok(())
         }
 
-        assert!(match test_all_folders_impl() {
-            Ok(_) => true,
-            Err(e) => {
-                println!("{e}");
-                false
-            }
-        })
+        assert!(test_all_folders_impl().is_ok())
     }
 
     #[test]
     fn test_errors_folder() {
-        fn test_errors_folder_impl() -> AnyhowResult<()> {
-            let tests_dir = read_dir("tests/errors")?;
+        fn test_all_folders_impl() -> Result<(), ()> {
+            let tests_dir = read_dir("tests/errors")
+                .map_err(|e| eprintln!("Error: cannot read directory tests because {e}"))?;
             for res_entry in tests_dir {
-                let entry = res_entry?;
-                if entry.file_type()?.is_file()
+                let entry = res_entry
+                    .map_err(|e| eprintln!("Error: cannot read directory tests because {e}"))?;
+                if entry
+                    .file_type()
+                    .map_err(|e| eprintln!("Error: cannot get type of file because {e}"))?
+                    .is_file()
                     && entry.path().extension().is_some_and(|ext| ext == "scm")
                 {
                     let env = Rc::new(RefCell::new(Env::default()));
                     load_core_lib(env.clone());
                     println!("TEST: {}", entry.path().display());
-                    let src = fs::read_to_string(entry.path())?;
-                    let asts = read_all(&src, intern("<test-errors-folder>"))?;
+                    let epath = entry.path();
+                    let src = fs::read_to_string(&epath).map_err(|e| {
+                        eprintln!("Error: cannot read file {} because {e}", epath.display())
+                    })?;
+                    let asts = read_all(&src, intern("<test-erros-folder>"))
+                        .map_err(|e| eprintln!("{e}"))?;
                     execute_asts(asts, env)
-                        .map_err(|e| anyhow::anyhow!("{}", e))
+                        .map_err(|e| eprintln!("{}", e))
                         .map(|_| ())?;
                 }
             }
             Ok(())
         }
 
-        assert!(match test_errors_folder_impl() {
-            Ok(_) => false,
-            Err(e) => {
-                println!("{e}");
-                true
-            }
-        })
+        assert!(test_all_folders_impl().is_err())
     }
 }
