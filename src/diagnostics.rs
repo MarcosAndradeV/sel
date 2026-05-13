@@ -1,3 +1,4 @@
+
 use crate::lexer::{Loc, Token};
 use crate::types::lookup;
 
@@ -18,6 +19,7 @@ pub enum SelError {
     Internal(String),
     Runtime(Loc, String),
     TypeError(Loc, String),
+    Trace(String)
 }
 
 impl SelError {
@@ -37,17 +39,17 @@ impl SelError {
                 actual,
             },
             SelError::UnboundVariable(_, e) => SelError::UnboundVariable(loc, e),
-            SelError::InvalidNumber(token) => SelError::InvalidNumber(token),
             SelError::UnterminatedString(_) => SelError::UnterminatedString(loc),
-            SelError::Internal(e) => SelError::Internal(e),
             SelError::Runtime(_, e) => SelError::Runtime(loc, e),
             SelError::TypeError(_, e) => SelError::TypeError(loc, e),
+            _ => self
         }
     }
 }
 
 impl std::fmt::Display for SelError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, ":- ")?;
         match &self {
             Self::UnexpectedEOF(loc) => write!(
                 f,
@@ -104,6 +106,9 @@ impl std::fmt::Display for SelError {
             Self::Runtime(loc, s) => write!(f, "runtime error at {}:\n\nCaused by:\n    {}", loc, s),
             Self::TypeError(loc, s) => write!(f, "type error at {}:\n\nCaused by:\n    {}", loc, s),
             Self::Internal(s) => write!(f, "internal error caused by:\n    {}", s),
+            SelError::Trace(errs) => {
+                write!(f, "{errs}")
+            }
         }
     }
 }

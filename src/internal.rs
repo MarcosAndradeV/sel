@@ -272,21 +272,26 @@ pub fn is_equal(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     }
     let first = &args[0];
     for arg in args.iter().skip(1) {
-        let eq = match (first, arg) {
-            (Value::Nil, Value::Nil) => true,
-            (Value::Boolean(a), Value::Boolean(b)) => a == b,
-            (Value::Integer(a), Value::Integer(b)) => a == b,
-            (Value::Float(a), Value::Float(b)) => a == b,
-            (Value::String(a), Value::String(b)) => a == b,
-            (Value::Symbol(a), Value::Symbol(b)) => a == b,
-            (Value::Pointer(a), Value::Pointer(b)) => a == b,
-            _ => false,
-        };
+        let eq = is_value_equal(first, arg);
         if !eq {
             return Ok(Value::Boolean(false));
         }
     }
     Ok(Value::Boolean(true))
+}
+
+fn is_value_equal(first: &Value, arg: &Value) -> bool {
+    match (first, arg) {
+        (Value::Nil, Value::Nil) => true,
+        (Value::Boolean(a), Value::Boolean(b)) => a == b,
+        (Value::Integer(a), Value::Integer(b)) => a == b,
+        (Value::Float(a), Value::Float(b)) => a == b,
+        (Value::String(a), Value::String(b)) => a == b,
+        (Value::Symbol(a), Value::Symbol(b)) => a == b,
+        (Value::Pointer(a), Value::Pointer(b)) => a == b,
+        (Value::List(a), Value::List(b)) => a.iter().zip(b).all(|(a, b)|is_value_equal(a, b)),
+        _ => false,
+    }
 }
 
 pub fn num_noteq(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
@@ -424,6 +429,7 @@ pub fn count(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     }
     match args.pop().unwrap() {
         Value::List(l) => Ok(Value::Integer(l.len() as _)),
+        Value::String(s) => Ok(Value::Integer(s.len() as _)),
         Value::Nil => Ok(Value::Integer(0)),
         _ => Err(SelError::Runtime(
             Loc::default(),

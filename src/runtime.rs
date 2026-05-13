@@ -76,10 +76,21 @@ impl VM {
             ip: 0,
             env,
         }];
-        self.run_internal(&mut frames)
+        match self.run_internal(&mut frames) {
+            Err(e) => {
+                if let Some(last) = frames.last() {
+                    Err(SelError::Trace(
+                        format!("runtime error at {}:\n{e}",last.loc)
+                    ))
+                } else {
+                    Err(e)
+                }
+            }
+            ok => ok,
+        }
     }
 
-    fn run_internal(&mut self, frames:&mut Vec<CallFrame>) -> Result<Value> {
+    fn run_internal(&mut self, frames: &mut Vec<CallFrame>) -> Result<Value> {
         loop {
             let frame_idx = frames.len() - 1;
             let frame = &mut frames[frame_idx];
