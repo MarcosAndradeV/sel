@@ -35,24 +35,12 @@
 (defmacro ffi-func (sym ret arg-types)
     (list 'lambda '(&args) `(ffi-call ~sym ~ret ~arg-types args)))
 
-;; BUG: -> and ->> do not work mwith lambda's
-;; maybe it's something with macro expansion.
-;; or maybe it's the macro expand implementation
-(defmacro -> (x & xs)
-    (foldl _iter-> x xs))
-
-(defun _iter-> (acc form)
-    (if (list? form)
-      `(~(car form) ~acc ~@(cdr form))
-      (list form acc)))
-
-(defmacro ->> (x & xs)
-     (foldl _iter->> x xs))
-
-(defun _iter->> (acc form)
-    (if (list? form)
-      `(~(car form) ~@(cdr form) ~acc)
-      (list form acc)))
+(defmacro assert (test &args)
+    (if (empty? args)
+        (list 'when (not test)
+            (error "Assertion fail"))
+        (list 'when (not test)
+            `(error "Assertion fail:" ~@args))))
 
 (defmacro delay (expr)
   (list 'lambda '() expr))
