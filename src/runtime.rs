@@ -5,6 +5,7 @@ use std::rc::Rc;
 use crate::ast::*;
 use crate::compiler::*;
 use crate::diagnostics::*;
+use crate::internal;
 use crate::lexer::Loc;
 use crate::types::intern;
 use crate::types::lookup;
@@ -79,9 +80,10 @@ impl VM {
         match self.run_internal(&mut frames) {
             Err(e) => {
                 if let Some(last) = frames.last() {
-                    Err(SelError::Trace(
-                        format!("runtime error at {}:\n{e}",last.loc)
-                    ))
+                    Err(SelError::Trace(format!(
+                        "runtime error at {}:\n{e}",
+                        last.loc
+                    )))
                 } else {
                     Err(e)
                 }
@@ -108,8 +110,37 @@ impl VM {
 
             let (loc, instruction) = frame.chunk.code[frame.ip].clone();
             frame.ip += 1;
-
             match instruction {
+                OpCode::Eq(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::is_equal(loc, args)?)
+                }
+                OpCode::Mod(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::modulo(loc, args)?)
+                }
+                OpCode::Div(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::div(loc, args)?)
+                }
+                OpCode::Mul(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::mul(loc, args)?)
+                }
+                OpCode::Sum(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::sum(loc, args)?)
+                }
+                OpCode::Sub(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::sub(loc, args)?)
+                }
                 OpCode::Constant(idx) => {
                     self.stack.push(frame.chunk.constants[idx].clone());
                 }

@@ -6,6 +6,7 @@ use crate::diagnostics::*;
 use crate::lexer::Lexer;
 use crate::lexer::Loc;
 use crate::runtime::*;
+use crate::types::has_symbol;
 use crate::types::lookup;
 
 type Result<T> = std::result::Result<T, SelError>;
@@ -240,7 +241,83 @@ impl<'a> Compiler<'a> {
                 }
 
                 let mut iter = list.into_iter();
-                self.compile(iter.next().unwrap())?;
+                if let Some(next) = iter.next() {
+                    match next {
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "eq?") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            self.chunk.write((loc, OpCode::Eq(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "mod") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 2 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected 2 arguments for mod".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::Mod(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "/") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count == 0 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected at least 1 argument to /".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::Div(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "-") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count < 1 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected at least 1 argument for -".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::Sub(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "+") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            self.chunk.write((loc, OpCode::Sum(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "*") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            self.chunk.write((loc, OpCode::Mul(arg_count)));
+                            return Ok(());
+                        }
+                        _ => self.compile(next)?,
+                    }
+                }
 
                 let mut arg_count = 0;
                 for arg in iter {
@@ -383,6 +460,12 @@ pub enum OpCode {
     PopEnv,
     MakeList(usize),
     ConcatList(usize),
+    Sum(u32),
+    Sub(u32),
+    Mul(u32),
+    Div(u32),
+    Mod(u32),
+    Eq(u32),
 }
 
 #[derive(Debug, Clone)]

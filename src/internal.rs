@@ -9,7 +9,8 @@ use crate::types::intern;
 
 type Result<T> = std::result::Result<T, SelError>;
 
-pub fn sum(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+#[inline]
+pub fn sum(loc: Loc, args: Vec<Value>) -> Result<Value> {
     let mut int_sum = 0;
     let mut float_sum = 0.0;
     let mut is_float = false;
@@ -33,7 +34,7 @@ pub fn sum(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
             }
             v => {
                 return Err(SelError::TypeError(
-                    Loc::default(),
+                    loc,
                     format!(
                         "Invalid argument to +: expected number but got {}",
                         value_type_name(&v)
@@ -49,13 +50,8 @@ pub fn sum(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     }
 }
 
-pub fn sub(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-    if args.is_empty() {
-        return Err(SelError::Runtime(
-            Loc::default(),
-            "Expected at least 1 argument to -".into(),
-        ));
-    }
+#[inline]
+pub fn sub(loc: Loc, args: Vec<Value>) -> Result<Value> {
     let mut is_float = false;
     let mut int_val = 0;
     let mut float_val = 0.0;
@@ -68,7 +64,7 @@ pub fn sub(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         }
         v => {
             return Err(SelError::TypeError(
-                Loc::default(),
+                loc,
                 format!(
                     "Invalid argument to -: expected number but got {}",
                     value_type_name(&v)
@@ -104,7 +100,7 @@ pub fn sub(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
             }
             _ => {
                 return Err(SelError::Runtime(
-                    Loc::default(),
+                    loc,
                     "Invalid argument to -: expected number".into(),
                 ));
             }
@@ -117,7 +113,8 @@ pub fn sub(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     }
 }
 
-pub fn mul(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+#[inline]
+pub fn mul(loc: Loc, args: Vec<Value>) -> Result<Value> {
     let mut int_val = 1;
     let mut float_val = 1.0;
     let mut is_float = false;
@@ -141,7 +138,7 @@ pub fn mul(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
             }
             _ => {
                 return Err(SelError::Runtime(
-                    Loc::default(),
+                    loc,
                     "Invalid argument to *: expected number".into(),
                 ));
             }
@@ -154,21 +151,14 @@ pub fn mul(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     }
 }
 
-pub fn div(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-    if args.is_empty() {
-        return Err(SelError::Runtime(
-            Loc::default(),
-            "Expected at least 1 argument to /".into(),
-        ));
-    }
-
+pub fn div(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() == 1 {
         match args[0] {
             Value::Integer(i) => return Ok(Value::Float(1.0 / i as f64)),
             Value::Float(f) => return Ok(Value::Float(1.0 / f)),
             _ => {
                 return Err(SelError::Runtime(
-                    Loc::default(),
+                    loc,
                     "Invalid argument to /: expected number".into(),
                 ));
             }
@@ -180,7 +170,7 @@ pub fn div(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         Value::Float(f) => f,
         _ => {
             return Err(SelError::Runtime(
-                Loc::default(),
+                loc,
                 "Invalid argument to /: expected number".into(),
             ));
         }
@@ -192,7 +182,7 @@ pub fn div(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
             Value::Float(f) => float_val /= f,
             _ => {
                 return Err(SelError::Runtime(
-                    Loc::default(),
+                    loc,
                     "Invalid argument to /: expected number".into(),
                 ));
             }
@@ -201,30 +191,17 @@ pub fn div(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     Ok(Value::Float(float_val))
 }
 
-pub fn modulo(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-    if args.len() != 2 {
-        return Err(SelError::ArityMismatch {
-            loc: Loc::default(),
-            expected: 2,
-            actual: args.len(),
-        });
-    }
+pub fn modulo(loc: Loc, args: Vec<Value>) -> Result<Value> {
     let a = match args[0] {
         Value::Integer(i) => i,
         _ => {
-            return Err(SelError::Runtime(
-                Loc::default(),
-                "modulo requires integer".into(),
-            ));
+            return Err(SelError::Runtime(loc, "modulo requires integer".into()));
         }
     };
     let b = match args[1] {
         Value::Integer(i) => i,
         _ => {
-            return Err(SelError::Runtime(
-                Loc::default(),
-                "modulo requires integer".into(),
-            ));
+            return Err(SelError::Runtime(loc, "modulo requires integer".into()));
         }
     };
     Ok(Value::Integer(a % b))
@@ -266,7 +243,7 @@ fn compare_nums(args: Vec<Value>, op: fn(f64, f64) -> bool) -> Result<Value> {
     Ok(Value::Boolean(true))
 }
 
-pub fn is_equal(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn is_equal(_loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() < 2 {
         return Ok(Value::Boolean(true));
     }
@@ -289,7 +266,7 @@ fn is_value_equal(first: &Value, arg: &Value) -> bool {
         (Value::String(a), Value::String(b)) => a == b,
         (Value::Symbol(a), Value::Symbol(b)) => a == b,
         (Value::Pointer(a), Value::Pointer(b)) => a == b,
-        (Value::List(a), Value::List(b)) => a.iter().zip(b).all(|(a, b)|is_value_equal(a, b)),
+        (Value::List(a), Value::List(b)) => a.iter().zip(b).all(|(a, b)| is_value_equal(a, b)),
         _ => false,
     }
 }
@@ -563,7 +540,7 @@ pub fn type_of(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     Ok(Value::Symbol(intern(value_type_name(&args[0]))))
 }
 
-fn value_type_name(v: &Value) -> &str {
+pub fn value_type_name(v: &Value) -> &str {
     match v {
         Value::Nil => "nil",
         Value::Integer(_) => "int",
@@ -1111,13 +1088,13 @@ pub fn os_orig_args(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
 
 pub fn load(env: Rc<RefCell<Env>>) {
     let mut e = env.borrow_mut();
-    e.insert(intern("+"), Value::NativeFunction(sum));
-    e.insert(intern("-"), Value::NativeFunction(sub));
-    e.insert(intern("*"), Value::NativeFunction(mul));
-    e.insert(intern("/"), Value::NativeFunction(div));
-    e.insert(intern("mod"), Value::NativeFunction(modulo));
+    // e.insert(intern("+"), Value::NativeFunction(sum));
+    // e.insert(intern("-"), Value::NativeFunction(sub));
+    // e.insert(intern("*"), Value::NativeFunction(mul));
+    // e.insert(intern("/"), Value::NativeFunction(div));
+    // e.insert(intern("mod"), Value::NativeFunction(modulo));
 
-    e.insert(intern("eq?"), Value::NativeFunction(is_equal));
+    // e.insert(intern("eq?"), Value::NativeFunction(is_equal));
 
     e.insert(intern("="), Value::NativeFunction(num_eq));
     e.insert(intern("!="), Value::NativeFunction(num_noteq));

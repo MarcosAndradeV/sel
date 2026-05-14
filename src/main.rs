@@ -107,14 +107,14 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
                 let asts = match read_all(line, repl_file_id) {
                     Ok(asts) => asts,
                     Err(e) => {
-                        println!("Error: {e}");
+                        println!("{e}");
                         continue;
                     }
                 };
                 let val = match execute_asts(asts, env.clone()) {
                     Ok(val) => val,
                     Err(e) => {
-                        println!("Error: {e}");
+                        println!("{e}");
                         continue;
                     }
                 };
