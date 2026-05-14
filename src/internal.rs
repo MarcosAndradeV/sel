@@ -207,19 +207,13 @@ pub fn modulo(loc: Loc, args: Vec<Value>) -> Result<Value> {
     Ok(Value::Integer(a % b))
 }
 
-fn compare_nums(args: Vec<Value>, op: fn(f64, f64) -> bool) -> Result<Value> {
-    if args.len() < 2 {
-        return Err(SelError::Runtime(
-            Loc::default(),
-            "comparison requires at least 2 arguments".into(),
-        ));
-    }
+fn compare_nums(loc: Loc, args: Vec<Value>, op: fn(f64, f64) -> bool) -> Result<Value> {
     let mut prev = match args[0] {
         Value::Integer(i) => i as f64,
         Value::Float(f) => f,
         _ => {
             return Err(SelError::Runtime(
-                Loc::default(),
+                loc,
                 "comparison requires numbers".into(),
             ));
         }
@@ -230,7 +224,7 @@ fn compare_nums(args: Vec<Value>, op: fn(f64, f64) -> bool) -> Result<Value> {
             Value::Float(f) => f,
             _ => {
                 return Err(SelError::Runtime(
-                    Loc::default(),
+                    loc,
                     "comparison requires numbers".into(),
                 ));
             }
@@ -243,7 +237,7 @@ fn compare_nums(args: Vec<Value>, op: fn(f64, f64) -> bool) -> Result<Value> {
     Ok(Value::Boolean(true))
 }
 
-pub fn is_equal(_loc: Loc, args: Vec<Value>) -> Result<Value> {
+pub fn is_equal(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() < 2 {
         return Ok(Value::Boolean(true));
     }
@@ -271,29 +265,29 @@ fn is_value_equal(first: &Value, arg: &Value) -> bool {
     }
 }
 
-pub fn num_noteq(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-    compare_nums(args, |a, b| a != b)
+pub fn num_noteq(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    compare_nums(loc, args, |a, b| a != b)
 }
-pub fn num_eq(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-    compare_nums(args, |a, b| a == b)
+pub fn num_eq(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    compare_nums(loc, args, |a, b| a == b)
 }
-pub fn num_lt(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-    compare_nums(args, |a, b| a < b)
+pub fn num_lt(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    compare_nums(loc, args, |a, b| a < b)
 }
-pub fn num_gt(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-    compare_nums(args, |a, b| a > b)
+pub fn num_gt(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    compare_nums(loc, args, |a, b| a > b)
 }
-pub fn num_lte(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-    compare_nums(args, |a, b| a <= b)
+pub fn num_lte(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    compare_nums(loc, args, |a, b| a <= b)
 }
-pub fn num_gte(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-    compare_nums(args, |a, b| a >= b)
+pub fn num_gte(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    compare_nums(loc, args, |a, b| a >= b)
 }
 
-pub fn cons(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn cons(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
         return Err(SelError::ArityMismatch {
-            loc: Loc::default(),
+            loc: loc,
             expected: 2,
             actual: args.len(),
         });
@@ -311,10 +305,10 @@ pub fn cons(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     }
 }
 
-pub fn car(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn car(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::ArityMismatch {
-            loc: Loc::default(),
+            loc: loc,
             expected: 1,
             actual: args.len(),
         });
@@ -323,23 +317,23 @@ pub fn car(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         Value::List(mut l) => {
             if l.is_empty() {
                 return Err(SelError::Runtime(
-                    Loc::default(),
+                    loc,
                     "car on empty list".into(),
                 ));
             }
             Ok(l.remove(0))
         }
         _ => Err(SelError::Runtime(
-            Loc::default(),
+            loc,
             "car requires a list".into(),
         )),
     }
 }
 
-pub fn nth(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn nth(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
         return Err(SelError::ArityMismatch {
-            loc: Loc::default(),
+            loc: loc,
             expected: 2,
             actual: args.len(),
         });
@@ -355,21 +349,21 @@ pub fn nth(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                 }
             }
             _ => Err(SelError::Runtime(
-                Loc::default(),
+                loc,
                 "nth requires a interger".into(),
             )),
         },
         _ => Err(SelError::Runtime(
-            Loc::default(),
+            loc,
             "nth requires a list".into(),
         )),
     }
 }
 
-pub fn cdr(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn cdr(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::ArityMismatch {
-            loc: Loc::default(),
+            loc: loc,
             expected: 1,
             actual: args.len(),
         });
@@ -378,7 +372,7 @@ pub fn cdr(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         Value::List(mut l) => {
             if l.is_empty() {
                 return Err(SelError::Runtime(
-                    Loc::default(),
+                    loc,
                     "cdr on empty list".into(),
                 ));
             }
@@ -390,16 +384,16 @@ pub fn cdr(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
             })
         }
         _ => Err(SelError::Runtime(
-            Loc::default(),
+            loc,
             "cdr requires a list".into(),
         )),
     }
 }
 
-pub fn count(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn count(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::ArityMismatch {
-            loc: Loc::default(),
+            loc: loc,
             expected: 1,
             actual: args.len(),
         });
@@ -409,16 +403,16 @@ pub fn count(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         Value::String(s) => Ok(Value::Integer(s.len() as _)),
         Value::Nil => Ok(Value::Integer(0)),
         _ => Err(SelError::Runtime(
-            Loc::default(),
+            loc,
             "count requires a list".into(),
         )),
     }
 }
 
-pub fn empty(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn empty(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::ArityMismatch {
-            loc: Loc::default(),
+            loc: loc,
             expected: 1,
             actual: args.len(),
         });
@@ -427,13 +421,13 @@ pub fn empty(mut args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         Value::List(l) => Ok(Value::Boolean(l.is_empty())),
         Value::Nil => Ok(Value::Boolean(true)),
         _ => Err(SelError::Runtime(
-            Loc::default(),
+            loc,
             "empty requires a list".into(),
         )),
     }
 }
 
-pub fn list(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn list(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.is_empty() {
         Ok(Value::Nil)
     } else {
@@ -441,10 +435,10 @@ pub fn list(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     }
 }
 
-pub fn is_nil(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn is_nil(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::ArityMismatch {
-            loc: Loc::default(),
+            loc: loc,
             expected: 1,
             actual: args.len(),
         });
@@ -456,10 +450,10 @@ pub fn is_nil(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     }
 }
 
-pub fn is_list(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn is_list(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::ArityMismatch {
-            loc: Loc::default(),
+            loc: loc,
             expected: 1,
             actual: args.len(),
         });
@@ -470,10 +464,10 @@ pub fn is_list(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     }
 }
 
-pub fn is_number(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn is_number(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::ArityMismatch {
-            loc: Loc::default(),
+            loc: loc,
             expected: 1,
             actual: args.len(),
         });
@@ -484,10 +478,10 @@ pub fn is_number(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     )))
 }
 
-pub fn is_string(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn is_string(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::ArityMismatch {
-            loc: Loc::default(),
+            loc: loc,
             expected: 1,
             actual: args.len(),
         });
@@ -495,10 +489,10 @@ pub fn is_string(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     Ok(Value::Boolean(matches!(args[0], Value::String(_))))
 }
 
-pub fn is_function(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn is_function(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::ArityMismatch {
-            loc: Loc::default(),
+            loc: loc,
             expected: 1,
             actual: args.len(),
         });
@@ -509,10 +503,10 @@ pub fn is_function(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     )))
 }
 
-pub fn is_symbol(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn is_symbol(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::ArityMismatch {
-            loc: Loc::default(),
+            loc: loc,
             expected: 1,
             actual: args.len(),
         });
@@ -520,19 +514,19 @@ pub fn is_symbol(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     Ok(Value::Boolean(matches!(args[0], Value::Symbol(_))))
 }
 
-pub fn error(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn error(loc: Loc, args: Vec<Value>) -> Result<Value> {
     let msg = args
         .iter()
         .map(|v| v.to_string())
         .collect::<Vec<_>>()
         .join(" ");
-    Err(SelError::Runtime(Loc::default(), msg))
+    Err(SelError::Runtime(loc, msg))
 }
 
-pub fn type_of(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn type_of(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::ArityMismatch {
-            loc: Loc::default(),
+            loc: loc,
             expected: 1,
             actual: args.len(),
         });
@@ -556,10 +550,10 @@ pub fn value_type_name(v: &Value) -> &str {
     }
 }
 
-pub fn not(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn not(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::ArityMismatch {
-            loc: Loc::default(),
+            loc: loc,
             expected: 1,
             actual: args.len(),
         });
@@ -570,13 +564,13 @@ pub fn not(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     }
 }
 
-pub fn display_newline(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-    display(args, _env)?;
+pub fn display_newline(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    display(loc, args.clone())?;
     println!();
     Ok(Value::Nil)
 }
 
-pub fn display(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn display(loc: Loc, args: Vec<Value>) -> Result<Value> {
     for (i, arg) in args.into_iter().enumerate() {
         if i > 0 {
             print!(" ");
@@ -588,15 +582,15 @@ pub fn display(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     Ok(Value::Nil)
 }
 
-pub fn newline(_args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn newline(loc: Loc, _args: Vec<Value>) -> Result<Value> {
     println!();
     Ok(Value::Nil)
 }
 
-pub fn ffi_dlopen(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn ffi_dlopen(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::ArityMismatch {
-            loc: Loc::default(),
+            loc: loc,
             expected: 1,
             actual: args.len(),
         });
@@ -606,23 +600,23 @@ pub fn ffi_dlopen(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
             match libloading::Library::new(s) {
                 Ok(lib) => Ok(Value::Library(Rc::new(lib))),
                 Err(e) => Err(SelError::Runtime(
-                    Loc::default(),
+                    loc,
                     format!("dlopen failed: {}", e),
                 )),
             }
         }
     } else {
         Err(SelError::Runtime(
-            Loc::default(),
+            loc,
             "ffi-dlopen requires a string".into(),
         ))
     }
 }
 
-pub fn ffi_dlsym(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn ffi_dlsym(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
         return Err(SelError::ArityMismatch {
-            loc: Loc::default(),
+            loc: loc,
             expected: 2,
             actual: args.len(),
         });
@@ -631,7 +625,7 @@ pub fn ffi_dlsym(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         Value::Library(l) => l,
         _ => {
             return Err(SelError::Runtime(
-                Loc::default(),
+                loc,
                 "ffi-dlsym requires a library".into(),
             ));
         }
@@ -640,7 +634,7 @@ pub fn ffi_dlsym(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         Value::String(s) => s,
         _ => {
             return Err(SelError::Runtime(
-                Loc::default(),
+                loc,
                 "ffi-dlsym requires a string symbol name".into(),
             ));
         }
@@ -656,26 +650,20 @@ pub fn ffi_dlsym(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                 Ok(Value::Pointer(ptr))
             }
             Err(e) => Err(SelError::Runtime(
-                Loc::default(),
+                loc,
                 format!("dlsym failed: {}", e),
             )),
         }
     }
 }
 
-pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-    if args.len() != 4 {
-        return Err(SelError::Runtime(
-            Loc::default(),
-            "ffi-call requires (ptr, ret_type, arg_types, arg_vals)".into(),
-        ));
-    }
+pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
 
     let ptr = match args[0] {
         Value::Pointer(p) => p,
         _ => {
             return Err(SelError::Runtime(
-                Loc::default(),
+                loc,
                 "ffi-call requires a pointer".into(),
             ));
         }
@@ -685,7 +673,7 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         Value::Symbol(s) => crate::lookup(s),
         _ => {
             return Err(SelError::Runtime(
-                Loc::default(),
+                loc,
                 "ffi-call requires a return type symbol".into(),
             ));
         }
@@ -699,7 +687,7 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                     syms.push(crate::lookup(*s));
                 } else {
                     return Err(SelError::Runtime(
-                        Loc::default(),
+                        loc,
                         format!("arg_types must be a list of symbols {v}"),
                     ));
                 }
@@ -709,7 +697,7 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         Value::Nil => Vec::new(),
         _ => {
             return Err(SelError::Runtime(
-                Loc::default(),
+                loc,
                 "arg_types must be a list".into(),
             ));
         }
@@ -720,7 +708,7 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         Value::Nil => Vec::new(),
         _ => {
             return Err(SelError::Runtime(
-                Loc::default(),
+                loc,
                 "arg_vals must be a list".into(),
             ));
         }
@@ -738,7 +726,7 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         "*u8" => libffi::middle::Type::pointer(),
         _ => {
             return Err(SelError::Runtime(
-                Loc::default(),
+                loc,
                 format!("Unsupported return type: {}", ret_type_sym),
             ));
         }
@@ -757,7 +745,7 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
             "*u8" => libffi::middle::Type::pointer(),
             _ => {
                 return Err(SelError::Runtime(
-                    Loc::default(),
+                    loc,
                     format!("Unsupported arg type: {}", sym),
                 ));
             }
@@ -791,7 +779,7 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                     Value::Float(f) => *f as i32,
                     _ => {
                         return Err(SelError::Runtime(
-                            Loc::default(),
+                            loc,
                             format!("Expected integer for arg {}", i),
                         ));
                     }
@@ -816,7 +804,7 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                     }
                     _ => {
                         return Err(SelError::Runtime(
-                            Loc::default(),
+                            loc,
                             format!("Expected boolean for arg {}", i),
                         ));
                     }
@@ -829,7 +817,7 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                     Value::Float(f) => *f as i64,
                     _ => {
                         return Err(SelError::Runtime(
-                            Loc::default(),
+                            loc,
                             format!("Expected integer for arg {}", i),
                         ));
                     }
@@ -842,7 +830,7 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                     Value::Float(f) => *f as u32,
                     _ => {
                         return Err(SelError::Runtime(
-                            Loc::default(),
+                            loc,
                             format!("Expected integer for arg {}", i),
                         ));
                     }
@@ -855,7 +843,7 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                     Value::Float(f) => *f as u64,
                     _ => {
                         return Err(SelError::Runtime(
-                            Loc::default(),
+                            loc,
                             format!("Expected integer for arg {}", i),
                         ));
                     }
@@ -868,7 +856,7 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                     Value::Float(f) => *f as f32,
                     _ => {
                         return Err(SelError::Runtime(
-                            Loc::default(),
+                            loc,
                             format!("Expected float for arg {}", i),
                         ));
                     }
@@ -881,7 +869,7 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                     Value::Float(f) => *f,
                     _ => {
                         return Err(SelError::Runtime(
-                            Loc::default(),
+                            loc,
                             format!("Expected float for arg {}", i),
                         ));
                     }
@@ -904,7 +892,7 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
                     }
                     _ => {
                         return Err(SelError::Runtime(
-                            Loc::default(),
+                            loc,
                             format!("Expected string or pointer for arg {}", i),
                         ));
                     }
@@ -978,76 +966,52 @@ pub fn ffi_call(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     }
 }
 
-pub fn io_read_string(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(SelError::Runtime(
-            Loc::default(),
-            "io/read-string requires exactly 1 argument".into(),
-        ));
-    }
+pub fn io_read_string(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if let Value::String(path) = &args[0] {
         match std::fs::read_to_string(path) {
             Ok(content) => Ok(Value::String(content)),
             Err(e) => Err(SelError::Runtime(
-                Loc::default(),
+                loc,
                 format!("io/read-string failed: {}", e),
             )),
         }
     } else {
         Err(SelError::Runtime(
-            Loc::default(),
+            loc,
             "io/read-string requires a string argument".into(),
         ))
     }
 }
 
-pub fn io_write_string(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-    if args.len() != 2 {
-        return Err(SelError::Runtime(
-            Loc::default(),
-            "io/write-string requires exactly 2 arguments".into(),
-        ));
-    }
+pub fn io_write_string(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if let (Value::String(path), Value::String(content)) = (&args[0], &args[1]) {
         match std::fs::write(path, content) {
             Ok(_) => Ok(Value::Nil),
             Err(e) => Err(SelError::Runtime(
-                Loc::default(),
+                loc,
                 format!("io/write-string failed: {}", e),
             )),
         }
     } else {
         Err(SelError::Runtime(
-            Loc::default(),
+            loc,
             "io/write-string requires string arguments".into(),
         ))
     }
 }
 
-pub fn io_file_exists(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(SelError::Runtime(
-            Loc::default(),
-            "io/file-exists? requires exactly 1 argument".into(),
-        ));
-    }
+pub fn io_file_exists(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if let Value::String(path) = &args[0] {
         Ok(Value::Boolean(std::path::Path::new(path).exists()))
     } else {
         Err(SelError::Runtime(
-            Loc::default(),
+            loc,
             "io/file-exists? requires a string argument".into(),
         ))
     }
 }
 
-pub fn os_getenv(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(SelError::Runtime(
-            Loc::default(),
-            "os/getenv requires exactly 1 argument".into(),
-        ));
-    }
+pub fn os_getenv(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if let Value::String(key) = &args[0] {
         match std::env::var(key) {
             Ok(val) => Ok(Value::String(val)),
@@ -1055,19 +1019,13 @@ pub fn os_getenv(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
         }
     } else {
         Err(SelError::Runtime(
-            Loc::default(),
+            loc,
             "os/getenv requires a string argument".into(),
         ))
     }
 }
 
-pub fn os_args(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-    if !args.is_empty() {
-        return Err(SelError::Runtime(
-            Loc::default(),
-            "os/args takes no arguments".into(),
-        ));
-    }
+pub fn os_args(loc: Loc, args: Vec<Value>) -> Result<Value> {
     let args_vec = std::env::args()
         .skip(1)
         .map(Value::String)
@@ -1075,19 +1033,14 @@ pub fn os_args(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
     Ok(Value::List(args_vec))
 }
 
-pub fn os_orig_args(args: Vec<Value>, _env: Rc<RefCell<Env>>) -> Result<Value> {
-    if !args.is_empty() {
-        return Err(SelError::Runtime(
-            Loc::default(),
-            "os/args takes no arguments".into(),
-        ));
-    }
+pub fn os_orig_args(loc: Loc, args: Vec<Value>) -> Result<Value> {
     let args_vec = std::env::args().map(Value::String).collect::<Vec<_>>();
     Ok(Value::List(args_vec))
 }
 
 pub fn load(env: Rc<RefCell<Env>>) {
-    let mut e = env.borrow_mut();
+
+    // let mut e = env.borrow_mut();
     // e.insert(intern("+"), Value::NativeFunction(sum));
     // e.insert(intern("-"), Value::NativeFunction(sub));
     // e.insert(intern("*"), Value::NativeFunction(mul));
@@ -1095,53 +1048,49 @@ pub fn load(env: Rc<RefCell<Env>>) {
     // e.insert(intern("mod"), Value::NativeFunction(modulo));
 
     // e.insert(intern("eq?"), Value::NativeFunction(is_equal));
+    // e.insert(intern("="), Value::NativeFunction(num_eq));
+    // e.insert(intern("!="), Value::NativeFunction(num_noteq));
+    // e.insert(intern("<"), Value::NativeFunction(num_lt));
+    // e.insert(intern(">"), Value::NativeFunction(num_gt));
+    // e.insert(intern("<="), Value::NativeFunction(num_lte));
+    // e.insert(intern(">="), Value::NativeFunction(num_gte));
+    // e.insert(intern("cons"), Value::NativeFunction(cons));
+    // e.insert(intern("car"), Value::NativeFunction(car));
+    // e.insert(intern("cdr"), Value::NativeFunction(cdr));
+    // e.insert(intern("nth"), Value::NativeFunction(nth));
+    // e.insert(intern("count"), Value::NativeFunction(count));
+    // e.insert(intern("list"), Value::NativeFunction(list));
+    // e.insert(intern("empty?"), Value::NativeFunction(empty));
+    // e.insert(intern("nil?"), Value::NativeFunction(is_nil));
+    // e.insert(intern("list?"), Value::NativeFunction(is_list));
+    // e.insert(intern("number?"), Value::NativeFunction(is_number));
+    // e.insert(intern("string?"), Value::NativeFunction(is_string));
+    // e.insert(intern("symbol?"), Value::NativeFunction(is_symbol));
+    // e.insert(intern("function?"), Value::NativeFunction(is_function));
+    // e.insert(intern("type-of"), Value::NativeFunction(type_of));
+    // e.insert(intern("error"), Value::NativeFunction(error));
+    // e.insert(intern("not"), Value::NativeFunction(not));
+    // e.insert(intern("display"), Value::NativeFunction(display));
+    // e.insert(intern("println"), Value::NativeFunction(display_newline));
+    // e.insert(intern("newline"), Value::NativeFunction(newline));
+    // e.insert(intern("ffi-dlopen"), Value::NativeFunction(ffi_dlopen));
+    // e.insert(intern("ffi-dlsym"), Value::NativeFunction(ffi_dlsym));
+    // e.insert(intern("ffi-call"), Value::NativeFunction(ffi_call));
 
-    e.insert(intern("="), Value::NativeFunction(num_eq));
-    e.insert(intern("!="), Value::NativeFunction(num_noteq));
-    e.insert(intern("<"), Value::NativeFunction(num_lt));
-    e.insert(intern(">"), Value::NativeFunction(num_gt));
-    e.insert(intern("<="), Value::NativeFunction(num_lte));
-    e.insert(intern(">="), Value::NativeFunction(num_gte));
+    // e.insert(
+    // intern("io/read-string"),
+    // Value::NativeFunction(io_read_string),
+    // );
+    // e.insert(
+    // intern("io/write-string"),
+    // Value::NativeFunction(io_write_string),
+    // );
+    // e.insert(
+    // intern("io/file-exists?"),
+    // Value::NativeFunction(io_file_exists),
+    // );
+    // e.insert(intern("os/getenv"), Value::NativeFunction(os_getenv));
+    // e.insert(intern("os/args"), Value::NativeFunction(os_args));
+    // e.insert(intern("os/orig-args"), Value::NativeFunction(os_orig_args));
 
-    e.insert(intern("cons"), Value::NativeFunction(cons));
-    e.insert(intern("car"), Value::NativeFunction(car));
-    e.insert(intern("cdr"), Value::NativeFunction(cdr));
-    e.insert(intern("nth"), Value::NativeFunction(nth));
-    e.insert(intern("count"), Value::NativeFunction(count));
-    e.insert(intern("list"), Value::NativeFunction(list));
-    e.insert(intern("empty?"), Value::NativeFunction(empty));
-
-    e.insert(intern("nil?"), Value::NativeFunction(is_nil));
-    e.insert(intern("list?"), Value::NativeFunction(is_list));
-    e.insert(intern("number?"), Value::NativeFunction(is_number));
-    e.insert(intern("string?"), Value::NativeFunction(is_string));
-    e.insert(intern("symbol?"), Value::NativeFunction(is_symbol));
-    e.insert(intern("function?"), Value::NativeFunction(is_function));
-    e.insert(intern("type-of"), Value::NativeFunction(type_of));
-    e.insert(intern("error"), Value::NativeFunction(error));
-
-    e.insert(intern("not"), Value::NativeFunction(not));
-    e.insert(intern("display"), Value::NativeFunction(display));
-    e.insert(intern("println"), Value::NativeFunction(display_newline));
-    e.insert(intern("newline"), Value::NativeFunction(newline));
-
-    e.insert(intern("ffi-dlopen"), Value::NativeFunction(ffi_dlopen));
-    e.insert(intern("ffi-dlsym"), Value::NativeFunction(ffi_dlsym));
-    e.insert(intern("ffi-call"), Value::NativeFunction(ffi_call));
-
-    e.insert(
-        intern("io/read-string"),
-        Value::NativeFunction(io_read_string),
-    );
-    e.insert(
-        intern("io/write-string"),
-        Value::NativeFunction(io_write_string),
-    );
-    e.insert(
-        intern("io/file-exists?"),
-        Value::NativeFunction(io_file_exists),
-    );
-    e.insert(intern("os/getenv"), Value::NativeFunction(os_getenv));
-    e.insert(intern("os/args"), Value::NativeFunction(os_args));
-    e.insert(intern("os/orig-args"), Value::NativeFunction(os_orig_args));
 }

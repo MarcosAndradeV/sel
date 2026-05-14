@@ -141,6 +141,176 @@ impl VM {
                     let args: Vec<Value> = self.stack.drain(start..).collect();
                     self.stack.push(internal::sub(loc, args)?)
                 }
+                OpCode::NumEq(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::num_eq(loc, args)?)
+                }
+                OpCode::NumNotEq(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::num_noteq(loc, args)?)
+                }
+                OpCode::NumLt(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::num_lt(loc, args)?)
+                }
+                OpCode::NumGt(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::num_gt(loc, args)?)
+                }
+                OpCode::NumLte(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::num_lte(loc, args)?)
+                }
+                OpCode::NumGte(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::num_gte(loc, args)?)
+                }
+                OpCode::Cons(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::cons(loc, args)?)
+                }
+                OpCode::Car(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::car(loc, args)?)
+                }
+                OpCode::Cdr(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::cdr(loc, args)?)
+                }
+                OpCode::Nth(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::nth(loc, args)?)
+                }
+                OpCode::Count(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::count(loc, args)?)
+                }
+                OpCode::ListFunc(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::list(loc, args)?)
+                }
+                OpCode::Empty(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::empty(loc, args)?)
+                }
+                OpCode::IsNil(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::is_nil(loc, args)?)
+                }
+                OpCode::IsList(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::is_list(loc, args)?)
+                }
+                OpCode::IsNumber(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::is_number(loc, args)?)
+                }
+                OpCode::IsString(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::is_string(loc, args)?)
+                }
+                OpCode::IsSymbol(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::is_symbol(loc, args)?)
+                }
+                OpCode::IsFunction(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::is_function(loc, args)?)
+                }
+                OpCode::TypeOf(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::type_of(loc, args)?)
+                }
+                OpCode::Error(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::error(loc, args)?)
+                }
+                OpCode::Not(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::not(loc, args)?)
+                }
+                OpCode::Display(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::display(loc, args)?)
+                }
+                OpCode::DisplayNewline(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::display_newline(loc, args)?)
+                }
+                OpCode::Newline(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::newline(loc, args)?)
+                }
+                OpCode::FfiDlopen(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::ffi_dlopen(loc, args)?)
+                }
+                OpCode::FfiDlsym(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::ffi_dlsym(loc, args)?)
+                }
+                OpCode::FfiCall(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::ffi_call(loc, args)?)
+                }
+                OpCode::IoReadString(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::io_read_string(loc, args)?)
+                }
+                OpCode::IoWriteString(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::io_write_string(loc, args)?)
+                }
+                OpCode::IoFileExists(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::io_file_exists(loc, args)?)
+                }
+                OpCode::OsGetenv(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::os_getenv(loc, args)?)
+                }
+                OpCode::OsArgs(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::os_args(loc, args)?)
+                }
+                OpCode::OsOrigArgs(arity) => {
+                    let start = self.stack.len() - arity as usize;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::os_orig_args(loc, args)?)
+                }
                 OpCode::Constant(idx) => {
                     self.stack.push(frame.chunk.constants[idx].clone());
                 }
