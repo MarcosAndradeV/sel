@@ -1,6 +1,7 @@
 use crate::compiler::*;
 use crate::diagnostics::*;
 use crate::lexer::*;
+use crate::types::Record;
 use crate::types::intern;
 use crate::types::lookup;
 
@@ -16,8 +17,10 @@ pub fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
     *pos += 1;
 
     match t.kind {
+        TokenKind::OpenCurly => parse_record(tokens, pos, t),
         TokenKind::OpenParen => parse_list(tokens, pos, t),
         TokenKind::CloseParen => Err(SelError::SyntaxError(t.loc, format!("Unexpected `)`"))),
+        TokenKind::CloseCurly => Err(SelError::SyntaxError(t.loc, format!("Unexpected `}}`"))),
         TokenKind::Quote => {
             let expr = parse_expr(tokens, pos)?;
             Ok(Ast::Quote(t.loc, Box::new(expr)))
@@ -67,6 +70,34 @@ pub fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
             _ => Ok(Ast::Symbol(t.loc, intern(&t.source))),
         },
     }
+}
+
+fn parse_record(tokens: &[Token], pos: &mut usize, open_token: &Token) -> Result<Ast> {
+    let mut record = Vec::new();
+    while *pos < tokens.len() && tokens[*pos].kind != TokenKind::CloseCurly {
+        let sym = match parse_expr(tokens, pos)? {
+            Ast::Symbol(_, sym) => sym,
+            ast => {
+                return Err(SelError::SyntaxError(
+                    ast.loc(),
+                    format!("Expected identifier-value pair in records found {ast}"),
+                ));
+            }
+        };
+        let v = match parse_expr(tokens, pos)? {
+            Ast::List(loc, list) => optimize_ast(list, loc)?,
+            ast => ast,
+        };
+        record.push((sym, v));
+    }
+    if *pos >= tokens.len() {
+        return Err(SelError::SyntaxError(
+            open_token.loc,
+            "Missing closing curly brace".into(),
+        ));
+    }
+    *pos += 1; // consume '}'
+    Ok(Ast::Record(open_token.loc, record))
 }
 
 fn parse_list(tokens: &[Token], pos: &mut usize, open_token: &Token) -> Result<Ast> {
@@ -362,6 +393,7 @@ pub enum Ast {
     String(Loc, String),
     Boolean(Loc, bool),
     List(Loc, Vec<Self>),
+    Record(Loc, Vec<(u32, Self)>),
 }
 
 impl Ast {
@@ -388,6 +420,7 @@ impl Ast {
             Ast::Boolean(loc, ..) => *loc,
             Ast::List(loc, ..) => *loc,
             Ast::Bind(loc, ..) => *loc,
+            Ast::Record(loc, ..) => *loc,
         }
     }
 }
@@ -415,6 +448,7 @@ impl std::fmt::Display for Ast {
             Ast::String(_, s) => write!(f, "\"{s}\""),
             Ast::Boolean(_, b) => write!(f, "{}", if *b { "#t" } else { "#f" }),
             Ast::List(..) => write!(f, "<list>"),
+            Ast::Record(..) => write!(f, "<record>"),
             Ast::Bind(_, id) => write!(f, "&{}", lookup(*id)),
         }
     }
@@ -523,6 +557,12 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
             (loc, Value::List(list))
         }
         Ast::Bind(loc, id) => (loc, Value::Symbol(intern(&format!("&{}", lookup(id))))),
+        Ast::Record(loc, record) => (
+            loc,
+            Value::Record(
+                Record::new().populate(record.into_iter().map(|(k, ast)| (k, ast_to_value(ast).1))),
+            ),
+        ),
     }
 }
 

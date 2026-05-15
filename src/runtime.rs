@@ -8,6 +8,7 @@ use crate::diagnostics::*;
 use crate::internal;
 use crate::internal::value_type_name;
 use crate::lexer::Loc;
+use crate::types::Record;
 use crate::types::intern;
 use crate::types::lookup;
 
@@ -112,6 +113,41 @@ impl VM {
             let (loc, instruction) = frame.chunk.code[frame.ip].clone();
             frame.ip += 1;
             match instruction {
+                OpCode::MakeRecord => {
+                    let v = Value::Record(Record::new());
+                    self.stack.push(v)
+                }
+                OpCode::AssocRecord(sym) => {
+                    let value = self.stack.pop().unwrap();
+                    if let Value::Record(mut rec) = self.stack.pop().unwrap() {
+                        rec.fields_mut().insert(sym, value);
+                        self.stack.push(Value::Record(rec))
+                    } else {
+                        unreachable!();
+                    }
+                }
+                OpCode::GetRecord(field) => {
+                    if let Value::Record(mut rec) = self.stack.pop().unwrap() {
+                        let Some(value) = rec.fields_mut().get(&field).cloned() else {
+                            return Err(SelError::Runtime(loc, format!("record does not have field {}", lookup(field))));
+                        };
+                        self.stack.push(value);
+                    } else {
+                        return Err(SelError::Runtime(loc, "(rget <record> <symbol>) requires record".into()));
+                    }
+                }
+                OpCode::SetRecord(field) => {
+                    let value = self.stack.pop().unwrap();
+                    if let Value::Record(mut rec) = self.stack.pop().unwrap() {
+                        let Some(field) = rec.fields_mut().get_mut(&field) else {
+                            return Err(SelError::Runtime(loc, format!("record does not have field {}", lookup(field))));
+                        };
+                        *field = value;
+                        self.stack.push(Value::Record(rec));
+                    } else {
+                        return Err(SelError::Runtime(loc, "(rget <record> <symbol>) requires record".into()));
+                    }
+                }
                 OpCode::Eq(arity) => {
                     let start = self.stack.len() - arity as usize;
                     let args: Vec<Value> = self.stack.drain(start..).collect();

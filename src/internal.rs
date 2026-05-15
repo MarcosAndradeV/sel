@@ -281,6 +281,7 @@ pub fn value_type_name(v: &Value) -> &str {
         Value::Macro { .. } => "macro",
         Value::Pointer(_) => "pointer",
         Value::Library(_) => "library",
+        Value::Record(_) => "record",
     }
 }
 

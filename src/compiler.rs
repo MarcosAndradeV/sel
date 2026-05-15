@@ -6,7 +6,7 @@ use crate::diagnostics::*;
 use crate::lexer::Lexer;
 use crate::lexer::Loc;
 use crate::runtime::*;
-use crate::types::has_symbol;
+use crate::types::Record;
 use crate::types::lookup;
 
 type Result<T> = std::result::Result<T, SelError>;
@@ -20,6 +20,7 @@ pub enum Value {
     Boolean(bool),
     Symbol(u32),
     List(Vec<Value>),
+    Record(Record<Self>),
     Closure {
         params: Vec<u32>,
         chunk: Rc<Chunk>,
@@ -57,6 +58,19 @@ fn format_value(val: &Value) -> String {
                 s.push_str(&format_value(v));
             }
             s.push(')');
+            s
+        }
+        Value::Record(r) => {
+            let mut s = String::from("{");
+            for (i, (k, v)) in r.fields().iter().enumerate() {
+                if i > 0 {
+                    s.push(' ');
+                }
+                s.push_str(&lookup(*k));
+                s.push(' ');
+                s.push_str(&format_value(v));
+            }
+            s.push('}');
             s
         }
         Value::Closure { .. } => "<closure>".to_string(),
@@ -239,9 +253,10 @@ impl<'a> Compiler<'a> {
                 }
 
                 let mut iter = list.into_iter();
-                if let Some(next) = iter.next() {
-                    match next {
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "eq?") => {
+                let next = iter.next();
+                if let Some(Ast::Symbol(loc, sym)) = next {
+                    match lookup(sym).as_str() {
+                        "eq?" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -250,7 +265,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::Eq(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "mod") => {
+                        "mod" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -265,7 +280,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::Mod));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "/") => {
+                        "/" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -280,7 +295,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::Div(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "-") => {
+                        "-" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -295,7 +310,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::Sub(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "+") => {
+                        "+" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -304,7 +319,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::Sum(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "*") => {
+                        "*" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -313,7 +328,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::Mul(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "=") => {
+                        "=" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -328,7 +343,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::NumEq(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "!=") => {
+                        "!=" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -343,7 +358,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::NumNotEq(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "<") => {
+                        "<" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -358,7 +373,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::NumLt(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, ">") => {
+                        ">" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -373,7 +388,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::NumGt(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "<=") => {
+                        "<=" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -388,7 +403,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::NumLte(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, ">=") => {
+                        ">=" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -403,7 +418,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::NumGte(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "cons") => {
+                        "cons" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -418,7 +433,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::Cons));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "car") => {
+                        "car" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -433,7 +448,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::Car));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "cdr") => {
+                        "cdr" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -448,7 +463,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::Cdr));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "nth") => {
+                        "nth" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -463,7 +478,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::Nth));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "count") => {
+                        "count" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -478,7 +493,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::Count));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "list") => {
+                        "list" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -487,7 +502,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::MakeList(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "empty?") => {
+                        "empty?" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -502,7 +517,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::Empty));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "nil?") => {
+                        "nil?" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -517,7 +532,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::IsNil));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "list?") => {
+                        "list?" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -532,7 +547,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::IsList));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "number?") => {
+                        "number?" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -547,7 +562,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::IsNumber));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "string?") => {
+                        "string?" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -562,7 +577,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::IsString));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "symbol?") => {
+                        "symbol?" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -577,7 +592,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::IsSymbol));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "function?") => {
+                        "function?" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -592,7 +607,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::IsFunction));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "type-of") => {
+                        "type-of" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -607,7 +622,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::TypeOf));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "error") => {
+                        "error" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -616,7 +631,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::Error(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "not") => {
+                        "not" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -631,7 +646,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::Not(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "display") => {
+                        "display" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -640,7 +655,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::Display(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "println") => {
+                        "println" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -649,7 +664,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::DisplayNewline(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "newline") => {
+                        "newline" => {
                             if iter.next().is_some() {
                                 return Err(SelError::SyntaxError(
                                     loc,
@@ -659,7 +674,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::Newline));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "ffi-dlopen") => {
+                        "ffi-dlopen" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -674,7 +689,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::FfiDlopen(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "ffi-dlsym") => {
+                        "ffi-dlsym" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -689,7 +704,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::FfiDlsym(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "ffi-call") => {
+                        "ffi-call" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -704,7 +719,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::FfiCall(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "io/read-string") => {
+                        "io/read-string" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -719,7 +734,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::IoReadString(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "io/write-string") => {
+                        "io/write-string" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -734,7 +749,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::IoWriteString(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "io/file-exists?") => {
+                        "io/file-exists?" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -749,7 +764,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::IoFileExists(arg_count)));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "os/getenv") => {
+                        "os/getenv" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -764,7 +779,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::OsGetenv));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "os/args") => {
+                        "os/args" => {
                             if iter.next().is_some() {
                                 return Err(SelError::SyntaxError(
                                     loc,
@@ -774,7 +789,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::OsArgs));
                             return Ok(());
                         }
-                        Ast::Symbol(loc, sym) if has_symbol(sym, "os/orig-args") => {
+                        "os/orig-args" => {
                             if iter.next().is_some() {
                                 return Err(SelError::SyntaxError(
                                     loc,
@@ -784,9 +799,57 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::OsOrigArgs));
                             return Ok(());
                         }
+                        "rget" => {
+                            let Some(record) = iter.next() else {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 2 arguments for rget".into(),
+                                ));
+                            };
+                            let Some(Ast::Symbol(_, field)) = iter.next() else {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected symbol in rget".into(),
+                                ));
+                            };
+                            self.compile(record)?;
+                            self.chunk.write((loc, OpCode::GetRecord(field)));
+                            return Ok(());
+                        }
+                        "rset" => {
+                            let Some(record) = iter.next() else {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 3 arguments for rset".into(),
+                                ));
+                            };
+                            let Some(Ast::Symbol(_, field)) = iter.next() else {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected symbol in rset".into(),
+                                ));
+                            };
+                            self.compile(record)?;
 
-                        _ => self.compile(next)?,
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 1 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 3 arguments for rset".into(),
+                                ));
+                            }
+
+                            self.chunk.write((loc, OpCode::SetRecord(field)));
+                            return Ok(());
+                        }
+                        _ => self.compile(Ast::Symbol(loc, sym))?,
                     }
+                } else if let Some(next) = next{
+                    self.compile(next)?;
                 }
 
                 let mut arg_count = 0;
@@ -795,6 +858,13 @@ impl<'a> Compiler<'a> {
                     arg_count += 1;
                 }
                 self.chunk.write((loc, OpCode::Call(arg_count)));
+            }
+            Ast::Record(loc, record) => {
+                self.chunk.write((loc, OpCode::MakeRecord));
+                for (sym, arg) in record {
+                    self.compile(arg)?;
+                    self.chunk.write((loc, OpCode::AssocRecord(sym)));
+                }
             }
             Ast::Quote(loc, expr) => {
                 let val = ast_to_value(*expr).1;
@@ -928,6 +998,10 @@ pub enum OpCode {
     Return,
     BuildEnv(Vec<u32>),
     PopEnv,
+    MakeRecord,
+    AssocRecord(u32),
+    GetRecord(u32),
+    SetRecord(u32),
     MakeList(usize),
     ConcatList(usize),
     Sum(u32),

@@ -72,6 +72,8 @@ impl From<NumberBase> for u32 {
 pub enum TokenKind {
     OpenParen,
     CloseParen,
+    OpenCurly,
+    CloseCurly,
     Quote,
     QuasiQuote,
     Unquote,
@@ -151,6 +153,22 @@ impl<'a> Lexer<'a> {
         };
 
         match c {
+            '{' => {
+                self.advance();
+                Ok(Some(Token {
+                    kind: TokenKind::OpenCurly,
+                    source: "{".into(),
+                    loc: start_loc,
+                }))
+            }
+            '}' => {
+                self.advance();
+                Ok(Some(Token {
+                    kind: TokenKind::CloseCurly,
+                    source: "}".into(),
+                    loc: start_loc,
+                }))
+            }
             '(' => {
                 self.advance();
                 Ok(Some(Token {
@@ -260,7 +278,7 @@ impl<'a> Lexer<'a> {
             _ => {
                 let mut ident = String::new();
                 while let Some(&ch) = self.peek() {
-                    if ch.is_whitespace() || "()\"'`,;".contains(ch) {
+                    if ch.is_whitespace() || "{}()\"'`,;".contains(ch) {
                         break;
                     }
                     ident.push(self.advance().unwrap());
