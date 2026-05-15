@@ -38,3 +38,7 @@ pub fn intern(name: &str) -> u32 {
 pub fn lookup(id: u32) -> String {
     SYMBOLS.with(|s| s.borrow().lookup(id))
 }
+
+pub fn has_symbol<'a>(id: u32, name: &str) -> bool {
+    SYMBOLS.with(|s| s.borrow().vec.get(id as usize).is_some_and(|s| s.as_str() == name))
+}

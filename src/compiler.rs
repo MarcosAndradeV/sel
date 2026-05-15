@@ -6,6 +6,7 @@ use crate::diagnostics::*;
 use crate::lexer::Lexer;
 use crate::lexer::Loc;
 use crate::runtime::*;
+use crate::types::has_symbol;
 use crate::types::lookup;
 
 type Result<T> = std::result::Result<T, SelError>;
@@ -19,7 +20,6 @@ pub enum Value {
     Boolean(bool),
     Symbol(u32),
     List(Vec<Value>),
-    NativeFunction(fn(Vec<Value>, Rc<RefCell<Env>>) -> Result<Value>),
     Closure {
         params: Vec<u32>,
         chunk: Rc<Chunk>,
@@ -59,7 +59,6 @@ fn format_value(val: &Value) -> String {
             s.push(')');
             s
         }
-        Value::NativeFunction(_) => "<native function>".to_string(),
         Value::Closure { .. } => "<closure>".to_string(),
         Value::Macro { .. } => "<macro>".to_string(),
         Value::Pointer(p) => format!("<pointer: {:#x}>", p),
@@ -240,7 +239,555 @@ impl<'a> Compiler<'a> {
                 }
 
                 let mut iter = list.into_iter();
-                self.compile(iter.next().unwrap())?;
+                if let Some(next) = iter.next() {
+                    match next {
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "eq?") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            self.chunk.write((loc, OpCode::Eq(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "mod") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 2 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected 2 arguments for mod".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::Mod));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "/") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count == 0 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected at least 1 argument to /".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::Div(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "-") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count < 1 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected at least 1 argument for -".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::Sub(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "+") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            self.chunk.write((loc, OpCode::Sum(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "*") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            self.chunk.write((loc, OpCode::Mul(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "=") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count < 2 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected at least 2 arguments for =".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::NumEq(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "!=") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count < 2 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected at least 2 arguments for !=".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::NumNotEq(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "<") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count < 2 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected at least 2 arguments for <".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::NumLt(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, ">") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count < 2 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected at least 2 arguments for >".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::NumGt(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "<=") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count < 2 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected at least 2 arguments for <=".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::NumLte(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, ">=") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count < 2 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected at least 2 arguments for >=".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::NumGte(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "cons") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 2 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 2 arguments for cons".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::Cons));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "car") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 1 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 1 arguments for car".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::Car));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "cdr") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 1 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 1 arguments for cdr".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::Cdr));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "nth") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 2 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 2 arguments for nth".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::Nth));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "count") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 1 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 1 arguments for count".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::Count));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "list") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            self.chunk.write((loc, OpCode::MakeList(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "empty?") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 1 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 1 arguments for empty?".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::Empty));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "nil?") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 1 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 1 arguments for nil?".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::IsNil));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "list?") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 1 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 1 arguments for list?".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::IsList));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "number?") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 1 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 1 arguments for number?".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::IsNumber));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "string?") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 1 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 1 arguments for string?".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::IsString));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "symbol?") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 1 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 1 arguments for symbol?".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::IsSymbol));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "function?") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 1 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 1 arguments for function?".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::IsFunction));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "type-of") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 1 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 1 arguments for type-of".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::TypeOf));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "error") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            self.chunk.write((loc, OpCode::Error(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "not") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 1 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 1 arguments for not".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::Not(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "display") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            self.chunk.write((loc, OpCode::Display(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "println") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            self.chunk.write((loc, OpCode::DisplayNewline(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "newline") => {
+                            if iter.next().is_some() {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 0 arguments for newline".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::Newline));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "ffi-dlopen") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 1 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 1 arguments for ffi-dlopen".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::FfiDlopen(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "ffi-dlsym") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 2 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 2 arguments for ffi-dlsym".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::FfiDlsym(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "ffi-call") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 4 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 4 arguments for ffi-call".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::FfiCall(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "io/read-string") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 1 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 1 arguments for io/read-string".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::IoReadString(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "io/write-string") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 2 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 2 arguments for io/write-string".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::IoWriteString(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "io/file-exists?") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 1 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 1 arguments for io/file-exists?".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::IoFileExists(arg_count)));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "os/getenv") => {
+                            let mut arg_count = 0;
+                            for arg in iter {
+                                self.compile(arg)?;
+                                arg_count += 1;
+                            }
+                            if arg_count != 1 {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 1 arguments for os/getenv".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::OsGetenv));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "os/args") => {
+                            if iter.next().is_some() {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 0 arguments for os/args".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::OsArgs));
+                            return Ok(());
+                        }
+                        Ast::Symbol(loc, sym) if has_symbol(sym, "os/orig-args") => {
+                            if iter.next().is_some() {
+                                return Err(SelError::SyntaxError(
+                                    loc,
+                                    "Expected exactly 0 arguments for os/orig-args".into(),
+                                ));
+                            }
+                            self.chunk.write((loc, OpCode::OsOrigArgs));
+                            return Ok(());
+                        }
+
+                        _ => self.compile(next)?,
+                    }
+                }
 
                 let mut arg_count = 0;
                 for arg in iter {
@@ -383,6 +930,47 @@ pub enum OpCode {
     PopEnv,
     MakeList(usize),
     ConcatList(usize),
+    Sum(u32),
+    Sub(u32),
+    Mul(u32),
+    Div(u32),
+    Mod,
+    Eq(u32),
+    NumEq(u32),
+    NumNotEq(u32),
+    NumLt(u32),
+    NumGt(u32),
+    NumLte(u32),
+    NumGte(u32),
+    Cons,
+    Car,
+    Cdr,
+    Nth,
+    Count,
+    Empty,
+    IsNil,
+    IsList,
+    IsNumber,
+    IsString,
+    IsSymbol,
+    IsFunction,
+    TypeOf,
+    Error(u32),
+    Not(u32),
+    Display(u32),
+    DisplayNewline(u32),
+    Newline,
+    OsGetenv,
+    OsArgs,
+    OsOrigArgs,
+    FfiDlopen(u32),
+    FfiDlsym(u32),
+    FfiCall(u32),
+
+    // Should be native functions
+    IoReadString(u32),
+    IoWriteString(u32),
+    IoFileExists(u32),
 }
 
 #[derive(Debug, Clone)]
