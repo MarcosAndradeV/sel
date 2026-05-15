@@ -1,4 +1,3 @@
-
 use crate::lexer::{Loc, Token};
 use crate::types::lookup;
 
@@ -19,32 +18,7 @@ pub enum SelError {
     Internal(String),
     Runtime(Loc, String),
     TypeError(Loc, String),
-    Trace(String)
-}
-
-impl SelError {
-    pub fn with_loc(self, loc: Loc) -> SelError {
-        match self {
-            SelError::UnexpectedEOF(_) => SelError::UnexpectedEOF(loc),
-            SelError::UnexpectedToken(_, e) => SelError::UnexpectedToken(loc, e),
-            SelError::SyntaxError(_, e) => SelError::SyntaxError(loc, e),
-            SelError::UndefinedVariable(_, e) => SelError::UndefinedVariable(loc, e),
-            SelError::ArityMismatch {
-                loc: _,
-                expected,
-                actual,
-            } => SelError::ArityMismatch {
-                loc,
-                expected,
-                actual,
-            },
-            SelError::UnboundVariable(_, e) => SelError::UnboundVariable(loc, e),
-            SelError::UnterminatedString(_) => SelError::UnterminatedString(loc),
-            SelError::Runtime(_, e) => SelError::Runtime(loc, e),
-            SelError::TypeError(_, e) => SelError::TypeError(loc, e),
-            _ => self
-        }
-    }
+    Trace(String),
 }
 
 impl std::fmt::Display for SelError {
@@ -103,7 +77,9 @@ impl std::fmt::Display for SelError {
                 "syntax error at {}:\n\nCaused by:\n    Unterminated string",
                 loc
             ),
-            Self::Runtime(loc, s) => write!(f, "runtime error at {}:\n\nCaused by:\n    {}", loc, s),
+            Self::Runtime(loc, s) => {
+                write!(f, "runtime error at {}:\n\nCaused by:\n    {}", loc, s)
+            }
             Self::TypeError(loc, s) => write!(f, "type error at {}:\n\nCaused by:\n    {}", loc, s),
             Self::Internal(s) => write!(f, "internal error caused by:\n    {}", s),
             SelError::Trace(errs) => {

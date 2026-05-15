@@ -20,7 +20,6 @@ pub enum Value {
     Boolean(bool),
     Symbol(u32),
     List(Vec<Value>),
-    NativeFunction(fn(Vec<Value>, Rc<RefCell<Env>>) -> Result<Value>),
     Closure {
         params: Vec<u32>,
         chunk: Rc<Chunk>,
@@ -60,7 +59,6 @@ fn format_value(val: &Value) -> String {
             s.push(')');
             s
         }
-        Value::NativeFunction(_) => "<native function>".to_string(),
         Value::Closure { .. } => "<closure>".to_string(),
         Value::Macro { .. } => "<macro>".to_string(),
         Value::Pointer(p) => format!("<pointer: {:#x}>", p),
@@ -264,7 +262,7 @@ impl<'a> Compiler<'a> {
                                     "Expected 2 arguments for mod".into(),
                                 ));
                             }
-                            self.chunk.write((loc, OpCode::Mod(arg_count)));
+                            self.chunk.write((loc, OpCode::Mod));
                             return Ok(());
                         }
                         Ast::Symbol(loc, sym) if has_symbol(sym, "/") => {
@@ -417,7 +415,7 @@ impl<'a> Compiler<'a> {
                                     "Expected exactly 2 arguments for cons".into(),
                                 ));
                             }
-                            self.chunk.write((loc, OpCode::Cons(arg_count)));
+                            self.chunk.write((loc, OpCode::Cons));
                             return Ok(());
                         }
                         Ast::Symbol(loc, sym) if has_symbol(sym, "car") => {
@@ -432,7 +430,7 @@ impl<'a> Compiler<'a> {
                                     "Expected exactly 1 arguments for car".into(),
                                 ));
                             }
-                            self.chunk.write((loc, OpCode::Car(arg_count)));
+                            self.chunk.write((loc, OpCode::Car));
                             return Ok(());
                         }
                         Ast::Symbol(loc, sym) if has_symbol(sym, "cdr") => {
@@ -447,7 +445,7 @@ impl<'a> Compiler<'a> {
                                     "Expected exactly 1 arguments for cdr".into(),
                                 ));
                             }
-                            self.chunk.write((loc, OpCode::Cdr(arg_count)));
+                            self.chunk.write((loc, OpCode::Cdr));
                             return Ok(());
                         }
                         Ast::Symbol(loc, sym) if has_symbol(sym, "nth") => {
@@ -462,7 +460,7 @@ impl<'a> Compiler<'a> {
                                     "Expected exactly 2 arguments for nth".into(),
                                 ));
                             }
-                            self.chunk.write((loc, OpCode::Nth(arg_count)));
+                            self.chunk.write((loc, OpCode::Nth));
                             return Ok(());
                         }
                         Ast::Symbol(loc, sym) if has_symbol(sym, "count") => {
@@ -477,7 +475,7 @@ impl<'a> Compiler<'a> {
                                     "Expected exactly 1 arguments for count".into(),
                                 ));
                             }
-                            self.chunk.write((loc, OpCode::Count(arg_count)));
+                            self.chunk.write((loc, OpCode::Count));
                             return Ok(());
                         }
                         Ast::Symbol(loc, sym) if has_symbol(sym, "list") => {
@@ -486,7 +484,7 @@ impl<'a> Compiler<'a> {
                                 self.compile(arg)?;
                                 arg_count += 1;
                             }
-                            self.chunk.write((loc, OpCode::ListFunc(arg_count)));
+                            self.chunk.write((loc, OpCode::MakeList(arg_count)));
                             return Ok(());
                         }
                         Ast::Symbol(loc, sym) if has_symbol(sym, "empty?") => {
@@ -501,7 +499,7 @@ impl<'a> Compiler<'a> {
                                     "Expected exactly 1 arguments for empty?".into(),
                                 ));
                             }
-                            self.chunk.write((loc, OpCode::Empty(arg_count)));
+                            self.chunk.write((loc, OpCode::Empty));
                             return Ok(());
                         }
                         Ast::Symbol(loc, sym) if has_symbol(sym, "nil?") => {
@@ -516,7 +514,7 @@ impl<'a> Compiler<'a> {
                                     "Expected exactly 1 arguments for nil?".into(),
                                 ));
                             }
-                            self.chunk.write((loc, OpCode::IsNil(arg_count)));
+                            self.chunk.write((loc, OpCode::IsNil));
                             return Ok(());
                         }
                         Ast::Symbol(loc, sym) if has_symbol(sym, "list?") => {
@@ -531,7 +529,7 @@ impl<'a> Compiler<'a> {
                                     "Expected exactly 1 arguments for list?".into(),
                                 ));
                             }
-                            self.chunk.write((loc, OpCode::IsList(arg_count)));
+                            self.chunk.write((loc, OpCode::IsList));
                             return Ok(());
                         }
                         Ast::Symbol(loc, sym) if has_symbol(sym, "number?") => {
@@ -546,7 +544,7 @@ impl<'a> Compiler<'a> {
                                     "Expected exactly 1 arguments for number?".into(),
                                 ));
                             }
-                            self.chunk.write((loc, OpCode::IsNumber(arg_count)));
+                            self.chunk.write((loc, OpCode::IsNumber));
                             return Ok(());
                         }
                         Ast::Symbol(loc, sym) if has_symbol(sym, "string?") => {
@@ -561,7 +559,7 @@ impl<'a> Compiler<'a> {
                                     "Expected exactly 1 arguments for string?".into(),
                                 ));
                             }
-                            self.chunk.write((loc, OpCode::IsString(arg_count)));
+                            self.chunk.write((loc, OpCode::IsString));
                             return Ok(());
                         }
                         Ast::Symbol(loc, sym) if has_symbol(sym, "symbol?") => {
@@ -576,7 +574,7 @@ impl<'a> Compiler<'a> {
                                     "Expected exactly 1 arguments for symbol?".into(),
                                 ));
                             }
-                            self.chunk.write((loc, OpCode::IsSymbol(arg_count)));
+                            self.chunk.write((loc, OpCode::IsSymbol));
                             return Ok(());
                         }
                         Ast::Symbol(loc, sym) if has_symbol(sym, "function?") => {
@@ -591,7 +589,7 @@ impl<'a> Compiler<'a> {
                                     "Expected exactly 1 arguments for function?".into(),
                                 ));
                             }
-                            self.chunk.write((loc, OpCode::IsFunction(arg_count)));
+                            self.chunk.write((loc, OpCode::IsFunction));
                             return Ok(());
                         }
                         Ast::Symbol(loc, sym) if has_symbol(sym, "type-of") => {
@@ -606,7 +604,7 @@ impl<'a> Compiler<'a> {
                                     "Expected exactly 1 arguments for type-of".into(),
                                 ));
                             }
-                            self.chunk.write((loc, OpCode::TypeOf(arg_count)));
+                            self.chunk.write((loc, OpCode::TypeOf));
                             return Ok(());
                         }
                         Ast::Symbol(loc, sym) if has_symbol(sym, "error") => {
@@ -652,18 +650,13 @@ impl<'a> Compiler<'a> {
                             return Ok(());
                         }
                         Ast::Symbol(loc, sym) if has_symbol(sym, "newline") => {
-                            let mut arg_count = 0;
-                            for arg in iter {
-                                self.compile(arg)?;
-                                arg_count += 1;
-                            }
-                            if arg_count != 0 {
+                            if iter.next().is_some() {
                                 return Err(SelError::SyntaxError(
                                     loc,
                                     "Expected exactly 0 arguments for newline".into(),
                                 ));
                             }
-                            self.chunk.write((loc, OpCode::Newline(arg_count)));
+                            self.chunk.write((loc, OpCode::Newline));
                             return Ok(());
                         }
                         Ast::Symbol(loc, sym) if has_symbol(sym, "ffi-dlopen") => {
@@ -768,37 +761,27 @@ impl<'a> Compiler<'a> {
                                     "Expected exactly 1 arguments for os/getenv".into(),
                                 ));
                             }
-                            self.chunk.write((loc, OpCode::OsGetenv(arg_count)));
+                            self.chunk.write((loc, OpCode::OsGetenv));
                             return Ok(());
                         }
                         Ast::Symbol(loc, sym) if has_symbol(sym, "os/args") => {
-                            let mut arg_count = 0;
-                            for arg in iter {
-                                self.compile(arg)?;
-                                arg_count += 1;
-                            }
-                            if arg_count != 0 {
+                            if iter.next().is_some() {
                                 return Err(SelError::SyntaxError(
                                     loc,
                                     "Expected exactly 0 arguments for os/args".into(),
                                 ));
                             }
-                            self.chunk.write((loc, OpCode::OsArgs(arg_count)));
+                            self.chunk.write((loc, OpCode::OsArgs));
                             return Ok(());
                         }
                         Ast::Symbol(loc, sym) if has_symbol(sym, "os/orig-args") => {
-                            let mut arg_count = 0;
-                            for arg in iter {
-                                self.compile(arg)?;
-                                arg_count += 1;
-                            }
-                            if arg_count != 0 {
+                            if iter.next().is_some() {
                                 return Err(SelError::SyntaxError(
                                     loc,
                                     "Expected exactly 0 arguments for os/orig-args".into(),
                                 ));
                             }
-                            self.chunk.write((loc, OpCode::OsOrigArgs(arg_count)));
+                            self.chunk.write((loc, OpCode::OsOrigArgs));
                             return Ok(());
                         }
 
@@ -951,7 +934,7 @@ pub enum OpCode {
     Sub(u32),
     Mul(u32),
     Div(u32),
-    Mod(u32),
+    Mod,
     Eq(u32),
     NumEq(u32),
     NumNotEq(u32),
@@ -959,34 +942,35 @@ pub enum OpCode {
     NumGt(u32),
     NumLte(u32),
     NumGte(u32),
-    Cons(u32),
-    Car(u32),
-    Cdr(u32),
-    Nth(u32),
-    Count(u32),
-    ListFunc(u32),
-    Empty(u32),
-    IsNil(u32),
-    IsList(u32),
-    IsNumber(u32),
-    IsString(u32),
-    IsSymbol(u32),
-    IsFunction(u32),
-    TypeOf(u32),
+    Cons,
+    Car,
+    Cdr,
+    Nth,
+    Count,
+    Empty,
+    IsNil,
+    IsList,
+    IsNumber,
+    IsString,
+    IsSymbol,
+    IsFunction,
+    TypeOf,
     Error(u32),
     Not(u32),
     Display(u32),
     DisplayNewline(u32),
-    Newline(u32),
+    Newline,
+    OsGetenv,
+    OsArgs,
+    OsOrigArgs,
     FfiDlopen(u32),
     FfiDlsym(u32),
     FfiCall(u32),
+
+    // Should be native functions
     IoReadString(u32),
     IoWriteString(u32),
     IoFileExists(u32),
-    OsGetenv(u32),
-    OsArgs(u32),
-    OsOrigArgs(u32),
 }
 
 #[derive(Debug, Clone)]
