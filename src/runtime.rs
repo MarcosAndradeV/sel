@@ -128,24 +128,34 @@ impl VM {
                 }
                 OpCode::GetRecord(field) => {
                     if let Value::Record(mut rec) = self.stack.pop().unwrap() {
-                        let Some(value) = rec.fields_mut().get(&field).cloned() else {
-                            return Err(SelError::Runtime(loc, format!("record does not have field {}", lookup(field))));
-                        };
-                        self.stack.push(value);
+                        if let Some(value) = rec.fields_mut().get(&field).cloned() {
+                            self.stack.push(value);
+                        } else {
+                            self.stack.push(Value::Nil);
+                        }
                     } else {
-                        return Err(SelError::Runtime(loc, "(rget <record> <symbol>) requires record".into()));
+                        return Err(SelError::Runtime(
+                            loc,
+                            "(rget <record> <symbol>) requires record".into(),
+                        ));
                     }
                 }
                 OpCode::SetRecord(field) => {
                     let value = self.stack.pop().unwrap();
                     if let Value::Record(mut rec) = self.stack.pop().unwrap() {
                         let Some(field) = rec.fields_mut().get_mut(&field) else {
-                            return Err(SelError::Runtime(loc, format!("record does not have field {}", lookup(field))));
+                            return Err(SelError::Runtime(
+                                loc,
+                                format!("record does not have field {}", lookup(field)),
+                            ));
                         };
                         *field = value;
                         self.stack.push(Value::Record(rec));
                     } else {
-                        return Err(SelError::Runtime(loc, "(rget <record> <symbol>) requires record".into()));
+                        return Err(SelError::Runtime(
+                            loc,
+                            "(rget <record> <symbol>) requires record".into(),
+                        ));
                     }
                 }
                 OpCode::Eq(arity) => {
@@ -285,11 +295,11 @@ impl VM {
                 OpCode::Empty => match self.stack.pop().unwrap() {
                     Value::List(l) => self.stack.push(Value::Boolean(l.is_empty())),
                     Value::Nil => self.stack.push(Value::Boolean(true)),
+                    Value::String(s) => self.stack.push(Value::Boolean(s.is_empty())),
                     _ => return Err(SelError::Runtime(loc, "empty requires a list".into())),
                 },
                 OpCode::IsNil => match self.stack.pop().unwrap() {
                     Value::Nil => self.stack.push(Value::Boolean(true)),
-                    Value::List(l) if l.is_empty() => self.stack.push(Value::Boolean(true)),
                     _ => self.stack.push(Value::Boolean(false)),
                 },
                 OpCode::IsList => match self.stack.pop().unwrap() {
@@ -315,90 +325,19 @@ impl VM {
                 }
                 OpCode::IsFunction => {
                     let value = self.stack.pop().unwrap();
-                    self.stack
-                        .push(Value::Boolean(matches!(value, Value::Closure { .. })))
+                    self.stack.push(Value::Boolean(matches!(
+                        value,
+                        Value::NativeFunction(_) | Value::Closure { .. }
+                    )))
                 }
                 OpCode::TypeOf => {
                     let v = self.stack.pop().unwrap();
                     self.stack.push(Value::Symbol(intern(value_type_name(&v))))
                 }
-                OpCode::Error(arity) => {
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::error(loc, args)?)
-                }
                 OpCode::Not(arity) => {
                     let start = self.stack.len() - arity as usize;
                     let args: Vec<Value> = self.stack.drain(start..).collect();
                     self.stack.push(internal::not(loc, args)?)
-                }
-                OpCode::Display(arity) => {
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::display(loc, args)?)
-                }
-                OpCode::DisplayNewline(arity) => {
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::display_newline(loc, args)?)
-                }
-                OpCode::Newline => {
-                    println!();
-                    self.stack.push(Value::Nil)
-                }
-                OpCode::FfiDlopen(arity) => {
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::ffi_dlopen(loc, args)?)
-                }
-                OpCode::FfiDlsym(arity) => {
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::ffi_dlsym(loc, args)?)
-                }
-                OpCode::FfiCall(arity) => {
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::ffi_call(loc, args)?)
-                }
-                OpCode::IoReadString(arity) => {
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::io_read_string(loc, args)?)
-                }
-                OpCode::IoWriteString(arity) => {
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::io_write_string(loc, args)?)
-                }
-                OpCode::IoFileExists(arity) => {
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::io_file_exists(loc, args)?)
-                }
-                OpCode::OsGetenv => {
-                    if let Value::String(key) = self.stack.pop().unwrap() {
-                        match std::env::var(key) {
-                            Ok(val) => self.stack.push(Value::String(val)),
-                            Err(_) => self.stack.push(Value::Nil),
-                        }
-                    } else {
-                        return Err(SelError::Runtime(
-                            loc,
-                            "os/getenv requires a string argument".into(),
-                        ));
-                    }
-                }
-                OpCode::OsArgs => {
-                    let args_vec = std::env::args()
-                        .skip(1)
-                        .map(Value::String)
-                        .collect::<Vec<_>>();
-                    self.stack.push(Value::List(args_vec))
-                }
-                OpCode::OsOrigArgs => {
-                    let args_vec = std::env::args().map(Value::String).collect::<Vec<_>>();
-                    self.stack.push(Value::List(args_vec))
                 }
                 OpCode::Constant(idx) => {
                     self.stack.push(frame.chunk.constants[idx].clone());
@@ -501,6 +440,13 @@ impl VM {
                                     env: Rc::new(RefCell::new(call_env)),
                                 });
                             }
+                        }
+                        Value::NativeFunction(f) => {
+                            let mut args = Vec::with_capacity(arg_count);
+                            let start = self.stack.len() - arg_count;
+                            args.extend(self.stack.drain(start..));
+                            self.stack.pop();
+                            self.stack.push(f(loc, args)?);
                         }
                         Value::Macro { .. } => {
                             return Err(SelError::Runtime(

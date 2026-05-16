@@ -26,6 +26,7 @@ pub enum Value {
         chunk: Rc<Chunk>,
         env: Rc<RefCell<Env>>,
     },
+    NativeFunction(fn(loc: Loc, args: Vec<Value>) -> Result<Value>),
     Macro {
         params: Vec<u32>,
         chunk: Rc<Chunk>,
@@ -74,6 +75,7 @@ fn format_value(val: &Value) -> String {
             s
         }
         Value::Closure { .. } => "<closure>".to_string(),
+        Value::NativeFunction { .. } => "<function>".to_string(),
         Value::Macro { .. } => "<macro>".to_string(),
         Value::Pointer(p) => format!("<pointer: {:#x}>", p),
         Value::Library(_) => "<library>".to_string(),
@@ -622,15 +624,6 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::TypeOf));
                             return Ok(());
                         }
-                        "error" => {
-                            let mut arg_count = 0;
-                            for arg in iter {
-                                self.compile(arg)?;
-                                arg_count += 1;
-                            }
-                            self.chunk.write((loc, OpCode::Error(arg_count)));
-                            return Ok(());
-                        }
                         "not" => {
                             let mut arg_count = 0;
                             for arg in iter {
@@ -644,159 +637,6 @@ impl<'a> Compiler<'a> {
                                 ));
                             }
                             self.chunk.write((loc, OpCode::Not(arg_count)));
-                            return Ok(());
-                        }
-                        "display" => {
-                            let mut arg_count = 0;
-                            for arg in iter {
-                                self.compile(arg)?;
-                                arg_count += 1;
-                            }
-                            self.chunk.write((loc, OpCode::Display(arg_count)));
-                            return Ok(());
-                        }
-                        "println" => {
-                            let mut arg_count = 0;
-                            for arg in iter {
-                                self.compile(arg)?;
-                                arg_count += 1;
-                            }
-                            self.chunk.write((loc, OpCode::DisplayNewline(arg_count)));
-                            return Ok(());
-                        }
-                        "newline" => {
-                            if iter.next().is_some() {
-                                return Err(SelError::SyntaxError(
-                                    loc,
-                                    "Expected exactly 0 arguments for newline".into(),
-                                ));
-                            }
-                            self.chunk.write((loc, OpCode::Newline));
-                            return Ok(());
-                        }
-                        "ffi-dlopen" => {
-                            let mut arg_count = 0;
-                            for arg in iter {
-                                self.compile(arg)?;
-                                arg_count += 1;
-                            }
-                            if arg_count != 1 {
-                                return Err(SelError::SyntaxError(
-                                    loc,
-                                    "Expected exactly 1 arguments for ffi-dlopen".into(),
-                                ));
-                            }
-                            self.chunk.write((loc, OpCode::FfiDlopen(arg_count)));
-                            return Ok(());
-                        }
-                        "ffi-dlsym" => {
-                            let mut arg_count = 0;
-                            for arg in iter {
-                                self.compile(arg)?;
-                                arg_count += 1;
-                            }
-                            if arg_count != 2 {
-                                return Err(SelError::SyntaxError(
-                                    loc,
-                                    "Expected exactly 2 arguments for ffi-dlsym".into(),
-                                ));
-                            }
-                            self.chunk.write((loc, OpCode::FfiDlsym(arg_count)));
-                            return Ok(());
-                        }
-                        "ffi-call" => {
-                            let mut arg_count = 0;
-                            for arg in iter {
-                                self.compile(arg)?;
-                                arg_count += 1;
-                            }
-                            if arg_count != 4 {
-                                return Err(SelError::SyntaxError(
-                                    loc,
-                                    "Expected exactly 4 arguments for ffi-call".into(),
-                                ));
-                            }
-                            self.chunk.write((loc, OpCode::FfiCall(arg_count)));
-                            return Ok(());
-                        }
-                        "io/read-string" => {
-                            let mut arg_count = 0;
-                            for arg in iter {
-                                self.compile(arg)?;
-                                arg_count += 1;
-                            }
-                            if arg_count != 1 {
-                                return Err(SelError::SyntaxError(
-                                    loc,
-                                    "Expected exactly 1 arguments for io/read-string".into(),
-                                ));
-                            }
-                            self.chunk.write((loc, OpCode::IoReadString(arg_count)));
-                            return Ok(());
-                        }
-                        "io/write-string" => {
-                            let mut arg_count = 0;
-                            for arg in iter {
-                                self.compile(arg)?;
-                                arg_count += 1;
-                            }
-                            if arg_count != 2 {
-                                return Err(SelError::SyntaxError(
-                                    loc,
-                                    "Expected exactly 2 arguments for io/write-string".into(),
-                                ));
-                            }
-                            self.chunk.write((loc, OpCode::IoWriteString(arg_count)));
-                            return Ok(());
-                        }
-                        "io/file-exists?" => {
-                            let mut arg_count = 0;
-                            for arg in iter {
-                                self.compile(arg)?;
-                                arg_count += 1;
-                            }
-                            if arg_count != 1 {
-                                return Err(SelError::SyntaxError(
-                                    loc,
-                                    "Expected exactly 1 arguments for io/file-exists?".into(),
-                                ));
-                            }
-                            self.chunk.write((loc, OpCode::IoFileExists(arg_count)));
-                            return Ok(());
-                        }
-                        "os/getenv" => {
-                            let mut arg_count = 0;
-                            for arg in iter {
-                                self.compile(arg)?;
-                                arg_count += 1;
-                            }
-                            if arg_count != 1 {
-                                return Err(SelError::SyntaxError(
-                                    loc,
-                                    "Expected exactly 1 arguments for os/getenv".into(),
-                                ));
-                            }
-                            self.chunk.write((loc, OpCode::OsGetenv));
-                            return Ok(());
-                        }
-                        "os/args" => {
-                            if iter.next().is_some() {
-                                return Err(SelError::SyntaxError(
-                                    loc,
-                                    "Expected exactly 0 arguments for os/args".into(),
-                                ));
-                            }
-                            self.chunk.write((loc, OpCode::OsArgs));
-                            return Ok(());
-                        }
-                        "os/orig-args" => {
-                            if iter.next().is_some() {
-                                return Err(SelError::SyntaxError(
-                                    loc,
-                                    "Expected exactly 0 arguments for os/orig-args".into(),
-                                ));
-                            }
-                            self.chunk.write((loc, OpCode::OsOrigArgs));
                             return Ok(());
                         }
                         "rget" => {
@@ -1029,22 +869,7 @@ pub enum OpCode {
     IsSymbol,
     IsFunction,
     TypeOf,
-    Error(u32),
     Not(u32),
-    Display(u32),
-    DisplayNewline(u32),
-    Newline,
-    OsGetenv,
-    OsArgs,
-    OsOrigArgs,
-    FfiDlopen(u32),
-    FfiDlsym(u32),
-    FfiCall(u32),
-
-    // Should be native functions
-    IoReadString(u32),
-    IoWriteString(u32),
-    IoFileExists(u32),
 }
 
 #[derive(Debug, Clone)]

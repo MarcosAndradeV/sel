@@ -51,6 +51,7 @@ fn entry() -> Result<(), SelError> {
 }
 
 fn load_core_lib(env: Rc<RefCell<Env>>) {
+    internal::load(env.clone());
     // Load core library if exists
     {
         let core_src = include_str!("core.scm");

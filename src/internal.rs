@@ -1,8 +1,11 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::compiler::*;
 use crate::diagnostics::*;
 use crate::lexer::Loc;
+use crate::runtime::Env;
+use crate::types::intern;
 
 type Result<T> = std::result::Result<T, SelError>;
 
@@ -188,6 +191,22 @@ pub fn div(loc: Loc, args: Vec<Value>) -> Result<Value> {
     Ok(Value::Float(float_val))
 }
 
+pub fn modulo(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    let a = match args[0] {
+        Value::Integer(i) => i,
+        _ => {
+            return Err(SelError::Runtime(loc, "modulo requires integer".into()));
+        }
+    };
+    let b = match args[1] {
+        Value::Integer(i) => i,
+        _ => {
+            return Err(SelError::Runtime(loc, "modulo requires integer".into()));
+        }
+    };
+    Ok(Value::Integer(a % b))
+}
+
 fn compare_nums(loc: Loc, args: Vec<Value>, op: fn(f64, f64) -> bool) -> Result<Value> {
     let mut prev = match args[0] {
         Value::Integer(i) => i as f64,
@@ -277,7 +296,7 @@ pub fn value_type_name(v: &Value) -> &str {
         Value::Boolean(_) => "bool",
         Value::Symbol(_) => "symbol",
         Value::List(_) => "list",
-        Value::Closure { .. } => "function",
+        Value::Closure { .. } | Value::NativeFunction(_) => "function",
         Value::Macro { .. } => "macro",
         Value::Pointer(_) => "pointer",
         Value::Library(_) => "library",
@@ -311,6 +330,12 @@ pub fn display(_loc: Loc, args: Vec<Value>) -> Result<Value> {
 }
 
 pub fn ffi_dlopen(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 1 arguments for ffi-dlopen".into(),
+        ));
+    }
     if let Value::String(s) = &args[0] {
         unsafe {
             match libloading::Library::new(s) {
@@ -327,6 +352,12 @@ pub fn ffi_dlopen(loc: Loc, args: Vec<Value>) -> Result<Value> {
 }
 
 pub fn ffi_dlsym(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 2 arguments for ffi-dlsym".into(),
+        ));
+    }
     let lib = match &args[0] {
         Value::Library(l) => l,
         _ => {
@@ -361,6 +392,12 @@ pub fn ffi_dlsym(loc: Loc, args: Vec<Value>) -> Result<Value> {
 }
 
 pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 4 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 4 arguments for ffi-call".into(),
+        ));
+    }
     let ptr = match args[0] {
         Value::Pointer(p) => p,
         _ => {
@@ -660,6 +697,12 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
 }
 
 pub fn io_read_string(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::SyntaxError(
+            loc,
+            "Expected exactly 1 arguments for io/read-string".into(),
+        ));
+    }
     if let Value::String(path) = &args[0] {
         match std::fs::read_to_string(path) {
             Ok(content) => Ok(Value::String(content)),
@@ -677,6 +720,12 @@ pub fn io_read_string(loc: Loc, args: Vec<Value>) -> Result<Value> {
 }
 
 pub fn io_write_string(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(SelError::SyntaxError(
+            loc,
+            "Expected exactly 2 arguments for io/write-string".into(),
+        ));
+    }
     if let (Value::String(path), Value::String(content)) = (&args[0], &args[1]) {
         match std::fs::write(path, content) {
             Ok(_) => Ok(Value::Nil),
@@ -694,6 +743,12 @@ pub fn io_write_string(loc: Loc, args: Vec<Value>) -> Result<Value> {
 }
 
 pub fn io_file_exists(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::SyntaxError(
+            loc,
+            "Expected exactly 1 arguments for io/file-exists?".into(),
+        ));
+    }
     if let Value::String(path) = &args[0] {
         Ok(Value::Boolean(std::path::Path::new(path).exists()))
     } else {
@@ -702,4 +757,392 @@ pub fn io_file_exists(loc: Loc, args: Vec<Value>) -> Result<Value> {
             "io/file-exists? requires a string argument".into(),
         ))
     }
+}
+
+pub fn cons(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(SelError::SyntaxError(
+            loc,
+            "Expected exactly 2 arguments for cons".into(),
+        ));
+    }
+    let tail = args.pop().unwrap();
+    let head = args.pop().unwrap();
+    match tail {
+        Value::List(l) => {
+            let mut new_l = vec![head];
+            new_l.extend(l);
+            Ok(Value::List(new_l))
+        }
+        Value::Nil => Ok(Value::List(vec![head])),
+        _ => Ok(Value::List(vec![head, tail])),
+    }
+}
+
+pub fn car(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 1 arguments for car".into(),
+        ));
+    }
+    match args.pop().unwrap() {
+        Value::List(mut l) => {
+            if l.is_empty() {
+                return Err(SelError::Runtime(loc, "car on empty list".into()));
+            }
+            Ok(l.remove(0))
+        }
+        _ => return Err(SelError::Runtime(loc, "car requires a list".into())),
+    }
+}
+
+pub fn cdr(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 1 arguments for cdr".into(),
+        ));
+    }
+    match args.pop().unwrap() {
+        Value::List(mut l) => {
+            if l.is_empty() {
+                return Err(SelError::Runtime(loc, "cdr on empty list".into()));
+            }
+            l.remove(0);
+            Ok(if l.is_empty() {
+                Value::Nil
+            } else {
+                Value::List(l)
+            })
+        }
+        _ => return Err(SelError::Runtime(loc, "cdr requires a list".into())),
+    }
+}
+
+pub fn nth(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 2 arguments for nth".into(),
+        ));
+    }
+    let index = args.pop().unwrap();
+    match args.pop().unwrap() {
+        Value::List(mut l) => match index {
+            Value::Integer(index) => Ok(if (index as usize) < l.len() {
+                l.remove(index as usize)
+            } else {
+                Value::Nil
+            }),
+            _ => {
+                return Err(SelError::Runtime(loc, "nth requires a interger".into()));
+            }
+        },
+        _ => return Err(SelError::Runtime(loc, "nth requires a list".into())),
+    }
+}
+
+pub fn count(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 1 arguments for count".into(),
+        ));
+    }
+    match args.pop().unwrap() {
+        Value::List(l) => Ok(Value::Integer(l.len() as _)),
+        Value::String(s) => Ok(Value::Integer(s.len() as _)),
+        Value::Nil => Ok(Value::Integer(0)),
+        _ => return Err(SelError::Runtime(loc, "count requires a list".into())),
+    }
+}
+
+pub fn list(_loc: Loc, args: Vec<Value>) -> Result<Value> {
+    Ok(Value::List(args))
+}
+
+pub fn empty(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::SyntaxError(
+            loc,
+            "Expected exactly 1 arguments for empty?".into(),
+        ));
+    }
+    match args.pop().unwrap() {
+        Value::List(l) => Ok(Value::Boolean(l.is_empty())),
+        Value::Nil => Ok(Value::Boolean(true)),
+        Value::String(s) => Ok(Value::Boolean(s.is_empty())),
+        v => {
+            return Err(SelError::Runtime(
+                loc,
+                format!("empty requires a list got {v}"),
+            ));
+        }
+    }
+}
+
+pub fn rget(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 2 arguments for rget".into(),
+        ));
+    }
+    let index = args.pop().unwrap();
+    match args.pop().unwrap() {
+        Value::Record(r) => match index {
+            Value::Symbol(sym) => Ok(if let Some(v) = r.fields().get(&sym).cloned() {
+                v
+            } else {
+                Value::Nil
+            }),
+            _ => {
+                return Err(SelError::Runtime(loc, "rget requires a symbol".into()));
+            }
+        },
+        _ => return Err(SelError::Runtime(loc, "rget requires a record".into())),
+    }
+}
+
+pub fn rset(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 3 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 3 arguments for rset".into(),
+        ));
+    }
+    let value = args.pop().unwrap();
+    let index = args.pop().unwrap();
+    match args.pop().unwrap() {
+        Value::Record(mut r) => {
+            match index {
+                Value::Symbol(sym) => {
+                    if let Some(v) = r.fields_mut().get_mut(&sym) {
+                        *v = value;
+                    } else {
+                        return Ok(Value::Nil);
+                    }
+                }
+                _ => {
+                    return Err(SelError::Runtime(loc, "rget requires a symbol".into()));
+                }
+            }
+            return Ok(Value::Record(r));
+        }
+        _ => return Err(SelError::Runtime(loc, "rget requires a record".into())),
+    }
+}
+
+pub fn is_nil(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 1 arguments for nil?".into(),
+        ));
+    }
+    match args.pop().unwrap() {
+        Value::Nil => Ok(Value::Boolean(true)),
+        _ => Ok(Value::Boolean(false)),
+    }
+}
+
+pub fn is_list(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 1 arguments for list?".into(),
+        ));
+    }
+    match args.pop().unwrap() {
+        Value::List(_) => Ok(Value::Boolean(true)),
+        _ => Ok(Value::Boolean(false)),
+    }
+}
+
+pub fn is_number(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 1 arguments for number?".into(),
+        ));
+    }
+    match args.pop().unwrap() {
+        Value::Integer(_) => Ok(Value::Boolean(true)),
+        Value::Float(_) => Ok(Value::Boolean(true)),
+        _ => Ok(Value::Boolean(false)),
+    }
+}
+
+pub fn is_string(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 1 arguments for string?".into(),
+        ));
+    }
+    match args.pop().unwrap() {
+        Value::String(_) => Ok(Value::Boolean(true)),
+        _ => Ok(Value::Boolean(false)),
+    }
+}
+
+pub fn is_symbol(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 1 arguments for symbol?".into(),
+        ));
+    }
+    match args.pop().unwrap() {
+        Value::Symbol(_) => Ok(Value::Boolean(true)),
+        _ => Ok(Value::Boolean(false)),
+    }
+}
+
+pub fn is_record(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 1 arguments for record?".into(),
+        ));
+    }
+    match args.pop().unwrap() {
+        Value::Record(_) => Ok(Value::Boolean(true)),
+        _ => Ok(Value::Boolean(false)),
+    }
+}
+
+pub fn is_function(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 1 arguments for function?".into(),
+        ));
+    }
+    match args.pop().unwrap() {
+        Value::Closure { .. } => Ok(Value::Boolean(true)),
+        Value::NativeFunction(_) => Ok(Value::Boolean(true)),
+        _ => Ok(Value::Boolean(false)),
+    }
+}
+
+pub fn type_of(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 1 arguments for type-of".into(),
+        ));
+    }
+    let v = args.pop().unwrap();
+    Ok(Value::Symbol(intern(value_type_name(&v))))
+}
+
+pub fn newline(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 0 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 1 arguments for newline".into(),
+        ));
+    }
+    println!();
+    Ok(Value::Nil)
+}
+
+pub fn os_getenv(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::SyntaxError(
+            loc,
+            "Expected exactly 1 arguments for os/getenv".into(),
+        ));
+    }
+    if let Value::String(key) = &args[0] {
+        match std::env::var(key) {
+            Ok(val) => Ok(Value::String(val)),
+            Err(_) => Ok(Value::Nil),
+        }
+    } else {
+        return Err(SelError::Runtime(
+            loc,
+            "os/getenv requires a string argument".into(),
+        ));
+    }
+}
+
+pub fn os_args(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 0 {
+        return Err(SelError::SyntaxError(
+            loc,
+            "Expected exactly 0 arguments for os/args".into(),
+        ));
+    }
+    let args_vec = std::env::args()
+        .skip(1)
+        .map(Value::String)
+        .collect::<Vec<_>>();
+    Ok(Value::List(args_vec))
+}
+
+pub fn load(env: Rc<RefCell<Env>>) {
+    let mut e = env.borrow_mut();
+    e.insert(intern("+"), Value::NativeFunction(sum));
+    e.insert(intern("-"), Value::NativeFunction(sub));
+    e.insert(intern("*"), Value::NativeFunction(mul));
+    e.insert(intern("/"), Value::NativeFunction(div));
+    e.insert(intern("mod"), Value::NativeFunction(modulo));
+
+    e.insert(intern("not"), Value::NativeFunction(not));
+    e.insert(intern("eq?"), Value::NativeFunction(is_equal));
+    e.insert(intern("="), Value::NativeFunction(num_eq));
+    e.insert(intern("!="), Value::NativeFunction(num_noteq));
+    e.insert(intern("<"), Value::NativeFunction(num_lt));
+    e.insert(intern(">"), Value::NativeFunction(num_gt));
+    e.insert(intern("<="), Value::NativeFunction(num_lte));
+    e.insert(intern(">="), Value::NativeFunction(num_gte));
+
+    e.insert(intern("cons"), Value::NativeFunction(cons));
+    e.insert(intern("car"), Value::NativeFunction(car));
+    e.insert(intern("cdr"), Value::NativeFunction(cdr));
+    e.insert(intern("nth"), Value::NativeFunction(nth));
+    e.insert(intern("count"), Value::NativeFunction(count));
+    e.insert(intern("list"), Value::NativeFunction(list));
+    e.insert(intern("empty?"), Value::NativeFunction(empty));
+
+    e.insert(intern("rget"), Value::NativeFunction(rget));
+    e.insert(intern("rset"), Value::NativeFunction(rset));
+
+    e.insert(intern("nil?"), Value::NativeFunction(is_nil));
+    e.insert(intern("list?"), Value::NativeFunction(is_list));
+    e.insert(intern("number?"), Value::NativeFunction(is_number));
+    e.insert(intern("string?"), Value::NativeFunction(is_string));
+    e.insert(intern("symbol?"), Value::NativeFunction(is_symbol));
+    e.insert(intern("function?"), Value::NativeFunction(is_function));
+    e.insert(intern("record?"), Value::NativeFunction(is_record));
+
+    e.insert(intern("type-of"), Value::NativeFunction(type_of));
+
+    e.insert(intern("error"), Value::NativeFunction(error));
+    e.insert(intern("display"), Value::NativeFunction(display));
+    e.insert(intern("println"), Value::NativeFunction(display_newline));
+    e.insert(intern("newline"), Value::NativeFunction(newline));
+
+    e.insert(intern("ffi-dlopen"), Value::NativeFunction(ffi_dlopen));
+    e.insert(intern("ffi-dlsym"), Value::NativeFunction(ffi_dlsym));
+    e.insert(intern("ffi-call"), Value::NativeFunction(ffi_call));
+
+    e.insert(
+        intern("io/read-string"),
+        Value::NativeFunction(io_read_string),
+    );
+    e.insert(
+        intern("io/write-string"),
+        Value::NativeFunction(io_write_string),
+    );
+    e.insert(
+        intern("io/file-exists?"),
+        Value::NativeFunction(io_file_exists),
+    );
+
+    e.insert(intern("os/getenv"), Value::NativeFunction(os_getenv));
+    e.insert(intern("os/args"), Value::NativeFunction(os_args));
 }

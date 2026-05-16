@@ -122,6 +122,24 @@ fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
 
     if let Some(Ast::Symbol(s_loc, id)) = list.first().cloned() {
         match lookup(id).as_str() {
+            "->" => {
+                let mut iter = list.into_iter().skip(1);
+                let mut first_v = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Missing first expression in `->`".into())
+                })?;
+                while let Some(ast) = iter.next() {
+                    match ast {
+                        Ast::List(loc, mut list) => {
+                            list.push(first_v);
+                            first_v = optimize_ast(list, loc)?;
+                        }
+                        s => {
+                            first_v = optimize_ast(vec![s, first_v], loc)?;
+                        }
+                    }
+                }
+                Ok(first_v)
+            }
             "if" => {
                 let mut iter = list.into_iter().skip(1);
                 let cond = iter.next().ok_or_else(|| {
@@ -180,7 +198,6 @@ fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                 let name_ast = iter.next().ok_or_else(|| {
                     SelError::SyntaxError(s_loc, "Expected identifier in define".into())
                 })?;
-
                 if let Ast::List(l_loc, mut p_list) = name_ast {
                     if p_list.is_empty() {
                         return Err(SelError::SyntaxError(
