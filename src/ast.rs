@@ -140,6 +140,16 @@ fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                 }
                 Ok(first_v)
             }
+            "import" => {
+                let mut iter = list.into_iter().skip(1);
+                let Some(Ast::Symbol(_, symbol)) = iter.next() else {
+                    return Err(SelError::SyntaxError(
+                        s_loc,
+                        "Expected symbol in import".into(),
+                    ));
+                };
+                Ok(Ast::Import(s_loc, symbol))
+            }
             "if" => {
                 let mut iter = list.into_iter().skip(1);
                 let cond = iter.next().ok_or_else(|| {
@@ -391,6 +401,7 @@ fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
 pub enum Ast {
     Define(Loc, u32, Box<Ast>),
     DefMacro(Loc, u32, Box<Ast>),
+    Import(Loc, u32),
     Let(Loc, Vec<(u32, Ast)>, Vec<Ast>),
     Set(Loc, u32, Box<Ast>),
     If(Loc, Box<Ast>, Box<Ast>, Option<Box<Ast>>),
@@ -418,6 +429,7 @@ impl Ast {
         match self {
             Ast::Define(loc, ..) => *loc,
             Ast::DefMacro(loc, ..) => *loc,
+            Ast::Import(loc, ..) => *loc,
             Ast::Let(loc, ..) => *loc,
             Ast::Set(loc, ..) => *loc,
             Ast::If(loc, ..) => *loc,
@@ -447,6 +459,7 @@ impl std::fmt::Display for Ast {
         match self {
             Ast::Define(..) => write!(f, "define"),
             Ast::DefMacro(..) => write!(f, "defmacro"),
+            Ast::Import(..) => write!(f, "import"),
             Ast::Let(..) => write!(f, "let"),
             Ast::Set(..) => write!(f, "set"),
             Ast::If(..) => write!(f, "if"),
@@ -498,6 +511,10 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
                 Value::Symbol(id),
                 ast_to_value(*val).1,
             ]),
+        ),
+        Ast::Import(loc, id) => (
+            loc,
+            Value::List(vec![Value::Symbol(intern("import")), Value::Symbol(id)]),
         ),
         Ast::Set(loc, id, val) => (
             loc,

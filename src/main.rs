@@ -1,10 +1,12 @@
 use rustyline::error::ReadlineError;
 use std::cell::RefCell;
+use std::env;
 use std::rc::Rc;
-use std::{env, fs};
 
-use crate::compiler::read_all;
+use crate::compiler::parse_all;
 use crate::diagnostics::SelError;
+use crate::internal::load_core_lib;
+use crate::internal::read_script;
 use crate::runtime::Env;
 use crate::runtime::execute_asts;
 use crate::types::intern;
@@ -27,43 +29,19 @@ fn main() {
 
 fn entry() -> Result<(), SelError> {
     let env = Rc::new(RefCell::new(Env::default()));
-    load_core_lib(env.clone());
+    env.borrow_mut().parent = Some(load_core_lib());
 
     let mut args: Vec<String> = std::env::args().collect();
     if args.len() > 1 {
         let script_path = args.remove(1);
 
-        let mut src =
-            fs::read_to_string(&script_path).map_err(|e| SelError::Internal(e.to_string()))?;
-        if src.starts_with("#!") {
-            if let Some(newline_idx) = src.find('\n') {
-                src = src[newline_idx + 1..].to_string();
-            } else {
-                src = String::new();
-            }
-        }
+        let src = read_script(&script_path)?;
 
-        let asts = read_all(&src, intern(&script_path.to_string()))?;
-        execute_asts(asts, env).map(|_| ())
+        let asts = parse_all(&src, intern(&script_path.to_string()))?;
+        execute_asts(asts, env.clone()).map(|_| ())?;
+        Ok(())
     } else {
         repl("sel> ", env)
-    }
-}
-
-fn load_core_lib(env: Rc<RefCell<Env>>) {
-    internal::load(env.clone());
-    // Load core library if exists
-    {
-        let core_src = include_str!("core.scm");
-
-        match read_all(core_src, intern("<core>")) {
-            Ok(asts) => {
-                if let Err(e) = execute_asts(asts, env) {
-                    eprintln!("Error loading core.scm: {}", e);
-                }
-            }
-            Err(e) => eprintln!("Error parsing core.scm: {}", e),
-        }
     }
 }
 
@@ -102,7 +80,7 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
                     _ => (),
                 }
 
-                let asts = match read_all(line, repl_file_id) {
+                let asts = match parse_all(line, repl_file_id) {
                     Ok(asts) => asts,
                     Err(e) => {
                         println!("{e}");
@@ -157,13 +135,13 @@ mod tests {
                     && entry.path().extension().is_some_and(|ext| ext == "scm")
                 {
                     let env = Rc::new(RefCell::new(Env::default()));
-                    load_core_lib(env.clone());
+                    env.borrow_mut().parent = Some(load_core_lib());
                     println!("TEST: {}", entry.path().display());
                     let epath = entry.path();
-                    let src = fs::read_to_string(&epath).map_err(|e| {
+                    let src = read_script(&epath).map_err(|e| {
                         eprintln!("Error: cannot read file {} because {e}", epath.display())
                     })?;
-                    let asts = read_all(&src, intern("<test-all-folders>"))
+                    let asts = parse_all(&src, intern("<test-all-folders>"))
                         .map_err(|e| eprintln!("{e}"))?;
                     execute_asts(asts, env)
                         .map_err(|e| eprintln!("{}", e))
@@ -191,13 +169,13 @@ mod tests {
                     && entry.path().extension().is_some_and(|ext| ext == "scm")
                 {
                     let env = Rc::new(RefCell::new(Env::default()));
-                    load_core_lib(env.clone());
+                    env.borrow_mut().parent = Some(load_core_lib());
                     println!("TEST: {}", entry.path().display());
                     let epath = entry.path();
-                    let src = fs::read_to_string(&epath).map_err(|e| {
+                    let src = read_script(&epath).map_err(|e| {
                         eprintln!("Error: cannot read file {} because {e}", epath.display())
                     })?;
-                    let asts = read_all(&src, intern("<test-erros-folder>"))
+                    let asts = parse_all(&src, intern("<test-erros-folder>"))
                         .map_err(|e| eprintln!("{e}"))?;
                     execute_asts(asts, env)
                         .map_err(|e| eprintln!("{}", e))

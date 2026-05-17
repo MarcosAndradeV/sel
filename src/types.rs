@@ -72,4 +72,8 @@ impl<T> Record<T> {
     pub fn fields_mut(&mut self) -> &mut RecordMap<T> {
         &mut self.fields
     }
+
+    pub fn into_fields(self) -> RecordMap<T> {
+        self.fields
+    }
 }

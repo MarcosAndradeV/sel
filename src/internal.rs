@@ -1,10 +1,12 @@
 use std::cell::RefCell;
+use std::path::Path;
 use std::rc::Rc;
 
 use crate::compiler::*;
 use crate::diagnostics::*;
 use crate::lexer::Loc;
 use crate::runtime::Env;
+use crate::runtime::execute_asts;
 use crate::types::intern;
 
 type Result<T> = std::result::Result<T, SelError>;
@@ -1145,4 +1147,36 @@ pub fn load(env: Rc<RefCell<Env>>) {
 
     e.insert(intern("os/getenv"), Value::NativeFunction(os_getenv));
     e.insert(intern("os/args"), Value::NativeFunction(os_args));
+}
+
+pub fn read_script<P>(script_path: P) -> Result<String> where P: AsRef<Path>{
+    let mut src =
+        std::fs::read_to_string(script_path).map_err(|e| SelError::Internal(e.to_string()))?;
+    if src.starts_with("#!") {
+        if let Some(newline_idx) = src.find('\n') {
+            src = src[newline_idx + 1..].to_string();
+        } else {
+            src = String::new();
+        }
+    }
+    Ok(src)
+}
+
+pub fn load_core_lib() -> Rc<RefCell<Env>> {
+    let env = Rc::new(RefCell::new(Env::default()));
+    load(env.clone());
+    // Load core library if exists
+    {
+        let core_src = include_str!("core.scm");
+
+        match parse_all(core_src, intern("<core>")) {
+            Ok(asts) => {
+                if let Err(e) = execute_asts(asts, env.clone()) {
+                    eprintln!("Error loading core.scm: {}", e);
+                }
+            }
+            Err(e) => eprintln!("Error parsing core.scm: {}", e),
+        }
+    }
+    env
 }

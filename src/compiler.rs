@@ -99,6 +99,9 @@ impl<'a> Compiler<'a> {
 
     pub fn compile(&mut self, ast: Ast) -> Result<()> {
         match ast {
+            Ast::Import(loc, id) => {
+                self.chunk.write((loc, OpCode::Import(id)));
+            }
             Ast::Integer(loc, i) => {
                 let idx = self.chunk.add_constant(Value::Integer(i));
                 self.chunk.write((loc, OpCode::Constant(idx)));
@@ -688,7 +691,7 @@ impl<'a> Compiler<'a> {
                         }
                         _ => self.compile(Ast::Symbol(loc, sym))?,
                     }
-                } else if let Some(next) = next{
+                } else if let Some(next) = next {
                     self.compile(next)?;
                 }
 
@@ -838,6 +841,7 @@ pub enum OpCode {
     Return,
     BuildEnv(Vec<u32>),
     PopEnv,
+    Import(u32),
     MakeRecord,
     AssocRecord(u32),
     GetRecord(u32),
@@ -896,7 +900,7 @@ impl Chunk {
     }
 }
 
-pub fn read_all(line: &str, file_id: u32) -> Result<Vec<Ast>> {
+pub fn parse_all(line: &str, file_id: u32) -> Result<Vec<Ast>> {
     let mut lex = Lexer::new(line, file_id);
     let mut tokens = Vec::new();
     while let Some(t) = lex.next_token()? {

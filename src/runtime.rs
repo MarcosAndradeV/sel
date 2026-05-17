@@ -1,11 +1,14 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use crate::ast::*;
 use crate::compiler::*;
 use crate::diagnostics::*;
 use crate::internal;
+use crate::internal::load_core_lib;
+use crate::internal::read_script;
 use crate::internal::value_type_name;
 use crate::lexer::Loc;
 use crate::types::Record;
@@ -40,6 +43,10 @@ impl Env {
 
     pub fn insert(&mut self, id: u32, val: Value) {
         self.bindings.insert(id, val);
+    }
+
+    pub fn insert_checked(&mut self, id: u32, val: Value) -> Option<Value> {
+        self.bindings.insert(id, val)
     }
 
     fn set(&mut self, id: u32, val: Value) -> bool {
@@ -113,6 +120,29 @@ impl VM {
             let (loc, instruction) = frame.chunk.code[frame.ip].clone();
             frame.ip += 1;
             match instruction {
+                OpCode::Import(id) => {
+                    let fp = PathBuf::from(lookup(loc.file_id));
+                    let (modname, fp) = if let Some(parent) = fp.parent()
+                        && parent.is_dir()
+                    {
+                        let sym = lookup(id);
+                        let pth = parent.join(format!("{}.scm", sym));
+                        (sym, pth)
+                    } else {
+                        todo!()
+                    };
+                    let src = read_script(&fp).map_err(|e| SelError::Internal(e.to_string()))?;
+                    let asts = parse_all(&src, intern(&fp.to_string_lossy().to_string()))?;
+                    let m_env = Rc::new(RefCell::new(Env::default()));
+                    m_env.borrow_mut().parent = Some(load_core_lib());
+                    let rec = import_module(&modname, asts, m_env)?;
+                    let mut frame_env = frame.env.borrow_mut();
+                    for (sym, val) in rec.into_fields() {
+                        if frame_env.insert_checked(sym, val).is_some() {
+                            todo!("bind clash. How we should this?")
+                        }
+                    }
+                }
                 OpCode::MakeRecord => {
                     let v = Value::Record(Record::new());
                     self.stack.push(v)
@@ -668,4 +698,24 @@ pub fn execute_asts(asts: Vec<Ast>, env: Rc<RefCell<Env>>) -> Result<Value> {
         last_val = vm.run(loc, Rc::new(chunk), env.clone())?;
     }
     Ok(last_val)
+}
+
+pub fn import_module(module_name: &str, asts: Vec<Ast>, env: Rc<RefCell<Env>>) -> Result<Record<Value>> {
+    let mut file_record = Record::new();
+    for ast in asts {
+        let loc = ast.loc();
+        let expanded = macro_expand(ast, env.clone())?;
+        let mut chunk = Chunk::new();
+        let mut compiler = Compiler::new(&mut chunk);
+        compiler.compile(expanded)?;
+        let mut vm = VM::new();
+        vm.run(loc, Rc::new(chunk), env.clone())?;
+    }
+    for (sym, value) in env.borrow().bindings.iter() {
+        file_record.fields_mut().insert(
+            intern(&format!("{module_name}/{}", lookup(*sym))),
+            value.clone(),
+        );
+    }
+    Ok(file_record)
 }
