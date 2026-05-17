@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use std::env;
 use std::rc::Rc;
 
-use crate::compiler::parse_all;
+use crate::parser::parse_all;
 use crate::diagnostics::SelError;
 use crate::internal::load_core_lib;
 use crate::internal::read_script;
@@ -19,6 +19,8 @@ mod internal;
 mod lexer;
 mod runtime;
 mod types;
+mod value;
+mod parser;
 
 fn main() {
     match entry() {

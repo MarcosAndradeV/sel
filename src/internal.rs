@@ -2,7 +2,8 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
 
-use crate::compiler::*;
+use crate::parser::parse_all;
+use crate::value::*;
 use crate::diagnostics::*;
 use crate::lexer::Loc;
 use crate::runtime::Env;

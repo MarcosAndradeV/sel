@@ -6,6 +6,8 @@ use std::rc::Rc;
 use crate::ast::*;
 use crate::compiler::*;
 use crate::diagnostics::*;
+use crate::parser::parse_all;
+use crate::value::*;
 use crate::internal;
 use crate::internal::load_core_lib;
 use crate::internal::read_script;
