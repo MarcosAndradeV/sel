@@ -57,7 +57,7 @@
 (define radius 50)
 (define velocity 10)
 
-(define ball (list 100 velocity 100 velocity)) ;; '(x dx y dy)
+(define ball {x 100 dx velocity y 100 dy velocity})
 
 (define (collides-with-walls x y w h)
     (not (and (< 0 (- x radius))
@@ -67,21 +67,25 @@
 
 
 (while (not (window-should-close))
-    (define x  (nth ball 0))
-    (define dx (nth ball 1))
-    (define y  (nth ball 2))
-    (define dy (nth ball 3))
+    (define x  (rget ball x))
+    (define dx (rget ball dx))
+    (define y  (rget ball y))
+    (define dy (rget ball dy))
 
     (define nx (+ x dx))
     (define ny (+ y dy))
 
-    (set! ball
-        (append (if (collides-with-walls nx y w h) (list x (* -1 dx)) (list nx dx))
-                (if (collides-with-walls x ny w h) (list y (* -1 dy)) (list ny dy))))
+
+    (if (collides-with-walls nx y w h)
+        (set! ball (rset ball dx (* -1 dx)))
+        (set! ball (rset ball x nx)))
+    (if (collides-with-walls x ny w h)
+        (set! ball (rset ball dy (* -1 dy)))
+        (set! ball (rset ball y ny)))
 
     (begin-drawing)
         (clear-background 0xFF181818)
-        (draw-circle (nth ball 0) (nth ball 2) radius 0xFF0000FF)
+        (draw-circle (rget ball x) (rget ball y) radius 0xFF0000FF)
         (draw-fps 10 10)
     (end-drawing)
 )
