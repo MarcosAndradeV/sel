@@ -257,6 +257,11 @@ fn is_value_equal(first: &Value, arg: &Value) -> bool {
         (Value::Symbol(a), Value::Symbol(b)) => a == b,
         (Value::Pointer(a), Value::Pointer(b)) => a == b,
         (Value::List(a), Value::List(b)) => a.iter().zip(b).all(|(a, b)| is_value_equal(a, b)),
+        (Value::Record(a), Value::Record(b)) => a
+            .fields()
+            .iter()
+            .zip(b.fields())
+            .all(|((ka, va), (kb, vb))| *ka == *kb && is_value_equal(va, vb)),
         _ => false,
     }
 }

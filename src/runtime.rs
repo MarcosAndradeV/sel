@@ -129,7 +129,7 @@ impl VM {
                         let pth = parent.join(format!("{}.scm", sym));
                         (sym, pth)
                     } else {
-                        todo!()
+                        todo!("{}", fp.display())
                     };
                     let src = read_script(&fp).map_err(|e| SelError::Internal(e.to_string()))?;
                     let asts = parse_all(&src, intern(fp.to_string_lossy().as_ref()))?;

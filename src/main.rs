@@ -141,7 +141,7 @@ mod tests {
                     let src = read_script(&epath).map_err(|e| {
                         eprintln!("Error: cannot read file {} because {e}", epath.display())
                     })?;
-                    let asts = parse_all(&src, intern("<test-all-folders>"))
+                    let asts = parse_all(&src, intern(&epath.to_string_lossy().to_string()))
                         .map_err(|e| eprintln!("{e}"))?;
                     execute_asts(asts, env)
                         .map_err(|e| eprintln!("{}", e))
@@ -175,7 +175,7 @@ mod tests {
                     let src = read_script(&epath).map_err(|e| {
                         eprintln!("Error: cannot read file {} because {e}", epath.display())
                     })?;
-                    let asts = parse_all(&src, intern("<test-erros-folder>"))
+                    let asts = parse_all(&src, intern(&epath.to_string_lossy().to_string()))
                         .map_err(|e| eprintln!("{e}"))?;
                     execute_asts(asts, env)
                         .map_err(|e| eprintln!("{}", e))
