@@ -257,7 +257,7 @@ fn is_value_equal(first: &Value, arg: &Value) -> bool {
         (Value::String(a), Value::String(b)) => a == b,
         (Value::Symbol(a), Value::Symbol(b)) => a == b,
         (Value::Pointer(a), Value::Pointer(b)) => a == b,
-        (Value::List(a), Value::List(b)) => a.iter().zip(b).all(|(a, b)| is_value_equal(a, b)),
+        (Value::List(a), Value::List(b)) => a.iter().zip(b.iter()).all(|(a, b)| is_value_equal(a, b)),
         (Value::Record(a), Value::Record(b)) => a
             .fields()
             .iter()
@@ -346,7 +346,7 @@ pub fn ffi_dlopen(loc: Loc, args: Vec<Value>) -> Result<Value> {
     }
     if let Value::String(s) = &args[0] {
         unsafe {
-            match libloading::Library::new(s) {
+            match libloading::Library::new(s.as_str()) {
                 Ok(lib) => Ok(Value::Library(Rc::new(lib))),
                 Err(e) => Err(SelError::Runtime(loc, format!("dlopen failed: {}", e))),
             }
@@ -426,7 +426,7 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
     let arg_type_syms = match &args[2] {
         Value::List(l) => {
             let mut syms = Vec::new();
-            for v in l {
+            for v in l.iter() {
                 if let Value::Symbol(s) = v {
                     syms.push(crate::lookup(*s));
                 } else {
@@ -446,7 +446,7 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
 
     let arg_vals = match args[3].clone() {
         Value::List(l) => l,
-        Value::Nil => Vec::new(),
+        Value::Nil => Rc::new(Vec::new()),
         _ => {
             return Err(SelError::Runtime(loc, "arg_vals must be a list".into()));
         }
@@ -509,8 +509,8 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
     let mut ffi_args_storage = Vec::new();
 
     for (i, arg_val) in arg_vals.iter().enumerate() {
-        let sym = &arg_type_syms[i];
-        match sym.as_str() {
+        let sym: &str = &arg_type_syms[i];
+        match sym {
             "i32" => {
                 let v = match arg_val {
                     Value::Integer(n) => *n as i32,
@@ -696,7 +696,7 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
                     Ok(Value::Nil)
                 } else {
                     let c_str = std::ffi::CStr::from_ptr(res);
-                    Ok(Value::String(c_str.to_string_lossy().into_owned()))
+                    Ok(Value::String(Rc::new(c_str.to_string_lossy().into_owned())))
                 }
             }
             _ => unreachable!(),
@@ -712,8 +712,8 @@ pub fn io_read_string(loc: Loc, args: Vec<Value>) -> Result<Value> {
         ));
     }
     if let Value::String(path) = &args[0] {
-        match std::fs::read_to_string(path) {
-            Ok(content) => Ok(Value::String(content)),
+        match std::fs::read_to_string(path.as_str()) {
+            Ok(content) => Ok(Value::String(Rc::new(content))),
             Err(e) => Err(SelError::Runtime(
                 loc,
                 format!("io/read-string failed: {}", e),
@@ -735,7 +735,7 @@ pub fn io_write_string(loc: Loc, args: Vec<Value>) -> Result<Value> {
         ));
     }
     if let (Value::String(path), Value::String(content)) = (&args[0], &args[1]) {
-        match std::fs::write(path, content) {
+        match std::fs::write(path.as_str(), content.as_str()) {
             Ok(_) => Ok(Value::Nil),
             Err(e) => Err(SelError::Runtime(
                 loc,
@@ -758,7 +758,7 @@ pub fn io_file_exists(loc: Loc, args: Vec<Value>) -> Result<Value> {
         ));
     }
     if let Value::String(path) = &args[0] {
-        Ok(Value::Boolean(std::path::Path::new(path).exists()))
+        Ok(Value::Boolean(std::path::Path::new(path.as_str()).exists()))
     } else {
         Err(SelError::Runtime(
             loc,
@@ -779,11 +779,11 @@ pub fn cons(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     match tail {
         Value::List(l) => {
             let mut new_l = vec![head];
-            new_l.extend(l);
-            Ok(Value::List(new_l))
+            new_l.extend(l.iter().cloned());
+            Ok(Value::List(Rc::new(new_l)))
         }
-        Value::Nil => Ok(Value::List(vec![head])),
-        _ => Ok(Value::List(vec![head, tail])),
+        Value::Nil => Ok(Value::List(Rc::new(vec![head]))),
+        _ => Ok(Value::List(Rc::new(vec![head, tail]))),
     }
 }
 
@@ -795,11 +795,11 @@ pub fn car(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         ));
     }
     match args.pop().unwrap() {
-        Value::List(mut l) => {
+        Value::List(l) => {
             if l.is_empty() {
                 return Err(SelError::Runtime(loc, "car on empty list".into()));
             }
-            Ok(l.remove(0))
+            Ok(l[0].clone())
         }
         _ => Err(SelError::Runtime(loc, "car requires a list".into())),
     }
@@ -813,16 +813,16 @@ pub fn cdr(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         ));
     }
     match args.pop().unwrap() {
-        Value::List(mut l) => {
+        Value::List(l) => {
             if l.is_empty() {
                 return Err(SelError::Runtime(loc, "cdr on empty list".into()));
             }
-            l.remove(0);
-            Ok(if l.is_empty() {
-                Value::Nil
-            } else {
-                Value::List(l)
-            })
+            if l.len() == 1 {
+                return Ok(Value::Nil);
+            }
+            let mut new_l = Vec::with_capacity(l.len() - 1);
+            new_l.extend_from_slice(&l[1..]);
+            Ok(Value::List(Rc::new(new_l)))
         }
         _ => Err(SelError::Runtime(loc, "cdr requires a list".into())),
     }
@@ -837,9 +837,9 @@ pub fn nth(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
     let index = args.pop().unwrap();
     match args.pop().unwrap() {
-        Value::List(mut l) => match index {
+        Value::List(l) => match index {
             Value::Integer(index) => Ok(if (index as usize) < l.len() {
-                l.remove(index as usize)
+                l[index as usize].clone()
             } else {
                 Value::Nil
             }),
@@ -865,7 +865,7 @@ pub fn count(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 }
 
 pub fn list(_loc: Loc, args: Vec<Value>) -> Result<Value> {
-    Ok(Value::List(args))
+    Ok(Value::List(Rc::new(args)))
 }
 
 pub fn empty(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
@@ -917,20 +917,21 @@ pub fn rset(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     let value = args.pop().unwrap();
     let index = args.pop().unwrap();
     match args.pop().unwrap() {
-        Value::Record(mut r) => {
+        Value::Record(r) => {
             match index {
                 Value::Symbol(sym) => {
-                    if let Some(v) = r.fields_mut().get_mut(&sym) {
+                    let mut new_r = (*r).clone();
+                    if let Some(v) = new_r.fields_mut().get_mut(&sym) {
                         *v = value;
                     } else {
                         return Ok(Value::Nil);
                     }
+                    Ok(Value::Record(Rc::new(new_r)))
                 }
                 _ => {
                     return Err(SelError::Runtime(loc, "rget requires a symbol".into()));
                 }
             }
-            Ok(Value::Record(r))
         }
         _ => Err(SelError::Runtime(loc, "rget requires a record".into())),
     }
@@ -1059,8 +1060,8 @@ pub fn os_getenv(loc: Loc, args: Vec<Value>) -> Result<Value> {
         ));
     }
     if let Value::String(key) = &args[0] {
-        match std::env::var(key) {
-            Ok(val) => Ok(Value::String(val)),
+        match std::env::var(key.as_str()) {
+            Ok(val) => Ok(Value::String(Rc::new(val))),
             Err(_) => Ok(Value::Nil),
         }
     } else {
@@ -1080,9 +1081,9 @@ pub fn os_args(loc: Loc, args: Vec<Value>) -> Result<Value> {
     }
     let args_vec = std::env::args()
         .skip(1)
-        .map(Value::String)
+        .map(|s| Value::String(Rc::new(s)))
         .collect::<Vec<_>>();
-    Ok(Value::List(args_vec))
+    Ok(Value::List(Rc::new(args_vec)))
 }
 
 pub fn load(env: Rc<RefCell<Env>>) {

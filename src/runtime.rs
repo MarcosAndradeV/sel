@@ -146,21 +146,21 @@ impl VM {
                     }
                 }
                 OpCode::MakeRecord => {
-                    let v = Value::Record(Record::new());
+                    let v = Value::Record(Rc::new(Record::new()));
                     self.stack.push(v)
                 }
                 OpCode::AssocRecord(sym) => {
                     let value = self.stack.pop().unwrap();
                     if let Value::Record(mut rec) = self.stack.pop().unwrap() {
-                        rec.fields_mut().insert(sym, value);
+                        Rc::make_mut(&mut rec).fields_mut().insert(sym, value);
                         self.stack.push(Value::Record(rec))
                     } else {
                         unreachable!();
                     }
                 }
                 OpCode::GetRecord(field) => {
-                    if let Value::Record(mut rec) = self.stack.pop().unwrap() {
-                        if let Some(value) = rec.fields_mut().get(&field).cloned() {
+                    if let Value::Record(rec) = self.stack.pop().unwrap() {
+                        if let Some(value) = rec.fields().get(&field).cloned() {
                             self.stack.push(value);
                         } else {
                             self.stack.push(Value::Nil);
@@ -175,7 +175,7 @@ impl VM {
                 OpCode::SetRecord(field) => {
                     let value = self.stack.pop().unwrap();
                     if let Value::Record(mut rec) = self.stack.pop().unwrap() {
-                        let Some(field) = rec.fields_mut().get_mut(&field) else {
+                        let Some(field) = Rc::make_mut(&mut rec).fields_mut().get_mut(&field) else {
                             return Err(SelError::Runtime(
                                 loc,
                                 format!("record does not have field {}", lookup(field)),
@@ -267,43 +267,44 @@ impl VM {
                     match tail {
                         Value::List(l) => {
                             let mut new_l = vec![head];
-                            new_l.extend(l);
-                            self.stack.push(Value::List(new_l))
+                            new_l.extend(l.iter().cloned());
+                            self.stack.push(Value::List(Rc::new(new_l)))
                         }
-                        Value::Nil => self.stack.push(Value::List(vec![head])),
-                        _ => self.stack.push(Value::List(vec![head, tail])),
+                        Value::Nil => self.stack.push(Value::List(Rc::new(vec![head]))),
+                        _ => self.stack.push(Value::List(Rc::new(vec![head, tail]))),
                     }
                 }
                 OpCode::Car => match self.stack.pop().unwrap() {
-                    Value::List(mut l) => {
+                    Value::List(l) => {
                         if l.is_empty() {
                             return Err(SelError::Runtime(loc, "car on empty list".into()));
                         }
-                        self.stack.push(l.remove(0))
+                        self.stack.push(l[0].clone())
                     }
                     _ => return Err(SelError::Runtime(loc, "car requires a list".into())),
                 },
                 OpCode::Cdr => match self.stack.pop().unwrap() {
-                    Value::List(mut l) => {
+                    Value::List(l) => {
                         if l.is_empty() {
                             return Err(SelError::Runtime(loc, "cdr on empty list".into()));
                         }
-                        l.remove(0);
-                        self.stack.push(if l.is_empty() {
-                            Value::Nil
+                        if l.len() == 1 {
+                            self.stack.push(Value::Nil)
                         } else {
-                            Value::List(l)
-                        })
+                            let mut new_l = Vec::with_capacity(l.len() - 1);
+                            new_l.extend_from_slice(&l[1..]);
+                            self.stack.push(Value::List(Rc::new(new_l)))
+                        }
                     }
                     _ => return Err(SelError::Runtime(loc, "cdr requires a list".into())),
                 },
                 OpCode::Nth => {
                     let index = self.stack.pop().unwrap();
                     match self.stack.pop().unwrap() {
-                        Value::List(mut l) => match index {
+                        Value::List(l) => match index {
                             Value::Integer(index) => {
                                 self.stack.push(if (index as usize) < l.len() {
-                                    l.remove(index as usize)
+                                    l[index as usize].clone()
                                 } else {
                                     Value::Nil
                                 })
@@ -441,7 +442,7 @@ impl VM {
                                     let rest_args =
                                         self.stack.split_off(self.stack.len() - (arg_count - i));
                                     let name = &lookup(*id)[1..];
-                                    call_env.insert(intern(name), Value::List(rest_args));
+                                    call_env.insert(intern(name), Value::List(Rc::new(rest_args)));
                                     has_rest = true;
                                     break;
                                 } else {
@@ -541,14 +542,14 @@ impl VM {
                     let mut items = Vec::with_capacity(count);
                     let start = self.stack.len() - count;
                     items.extend(self.stack.drain(start..));
-                    self.stack.push(Value::List(items));
+                    self.stack.push(Value::List(Rc::new(items)));
                 }
                 OpCode::ConcatList(count) => {
                     let mut items = Vec::new();
                     let start = self.stack.len() - count;
                     for val in self.stack.drain(start..) {
                         match val {
-                            Value::List(l) => items.extend(l),
+                            Value::List(l) => items.extend(l.iter().cloned()),
                             Value::Nil => {}
                             _ => {
                                 return Err(SelError::TypeError(
@@ -558,7 +559,7 @@ impl VM {
                             }
                         }
                     }
-                    self.stack.push(Value::List(items));
+                    self.stack.push(Value::List(Rc::new(items)));
                 }
             }
         }
@@ -595,7 +596,7 @@ pub fn macro_expand(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
                         if lookup(*pid).starts_with('&') {
                             let rest_args = args.split_off(i);
                             let name = &lookup(*pid)[1..];
-                            call_env.insert(intern(name), Value::List(rest_args));
+                            call_env.insert(intern(name), Value::List(Rc::new(rest_args)));
                             break;
                         } else if i < args.len() {
                             call_env.insert(*pid, args[i].clone());
