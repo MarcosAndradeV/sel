@@ -15,7 +15,11 @@ pub struct Loc {
 
 impl Default for Loc {
     fn default() -> Self {
-        Self { file_id: 0, line: 1, col: 1 }
+        Self {
+            file_id: 0,
+            line: 1,
+            col: 1,
+        }
     }
 }
 
@@ -105,7 +109,7 @@ impl<'a> Lexer<'a> {
             chars: input.chars().peekable(),
             line: 1,
             col: 1,
-            file_id
+            file_id,
         }
     }
 

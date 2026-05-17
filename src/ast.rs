@@ -19,8 +19,8 @@ pub fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
     match t.kind {
         TokenKind::OpenCurly => parse_record(tokens, pos, t),
         TokenKind::OpenParen => parse_list(tokens, pos, t),
-        TokenKind::CloseParen => Err(SelError::SyntaxError(t.loc, format!("Unexpected `)`"))),
-        TokenKind::CloseCurly => Err(SelError::SyntaxError(t.loc, format!("Unexpected `}}`"))),
+        TokenKind::CloseParen => Err(SelError::SyntaxError(t.loc, "Unexpected `)`".to_string())),
+        TokenKind::CloseCurly => Err(SelError::SyntaxError(t.loc, "Unexpected `}`".to_string())),
         TokenKind::Quote => {
             let expr = parse_expr(tokens, pos)?;
             Ok(Ast::Quote(t.loc, Box::new(expr)))
@@ -58,10 +58,10 @@ pub fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
 
             if let Ok(i) = i64::from_str_radix(s, base.radix()) {
                 return Ok(Ast::Integer(t.loc, i));
-            } else if base == NumberBase::D {
-                if let Ok(f) = t.source.parse::<f64>() {
-                    return Ok(Ast::Float(t.loc, f));
-                }
+            } else if base == NumberBase::D
+                && let Ok(f) = t.source.parse::<f64>()
+            {
+                return Ok(Ast::Float(t.loc, f));
             }
             Err(SelError::InvalidNumber(t.clone()))
         }
@@ -127,7 +127,7 @@ fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                 let mut first_v = iter.next().ok_or_else(|| {
                     SelError::SyntaxError(s_loc, "Missing first expression in `->`".into())
                 })?;
-                while let Some(ast) = iter.next() {
+                for ast in iter {
                     match ast {
                         Ast::List(loc, mut list) => {
                             list.push(first_v);

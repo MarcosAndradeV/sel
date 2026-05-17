@@ -69,7 +69,7 @@ pub fn sub(loc: Loc, args: Vec<Value>) -> Result<Value> {
                 loc,
                 format!(
                     "Invalid argument to -: expected number but got {}",
-                    value_type_name(&v)
+                    value_type_name(v)
                 ),
             ));
         }
@@ -795,7 +795,7 @@ pub fn car(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
             }
             Ok(l.remove(0))
         }
-        _ => return Err(SelError::Runtime(loc, "car requires a list".into())),
+        _ => Err(SelError::Runtime(loc, "car requires a list".into())),
     }
 }
 
@@ -818,7 +818,7 @@ pub fn cdr(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
                 Value::List(l)
             })
         }
-        _ => return Err(SelError::Runtime(loc, "cdr requires a list".into())),
+        _ => Err(SelError::Runtime(loc, "cdr requires a list".into())),
     }
 }
 
@@ -837,11 +837,9 @@ pub fn nth(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
             } else {
                 Value::Nil
             }),
-            _ => {
-                return Err(SelError::Runtime(loc, "nth requires a interger".into()));
-            }
+            _ => Err(SelError::Runtime(loc, "nth requires a interger".into())),
         },
-        _ => return Err(SelError::Runtime(loc, "nth requires a list".into())),
+        _ => Err(SelError::Runtime(loc, "nth requires a list".into())),
     }
 }
 
@@ -856,7 +854,7 @@ pub fn count(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         Value::List(l) => Ok(Value::Integer(l.len() as _)),
         Value::String(s) => Ok(Value::Integer(s.len() as _)),
         Value::Nil => Ok(Value::Integer(0)),
-        _ => return Err(SelError::Runtime(loc, "count requires a list".into())),
+        _ => Err(SelError::Runtime(loc, "count requires a list".into())),
     }
 }
 
@@ -875,12 +873,10 @@ pub fn empty(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         Value::List(l) => Ok(Value::Boolean(l.is_empty())),
         Value::Nil => Ok(Value::Boolean(true)),
         Value::String(s) => Ok(Value::Boolean(s.is_empty())),
-        v => {
-            return Err(SelError::Runtime(
-                loc,
-                format!("empty requires a list got {v}"),
-            ));
-        }
+        v => Err(SelError::Runtime(
+            loc,
+            format!("empty requires a list got {v}"),
+        )),
     }
 }
 
@@ -899,11 +895,9 @@ pub fn rget(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
             } else {
                 Value::Nil
             }),
-            _ => {
-                return Err(SelError::Runtime(loc, "rget requires a symbol".into()));
-            }
+            _ => Err(SelError::Runtime(loc, "rget requires a symbol".into())),
         },
-        _ => return Err(SelError::Runtime(loc, "rget requires a record".into())),
+        _ => Err(SelError::Runtime(loc, "rget requires a record".into())),
     }
 }
 
@@ -930,9 +924,9 @@ pub fn rset(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
                     return Err(SelError::Runtime(loc, "rget requires a symbol".into()));
                 }
             }
-            return Ok(Value::Record(r));
+            Ok(Value::Record(r))
         }
-        _ => return Err(SelError::Runtime(loc, "rget requires a record".into())),
+        _ => Err(SelError::Runtime(loc, "rget requires a record".into())),
     }
 }
 
@@ -1041,7 +1035,7 @@ pub fn type_of(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 }
 
 pub fn newline(loc: Loc, args: Vec<Value>) -> Result<Value> {
-    if args.len() != 0 {
+    if !args.is_empty() {
         return Err(SelError::Runtime(
             loc,
             "Expected exactly 1 arguments for newline".into(),
@@ -1064,15 +1058,15 @@ pub fn os_getenv(loc: Loc, args: Vec<Value>) -> Result<Value> {
             Err(_) => Ok(Value::Nil),
         }
     } else {
-        return Err(SelError::Runtime(
+        Err(SelError::Runtime(
             loc,
             "os/getenv requires a string argument".into(),
-        ));
+        ))
     }
 }
 
 pub fn os_args(loc: Loc, args: Vec<Value>) -> Result<Value> {
-    if args.len() != 0 {
+    if !args.is_empty() {
         return Err(SelError::SyntaxError(
             loc,
             "Expected exactly 0 arguments for os/args".into(),
@@ -1149,7 +1143,10 @@ pub fn load(env: Rc<RefCell<Env>>) {
     e.insert(intern("os/args"), Value::NativeFunction(os_args));
 }
 
-pub fn read_script<P>(script_path: P) -> Result<String> where P: AsRef<Path>{
+pub fn read_script<P>(script_path: P) -> Result<String>
+where
+    P: AsRef<Path>,
+{
     let mut src =
         std::fs::read_to_string(script_path).map_err(|e| SelError::Internal(e.to_string()))?;
     if src.starts_with("#!") {

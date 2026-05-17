@@ -132,7 +132,7 @@ impl VM {
                         todo!()
                     };
                     let src = read_script(&fp).map_err(|e| SelError::Internal(e.to_string()))?;
-                    let asts = parse_all(&src, intern(&fp.to_string_lossy().to_string()))?;
+                    let asts = parse_all(&src, intern(fp.to_string_lossy().as_ref()))?;
                     let m_env = Rc::new(RefCell::new(Env::default()));
                     m_env.borrow_mut().parent = Some(load_core_lib());
                     let rec = import_module(&modname, asts, m_env)?;
@@ -700,7 +700,11 @@ pub fn execute_asts(asts: Vec<Ast>, env: Rc<RefCell<Env>>) -> Result<Value> {
     Ok(last_val)
 }
 
-pub fn import_module(module_name: &str, asts: Vec<Ast>, env: Rc<RefCell<Env>>) -> Result<Record<Value>> {
+pub fn import_module(
+    module_name: &str,
+    asts: Vec<Ast>,
+    env: Rc<RefCell<Env>>,
+) -> Result<Record<Value>> {
     let mut file_record = Record::new();
     for ast in asts {
         let loc = ast.loc();
