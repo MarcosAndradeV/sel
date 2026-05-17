@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use std::env;
 use std::rc::Rc;
 
+use crate::cli::Cli;
 use crate::parser::parse_all;
 use crate::diagnostics::SelError;
 use crate::internal::load_core_lib;
@@ -21,6 +22,7 @@ mod runtime;
 mod types;
 mod value;
 mod parser;
+mod cli;
 
 fn main() {
     match entry() {
@@ -29,21 +31,32 @@ fn main() {
     }
 }
 
+
 fn entry() -> Result<(), SelError> {
+
+    let cmd = Cli::parse();
+
     let env = Rc::new(RefCell::new(Env::default()));
     env.borrow_mut().parent = Some(load_core_lib());
 
-    let mut args: Vec<String> = std::env::args().collect();
-    if args.len() > 1 {
-        let script_path = args.remove(1);
-
-        let src = read_script(&script_path)?;
-
-        let asts = parse_all(&src, intern(&script_path.to_string()))?;
-        execute_asts(asts, env.clone()).map(|_| ())?;
-        Ok(())
-    } else {
-        repl("sel> ", env)
+    match cmd {
+        Cli::Help => {
+            Cli::help();
+            Ok(())
+        }
+        Cli::Version => {
+            println!("version: {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        },
+        Cli::File(script_path) => {
+            let src = read_script(&script_path)?;
+            let asts = parse_all(&src, intern(&script_path.to_string()))?;
+            execute_asts(asts, env.clone()).map(|_| ())?;
+            Ok(())
+        }
+        Cli::Repl => {
+            repl("sel> ", env)
+        }
     }
 }
 
