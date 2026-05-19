@@ -29,6 +29,7 @@ pub fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
     *pos += 1;
 
     match t.kind {
+        TokenKind::BackSlash => parse_lambda_shorthand(tokens, pos, t),
         TokenKind::OpenCurly => parse_record(tokens, pos, t),
         TokenKind::OpenParen => parse_list(tokens, pos, t),
         TokenKind::CloseParen => Err(SelError::SyntaxError(t.loc, "Unexpected `)`".to_string())),
@@ -82,6 +83,16 @@ pub fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
             _ => Ok(Ast::Symbol(t.loc, intern(&t.source))),
         },
     }
+}
+
+fn parse_lambda_shorthand(tokens: &[Token], pos: &mut usize, open_token: &Token) -> Result<Ast> {
+    let args = parse_expr(tokens, pos)?;
+    let body = parse_expr(tokens, pos)?;
+    optimize_ast(vec![
+        Ast::Symbol(open_token.loc, intern("lambda")),
+        args,
+        body,
+    ], open_token.loc)
 }
 
 fn parse_record(tokens: &[Token], pos: &mut usize, open_token: &Token) -> Result<Ast> {

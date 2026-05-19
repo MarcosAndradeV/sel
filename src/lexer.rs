@@ -87,6 +87,7 @@ pub enum TokenKind {
     Number(NumberBase),
     Boolean,
     Ampersand,
+    BackSlash,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -157,6 +158,14 @@ impl<'a> Lexer<'a> {
         };
 
         match c {
+            '\\' => {
+                self.advance();
+                Ok(Some(Token {
+                    kind: TokenKind::BackSlash,
+                    source: "\\".into(),
+                    loc: start_loc,
+                }))
+            }
             '{' => {
                 self.advance();
                 Ok(Some(Token {
@@ -282,7 +291,7 @@ impl<'a> Lexer<'a> {
             _ => {
                 let mut ident = String::new();
                 while let Some(&ch) = self.peek() {
-                    if ch.is_whitespace() || "{}()\"'`,;".contains(ch) {
+                    if ch.is_whitespace() || "\\{}()\"'`,;".contains(ch) {
                         break;
                     }
                     ident.push(self.advance().unwrap());
