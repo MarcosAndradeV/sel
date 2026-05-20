@@ -487,6 +487,41 @@ impl VM {
                                 "Cannot call macro at runtime".into(),
                             ));
                         }
+                        Value::Record(_) => {
+                            match arg_count {
+                                1 => {
+                                    let s = self.stack.pop().unwrap();
+                                    if !matches!(s, Value::Symbol(_)) {
+                                        return Err(SelError::Runtime(
+                                            loc,
+                                            format!("Attempt to call non-function value: {}", callee),
+                                        ));
+                                    }
+                                    let r = self.stack.pop().unwrap();
+                                    let value = internal::rget(loc, vec![r, s])?;
+                                    self.stack.push(value);
+                                }
+                                2 => {
+                                    let v = self.stack.pop().unwrap();
+                                    let s = self.stack.pop().unwrap();
+                                    if !matches!(s, Value::Symbol(_)) {
+                                        return Err(SelError::Runtime(
+                                            loc,
+                                            format!("Attempt to call non-function value: {}", callee),
+                                        ));
+                                    }
+                                    let r = self.stack.pop().unwrap();
+                                    let value = internal::rset(loc, vec![r, s, v])?;
+                                    self.stack.push(value);
+                                }
+                                _ => {
+                                    return Err(SelError::Runtime(
+                                        loc,
+                                        format!("Attempt to call non-function value: {}", callee),
+                                    ));
+                                }
+                            }
+                        }
                         _ => {
                             return Err(SelError::Runtime(
                                 loc,
