@@ -158,38 +158,6 @@ impl VM {
                         unreachable!();
                     }
                 }
-                OpCode::GetRecord(field) => {
-                    if let Value::Record(rec) = self.stack.pop().unwrap() {
-                        if let Some(value) = rec.fields().get(&field).cloned() {
-                            self.stack.push(value);
-                        } else {
-                            self.stack.push(Value::Nil);
-                        }
-                    } else {
-                        return Err(SelError::Runtime(
-                            loc,
-                            "(rget <record> <symbol>) requires record".into(),
-                        ));
-                    }
-                }
-                OpCode::SetRecord(field) => {
-                    let value = self.stack.pop().unwrap();
-                    if let Value::Record(mut rec) = self.stack.pop().unwrap() {
-                        let Some(field) = Rc::make_mut(&mut rec).fields_mut().get_mut(&field) else {
-                            return Err(SelError::Runtime(
-                                loc,
-                                format!("record does not have field {}", lookup(field)),
-                            ));
-                        };
-                        *field = value;
-                        self.stack.push(Value::Record(rec));
-                    } else {
-                        return Err(SelError::Runtime(
-                            loc,
-                            "(rget <record> <symbol>) requires record".into(),
-                        ));
-                    }
-                }
                 OpCode::Eq(arity) => {
                     let start = self.stack.len() - arity as usize;
                     let args: Vec<Value> = self.stack.drain(start..).collect();

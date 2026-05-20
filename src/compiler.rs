@@ -566,53 +566,6 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::Not(arg_count)));
                             return Ok(());
                         }
-                        "rget" => {
-                            let Some(record) = iter.next() else {
-                                return Err(SelError::SyntaxError(
-                                    loc,
-                                    "Expected exactly 2 arguments for rget".into(),
-                                ));
-                            };
-                            let Some(Ast::Symbol(_, field)) = iter.next() else {
-                                return Err(SelError::SyntaxError(
-                                    loc,
-                                    "Expected symbol in rget".into(),
-                                ));
-                            };
-                            self.compile(record)?;
-                            self.chunk.write((loc, OpCode::GetRecord(field)));
-                            return Ok(());
-                        }
-                        "rset" => {
-                            let Some(record) = iter.next() else {
-                                return Err(SelError::SyntaxError(
-                                    loc,
-                                    "Expected exactly 3 arguments for rset".into(),
-                                ));
-                            };
-                            let Some(Ast::Symbol(_, field)) = iter.next() else {
-                                return Err(SelError::SyntaxError(
-                                    loc,
-                                    "Expected symbol in rset".into(),
-                                ));
-                            };
-                            self.compile(record)?;
-
-                            let mut arg_count = 0;
-                            for arg in iter {
-                                self.compile(arg)?;
-                                arg_count += 1;
-                            }
-                            if arg_count != 1 {
-                                return Err(SelError::SyntaxError(
-                                    loc,
-                                    "Expected exactly 3 arguments for rset".into(),
-                                ));
-                            }
-
-                            self.chunk.write((loc, OpCode::SetRecord(field)));
-                            return Ok(());
-                        }
                         _ => self.compile(Ast::Symbol(loc, sym))?,
                     }
                 } else if let Some(next) = next {
@@ -768,8 +721,6 @@ pub enum OpCode {
     Import(u32),
     MakeRecord,
     AssocRecord(u32),
-    GetRecord(u32),
-    SetRecord(u32),
     MakeList(usize),
     ConcatList(usize),
     Sum(u32),
@@ -823,4 +774,3 @@ impl Chunk {
         self.constants.len() - 1
     }
 }
-
