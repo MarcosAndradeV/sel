@@ -7,9 +7,9 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'sel Lisp',
-      social: {
-        github: 'https://github.com/MarcosAndradeV/sel',
-      },
+      social: [
+        { icon: 'github', label: 'GitHub', href: 'https://github.com/MarcosAndradeV/sel' },
+      ],
       sidebar: [
         {
           label: 'Getting Started',
