@@ -25,6 +25,26 @@ impl std::fmt::Debug for NativeClosureFn {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoroutineState {
+    Suspended,
+    Running,
+    Dead,
+}
+
+pub struct Coroutine {
+    pub state: std::cell::Cell<CoroutineState>,
+    pub frames: RefCell<Vec<crate::runtime::CallFrame>>,
+    pub operand_stack: RefCell<Vec<Value>>,
+    pub closure: Rc<Closure>,
+}
+
+impl std::fmt::Debug for Coroutine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<coroutine>")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Value {
     Nil,
@@ -41,6 +61,7 @@ pub enum Value {
     Macro(Rc<Macro>),
     Pointer(usize),
     Library(Rc<libloading::Library>),
+    Coroutine(Rc<Coroutine>),
 }
 
 fn format_value(val: &Value) -> String {
@@ -87,6 +108,7 @@ fn format_value(val: &Value) -> String {
         Value::Macro(_) => "<macro>".to_string(),
         Value::Pointer(p) => format!("<pointer: {:#x}>", p),
         Value::Library(_) => "<library>".to_string(),
+        Value::Coroutine(_) => "<coroutine>".to_string(),
     }
 }
 

@@ -312,6 +312,7 @@ pub fn value_type_name(v: &Value) -> &str {
         Value::Pointer(_) => "pointer",
         Value::Library(_) => "library",
         Value::Record(_) => "record",
+        Value::Coroutine(_) => "coroutine",
     }
 }
 
@@ -1138,6 +1139,71 @@ pub fn system(loc: Loc, mut system_args: Vec<Value>) -> Result<Value> {
     }
 }
 
+pub fn co_create(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "co-create requires exactly 1 argument".into(),
+        ));
+    }
+    match args.pop().unwrap() {
+        Value::Closure(closure) => {
+            let co = Coroutine {
+                state: std::cell::Cell::new(CoroutineState::Suspended),
+                frames: RefCell::new(Vec::new()),
+                operand_stack: RefCell::new(Vec::new()),
+                closure,
+            };
+            Ok(Value::Coroutine(Rc::new(co)))
+        }
+        val => Err(SelError::Runtime(
+            loc,
+            format!("co-create: expected closure but got {}", val),
+        )),
+    }
+}
+
+pub fn co_state(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "co-state requires exactly 1 argument".into(),
+        ));
+    }
+    match args.pop().unwrap() {
+        Value::Coroutine(co) => {
+            let state_str = match co.state.get() {
+                CoroutineState::Suspended => "suspended",
+                CoroutineState::Running => "running",
+                CoroutineState::Dead => "dead",
+            };
+            Ok(Value::Symbol(intern(state_str)))
+        }
+        val => Err(SelError::Runtime(
+            loc,
+            format!("co-state: expected coroutine but got {}", val),
+        )),
+    }
+}
+
+pub fn co_dead_p(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "co-dead? requires exactly 1 argument".into(),
+        ));
+    }
+    match args.pop().unwrap() {
+        Value::Coroutine(co) => {
+            Ok(Value::Boolean(co.state.get() == CoroutineState::Dead))
+        }
+        val => Err(SelError::Runtime(
+            loc,
+            format!("co-dead?: expected coroutine but got {}", val),
+        )),
+    }
+}
+
 pub fn load(env: Rc<RefCell<Env>>) {
     let mut e = env.borrow_mut();
     e.insert(intern("+"), Value::NativeFunction(sum));
@@ -1187,6 +1253,10 @@ pub fn load(env: Rc<RefCell<Env>>) {
 
     e.insert(intern("system"), Value::NativeFunction(system));
     e.insert(intern("file-system"), Value::NativeFunction(file_system));
+
+    e.insert(intern("co-create"), Value::NativeFunction(co_create));
+    e.insert(intern("co-state"), Value::NativeFunction(co_state));
+    e.insert(intern("co-dead?"), Value::NativeFunction(co_dead_p));
 }
 
 pub fn read_script<P>(script_path: P) -> Result<String>

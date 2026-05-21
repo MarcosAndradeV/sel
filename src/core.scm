@@ -108,3 +108,38 @@
         #t (error "Arity mismatch in range function\nHint: (range end) (range end begin) (range end begin step)")
     )
 )
+
+;; Monadic Error Values
+(define (ok val)
+  (list 'ok val))
+
+(define (err msg)
+  (list 'err msg))
+
+(define (ok? x)
+  (and (list? x) (not (empty? x)) (eq? (car x) 'ok)))
+
+(define (err? x)
+  (and (list? x) (not (empty? x)) (eq? (car x) 'err)))
+
+(define (unwrap x)
+  (if (ok? x)
+      (car (cdr x))
+      (error "Called unwrap on err value:" (car (cdr x)))))
+
+(define (error-value x)
+  (if (err? x)
+      (car (cdr x))
+      (error "Called error-value on ok value:" (car (cdr x)))))
+
+(defmacro attempt (expr)
+  (list 'try
+        (list 'ok expr)
+        (list 'catch 'e (list 'err 'e))))
+
+(defmacro try-bind (val var body)
+  (list 'let (list (list '_try_bind_res_ val))
+        (list 'if (list 'err? '_try_bind_res_)
+              '_try_bind_res_
+              (list 'let (list (list var (list 'unwrap '_try_bind_res_)))
+                    body))))

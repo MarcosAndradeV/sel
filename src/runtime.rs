@@ -65,6 +65,7 @@ impl Env {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct CallFrame {
     #[allow(unused)]
     // Location of call, we need also a name
@@ -74,13 +75,25 @@ pub struct CallFrame {
     pub env: Rc<RefCell<Env>>,
 }
 
+#[derive(Clone)]
+pub struct CatchHandler {
+    pub catch_ip: usize,
+    pub frame_index: usize,
+    pub stack_height: usize,
+    pub env: Rc<RefCell<Env>>,
+}
+
 pub struct VM {
     pub stack: Vec<Value>,
+    pub catch_handlers: Vec<CatchHandler>,
 }
 
 impl VM {
     pub fn new() -> Self {
-        Self { stack: Vec::new() }
+        Self {
+            stack: Vec::new(),
+            catch_handlers: Vec::new(),
+        }
     }
 
     pub fn run(&mut self, loc: Loc, chunk: Rc<Chunk>, env: Rc<RefCell<Env>>) -> Result<Value> {
@@ -90,18 +103,51 @@ impl VM {
             ip: 0,
             env,
         }];
-        match self.run_internal(&mut frames) {
-            Err(e) => {
-                if let Some(last) = frames.last() {
-                    Err(SelError::Trace(format!(
-                        "runtime error at {}:\n{e}",
-                        last.loc
-                    )))
-                } else {
-                    Err(e)
+        loop {
+            match self.run_internal(&mut frames) {
+                Err(e) => {
+                    if self.catch_handlers.is_empty() {
+                        if let Some(last) = frames.last() {
+                            return Err(SelError::Trace(format!(
+                                "runtime error at {}:\n{e}",
+                                last.loc
+                            )));
+                        } else {
+                            return Err(e);
+                        }
+                    } else {
+                        self.handle_error(&mut frames, e)?;
+                    }
                 }
+                ok => return ok,
             }
-            ok => ok,
+        }
+    }
+
+    fn handle_error(&mut self, frames: &mut Vec<CallFrame>, err: SelError) -> Result<()> {
+        if let Some(handler) = self.catch_handlers.pop() {
+            // Unwind frames to the saved frame_index
+            frames.truncate(handler.frame_index + 1);
+
+            // Restore the environment and IP of that target frame
+            let target_frame = &mut frames[handler.frame_index];
+            target_frame.env = handler.env;
+            target_frame.ip = handler.catch_ip;
+
+            // Unwind operand stack to the saved stack_height
+            self.stack.truncate(handler.stack_height);
+
+            // Push the error message as a String
+            let err_msg = err.to_string();
+            self.stack.push(Value::String(Rc::new(err_msg)));
+
+            // Clean up any other catch handlers that were registered inside frames we just unwound
+            let frame_count = frames.len();
+            self.catch_handlers.retain(|h| h.frame_index < frame_count);
+
+            Ok(())
+        } else {
+            Err(err)
         }
     }
 
@@ -377,27 +423,6 @@ impl VM {
                     frame.ip = offset;
                 }
                 OpCode::Call(arg_count) => {
-                    let mut next_ip = frame.ip;
-                    let mut is_tail_call = false;
-                    let mut jumps = 0;
-                    while next_ip < frame.chunk.code.len() && jumps < 10 {
-                        match frame.chunk.code[next_ip].1 {
-                            OpCode::Return => {
-                                is_tail_call = true;
-                                break;
-                            }
-                            OpCode::Jump(target) => {
-                                next_ip = target;
-                                jumps += 1;
-                            }
-                            OpCode::PopEnv => {
-                                next_ip += 1;
-                            }
-                            _ => {
-                                break;
-                            }
-                        }
-                    }
                     let callee = self.stack[self.stack.len() - arg_count - 1].clone();
                     match callee {
                         Value::Closure(c) => {
@@ -430,24 +455,18 @@ impl VM {
                                 self.stack.truncate(self.stack.len() - arg_count);
                             }
                             self.stack.pop(); // pop callee
-                            if is_tail_call {
-                                frame.chunk = chunk;
-                                frame.ip = 0;
-                                frame.env = Rc::new(RefCell::new(call_env));
-                            } else {
-                                frames.push(CallFrame {
-                                    loc,
-                                    chunk,
-                                    ip: 0,
-                                    env: Rc::new(RefCell::new(call_env)),
-                                });
-                            }
+                            frames.push(CallFrame {
+                                loc,
+                                chunk,
+                                ip: 0,
+                                env: Rc::new(RefCell::new(call_env)),
+                            });
                         }
                         Value::NativeFunction(f) => {
                             let mut args = Vec::with_capacity(arg_count);
                             let start = self.stack.len() - arg_count;
                             args.extend(self.stack.drain(start..));
-                            self.stack.pop();
+                            self.stack.pop(); // pop callee
                             self.stack.push(f(loc, args)?);
                         }
                         Value::Macro(_) => {
@@ -460,7 +479,7 @@ impl VM {
                             let mut args = Vec::with_capacity(arg_count);
                             let start = self.stack.len() - arg_count;
                             args.extend(self.stack.drain(start..));
-                            self.stack.pop();
+                            self.stack.pop(); // pop callee
                             self.stack.push((f.0)(loc, args)?);
                         }
                         Value::Record(_) => match arg_count {
@@ -504,8 +523,126 @@ impl VM {
                         }
                     }
                 }
+                OpCode::TailCall(arg_count) => {
+                    let callee = self.stack[self.stack.len() - arg_count - 1].clone();
+                    match callee {
+                        Value::Closure(c) => {
+                            let params = c.params.clone();
+                            let chunk = c.chunk.clone();
+                            let c_env = c.env.clone();
+                            let mut call_env = Env::new(Some(c_env));
+                            let mut has_rest = false;
+                            for (i, id) in params.iter().enumerate() {
+                                if lookup(*id).starts_with('&') {
+                                    let rest_args =
+                                        self.stack.split_off(self.stack.len() - (arg_count - i));
+                                    let name = &lookup(*id)[1..];
+                                    call_env.insert(intern(name), Value::List(Rc::new(rest_args)));
+                                    has_rest = true;
+                                    break;
+                                } else {
+                                    let arg_idx = self.stack.len() - arg_count + i;
+                                    call_env.insert(*id, self.stack[arg_idx].clone());
+                                }
+                            }
+                            if !has_rest {
+                                if params.len() != arg_count {
+                                    return Err(SelError::ArityMismatch {
+                                        loc,
+                                        expected: params.len(),
+                                        actual: arg_count,
+                                    });
+                                }
+                                self.stack.truncate(self.stack.len() - arg_count);
+                            }
+                            self.stack.pop(); // pop callee
+                            frame.chunk = chunk;
+                            frame.ip = 0;
+                            frame.env = Rc::new(RefCell::new(call_env));
+                        }
+                        Value::NativeFunction(f) => {
+                            let mut args = Vec::with_capacity(arg_count);
+                            let start = self.stack.len() - arg_count;
+                            args.extend(self.stack.drain(start..));
+                            self.stack.pop(); // pop callee
+                            let res = f(loc, args)?;
+                            
+                            frames.pop();
+                            self.stack.push(res);
+                            if frames.is_empty() {
+                                return Ok(self.stack.pop().unwrap());
+                            }
+                        }
+                        Value::Macro(_) => {
+                            return Err(SelError::Runtime(
+                                loc,
+                                "Cannot call macro at runtime".into(),
+                            ));
+                        }
+                        Value::NativeClosure(f) => {
+                            let mut args = Vec::with_capacity(arg_count);
+                            let start = self.stack.len() - arg_count;
+                            args.extend(self.stack.drain(start..));
+                            self.stack.pop(); // pop callee
+                            let res = (f.0)(loc, args)?;
+                            
+                            frames.pop();
+                            self.stack.push(res);
+                            if frames.is_empty() {
+                                return Ok(self.stack.pop().unwrap());
+                            }
+                        }
+                        Value::Record(_) => {
+                            let res = match arg_count {
+                                1 => {
+                                    let s = self.stack.pop().unwrap();
+                                    if !matches!(s, Value::Symbol(_)) {
+                                        return Err(SelError::Runtime(
+                                            loc,
+                                            format!("Attempt to call non-function value: {}", callee),
+                                        ));
+                                    }
+                                    let r = self.stack.pop().unwrap();
+                                    internal::rget(loc, vec![r, s])?
+                                }
+                                2 => {
+                                    let v = self.stack.pop().unwrap();
+                                    let s = self.stack.pop().unwrap();
+                                    if !matches!(s, Value::Symbol(_)) {
+                                        return Err(SelError::Runtime(
+                                            loc,
+                                            format!("Attempt to call non-function value: {}", callee),
+                                        ));
+                                    }
+                                    let r = self.stack.pop().unwrap();
+                                    internal::rset(loc, vec![r, s, v])?
+                                }
+                                _ => {
+                                    return Err(SelError::Runtime(
+                                        loc,
+                                        format!("Attempt to call non-function value: {}", callee),
+                                    ));
+                                }
+                            };
+                            self.stack.pop(); // pop callee
+                            frames.pop();
+                            self.stack.push(res);
+                            if frames.is_empty() {
+                                return Ok(self.stack.pop().unwrap());
+                            }
+                        }
+                        _ => {
+                            return Err(SelError::Runtime(
+                                loc,
+                                format!("Attempt to call non-function value: {}", callee),
+                            ));
+                        }
+                    }
+                }
                 OpCode::Return => {
                     let result = self.stack.pop().unwrap_or(Value::Nil);
+                    let frame_idx = frames.len() - 1;
+                    self.catch_handlers.retain(|h| h.frame_index < frame_idx);
                     frames.pop();
                     self.stack.push(result);
                     if frames.is_empty() {
@@ -524,6 +661,93 @@ impl VM {
                 OpCode::PopEnv => {
                     let parent = frame.env.borrow().parent.clone().unwrap();
                     frame.env = parent;
+                }
+                OpCode::RegisterCatch(catch_ip) => {
+                    self.catch_handlers.push(CatchHandler {
+                        catch_ip,
+                        frame_index: frame_idx,
+                        stack_height: self.stack.len(),
+                        env: frame.env.clone(),
+                    });
+                }
+                OpCode::UnregisterCatch => {
+                    self.catch_handlers.pop();
+                }
+                OpCode::Yield => {
+                    let yielded_val = self.stack.pop().unwrap_or(Value::Nil);
+                    return Ok(yielded_val);
+                }
+                OpCode::CoResume => {
+                    let arg = self.stack.pop().unwrap_or(Value::Nil);
+                    let coroutine_val = self.stack.pop().ok_or_else(|| {
+                        SelError::Runtime(frame.loc, "co-resume: missing coroutine on stack".into())
+                    })?;
+
+                    if let Value::Coroutine(co) = coroutine_val {
+                        let state = co.state.get();
+                        if state == CoroutineState::Dead {
+                            return Err(SelError::Runtime(frame.loc, "Cannot resume a dead coroutine".into()));
+                        }
+                        if state == CoroutineState::Running {
+                            return Err(SelError::Runtime(frame.loc, "Cannot resume a running coroutine (re-entry is forbidden)".into()));
+                        }
+
+                        co.state.set(CoroutineState::Running);
+
+                        let co_stack = co.operand_stack.take();
+                        let old_stack = std::mem::replace(&mut self.stack, co_stack);
+                        let mut co_frames = co.frames.take();
+
+                        if co_frames.is_empty() {
+                            let mut call_env = Env::new(Some(co.closure.env.clone()));
+                            let params = &co.closure.params;
+                            if !params.is_empty() {
+                                let first_param = params[0];
+                                if crate::types::lookup(first_param).starts_with('&') {
+                                    let name = &crate::types::lookup(first_param)[1..];
+                                    call_env.insert(crate::types::intern(name), Value::List(Rc::new(vec![arg.clone()])));
+                                } else {
+                                    call_env.insert(first_param, arg.clone());
+                                }
+                            }
+                            co_frames.push(CallFrame {
+                                loc: frame.loc,
+                                chunk: co.closure.chunk.clone(),
+                                ip: 0,
+                                env: Rc::new(RefCell::new(call_env)),
+                            });
+                        } else {
+                            self.stack.push(arg);
+                        }
+
+                        let res = self.run_internal(&mut co_frames);
+
+                        match res {
+                            Ok(val) => {
+                                if co_frames.is_empty() {
+                                    co.state.set(CoroutineState::Dead);
+                                } else {
+                                    co.state.set(CoroutineState::Suspended);
+                                }
+                                *co.frames.borrow_mut() = co_frames;
+                                let final_co_stack = std::mem::replace(&mut self.stack, old_stack);
+                                *co.operand_stack.borrow_mut() = final_co_stack;
+                                self.stack.push(val);
+                            }
+                            Err(e) => {
+                                co.state.set(CoroutineState::Dead);
+                                *co.frames.borrow_mut() = co_frames;
+                                let final_co_stack = std::mem::replace(&mut self.stack, old_stack);
+                                *co.operand_stack.borrow_mut() = final_co_stack;
+                                return Err(e);
+                            }
+                        }
+                    } else {
+                        return Err(SelError::Runtime(
+                            frame.loc,
+                            format!("co-resume: expected coroutine but got {}", coroutine_val),
+                        ));
+                    }
                 }
                 OpCode::MakeClosure(idx) => {
                     if let Value::Closure(c) = frame.chunk.constants[idx].clone() {

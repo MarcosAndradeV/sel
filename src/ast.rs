@@ -34,6 +34,9 @@ pub enum Ast {
     Boolean(Loc, bool),
     List(Loc, Vec<Self>),
     Record(Loc, Vec<(u32, Self)>),
+    Try(Loc, Box<Ast>, u32, Vec<Ast>),
+    Yield(Loc, Box<Ast>),
+    CoResume(Loc, Box<Ast>, Box<Ast>),
 }
 
 impl Ast {
@@ -62,6 +65,9 @@ impl Ast {
             Ast::List(loc, ..) => *loc,
             Ast::Bind(loc, ..) => *loc,
             Ast::Record(loc, ..) => *loc,
+            Ast::Try(loc, ..) => *loc,
+            Ast::Yield(loc, ..) => *loc,
+            Ast::CoResume(loc, ..) => *loc,
         }
     }
 }
@@ -92,6 +98,9 @@ impl std::fmt::Display for Ast {
             Ast::List(..) => write!(f, "<list>"),
             Ast::Record(..) => write!(f, "<record>"),
             Ast::Bind(_, id) => write!(f, "&{}", lookup(*id)),
+            Ast::Try(..) => write!(f, "try"),
+            Ast::Yield(..) => write!(f, "co-yield"),
+            Ast::CoResume(..) => write!(f, "co-resume"),
         }
     }
 }
@@ -206,6 +215,36 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
             (loc, Value::List(Rc::new(list)))
         }
         Ast::Bind(loc, id) => (loc, Value::Symbol(intern(&format!("&{}", lookup(id))))),
+        Ast::Try(loc, body, err_var, catch_body) => {
+            let list = vec![
+                Value::Symbol(intern("try")),
+                ast_to_value(*body).1,
+                Value::List(Rc::new({
+                    let mut catch_list = vec![
+                        Value::Symbol(intern("catch")),
+                        Value::Symbol(err_var),
+                    ];
+                    catch_list.extend(catch_body.into_iter().map(|a| ast_to_value(a).1));
+                    catch_list
+                }))
+            ];
+            (loc, Value::List(Rc::new(list)))
+        }
+        Ast::Yield(loc, val) => (
+            loc,
+            Value::List(Rc::new(vec![
+                Value::Symbol(intern("co-yield")),
+                ast_to_value(*val).1,
+            ])),
+        ),
+        Ast::CoResume(loc, co, arg) => (
+            loc,
+            Value::List(Rc::new(vec![
+                Value::Symbol(intern("co-resume")),
+                ast_to_value(*co).1,
+                ast_to_value(*arg).1,
+            ])),
+        ),
         Ast::Record(loc, record) => (
             loc,
             Value::Record(Rc::new(

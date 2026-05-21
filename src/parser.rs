@@ -145,6 +145,53 @@ pub fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
 
     if let Some(Ast::Symbol(s_loc, id)) = list.first().cloned() {
         match lookup(id).as_str() {
+            "co-yield" => {
+                let mut iter = list.into_iter().skip(1);
+                let expr = iter.next().unwrap_or(Ast::Nil(s_loc));
+                Ok(Ast::Yield(s_loc, Box::new(expr)))
+            }
+            "co-resume" => {
+                let mut iter = list.into_iter().skip(1);
+                let co = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Missing coroutine in co-resume".into())
+                })?;
+                let arg = iter.next().unwrap_or(Ast::Nil(s_loc));
+                Ok(Ast::CoResume(s_loc, Box::new(co), Box::new(arg)))
+            }
+            "try" => {
+                let mut iter = list.into_iter().skip(1);
+                let body = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Missing body in try".into())
+                })?;
+                let catch_clause = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Missing catch clause in try".into())
+                })?;
+
+                match catch_clause {
+                    Ast::List(c_loc, c_list) => {
+                        let mut c_iter = c_list.into_iter();
+                        let first = c_iter.next().ok_or_else(|| {
+                            SelError::SyntaxError(c_loc, "Expected (catch err-var ...) clause".into())
+                        })?;
+
+                        match first {
+                            Ast::Symbol(_, catch_sym_id) if lookup(catch_sym_id) == "catch" => {
+                                let err_var = c_iter.next().ok_or_else(|| {
+                                    SelError::SyntaxError(c_loc, "Expected error variable in catch clause".into())
+                                })?;
+                                let err_var_id = match err_var {
+                                    Ast::Symbol(_, id) => id,
+                                    _ => return Err(SelError::SyntaxError(c_loc, "Expected symbol for error variable".into())),
+                                };
+                                let catch_body: Vec<Ast> = c_iter.collect();
+                                Ok(Ast::Try(s_loc, Box::new(body), err_var_id, catch_body))
+                            }
+                            _ => Err(SelError::SyntaxError(c_loc, "Expected catch keyword as first element of catch clause".into())),
+                        }
+                    }
+                    _ => Err(SelError::SyntaxError(s_loc, "Expected catch clause to be a list".into())),
+                }
+            }
             "->" => {
                 let mut iter = list.into_iter().skip(1);
                 let mut first_v = iter.next().ok_or_else(|| {

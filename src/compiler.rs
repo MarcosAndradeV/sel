@@ -23,6 +23,10 @@ impl<'a> Compiler<'a> {
     }
 
     pub fn compile(&mut self, ast: Ast) -> Result<()> {
+        self.compile_expr(ast, false)
+    }
+
+    pub fn compile_expr(&mut self, ast: Ast, is_tail: bool) -> Result<()> {
         match ast {
             Ast::Import(loc, id) => {
                 self.chunk.write((loc, OpCode::Import(id)));
@@ -64,7 +68,7 @@ impl<'a> Compiler<'a> {
                 self.chunk.write((loc, OpCode::JumpIfFalse(0)));
 
                 self.chunk.write((loc, OpCode::Pop));
-                self.compile(*true_branch)?;
+                self.compile_expr(*true_branch, is_tail)?;
 
                 let jump_end_idx = self.chunk.code.len();
                 self.chunk.write((loc, OpCode::Jump(0)));
@@ -74,7 +78,7 @@ impl<'a> Compiler<'a> {
                 self.chunk.write((loc, OpCode::Pop));
 
                 if let Some(fb) = false_branch {
-                    self.compile(*fb)?;
+                    self.compile_expr(*fb, is_tail)?;
                 } else {
                     let idx = self.chunk.add_constant(Value::Nil);
                     self.chunk.write((loc, OpCode::Constant(idx)));
@@ -92,7 +96,7 @@ impl<'a> Compiler<'a> {
                         self.compile(expr)?;
                         self.chunk.write((loc, OpCode::Pop));
                     }
-                    self.compile(last)?;
+                    self.compile_expr(last, is_tail)?;
                 }
             }
             Ast::Let(loc, bindings, mut body) => {
@@ -112,7 +116,7 @@ impl<'a> Compiler<'a> {
                         self.compile(expr)?;
                         self.chunk.write((loc, OpCode::Pop));
                     }
-                    self.compile(last)?;
+                    self.compile_expr(last, is_tail)?;
                 }
 
                 self.chunk.write((loc, OpCode::PopEnv));
@@ -130,7 +134,7 @@ impl<'a> Compiler<'a> {
                         child_compiler.compile(expr)?;
                         child_compiler.chunk.write((loc, OpCode::Pop));
                     }
-                    child_compiler.compile(last)?;
+                    child_compiler.compile_expr(last, true)?;
                 }
                 child_chunk.write((loc, OpCode::Return));
 
@@ -157,7 +161,7 @@ impl<'a> Compiler<'a> {
                             child_compiler.compile(expr)?;
                             child_compiler.chunk.write((loc, OpCode::Pop));
                         }
-                        child_compiler.compile(last)?;
+                        child_compiler.compile_expr(last, true)?;
                     }
                     child_chunk.write((loc, OpCode::Return));
 
@@ -174,6 +178,52 @@ impl<'a> Compiler<'a> {
                         "defmacro expects a lambda".into(),
                     ));
                 }
+            }
+            Ast::Try(loc, body, err_var, catch_body) => {
+                let catch_idx = self.chunk.code.len();
+                self.chunk.write((loc, OpCode::RegisterCatch(0)));
+
+                // Compile the try body. It is NOT in tail position because we must run UnregisterCatch afterwards!
+                self.compile_expr(*body, false)?;
+
+                self.chunk.write((loc, OpCode::UnregisterCatch));
+
+                let jump_end_idx = self.chunk.code.len();
+                self.chunk.write((loc, OpCode::Jump(0)));
+
+                // This is the start of the catch block
+                let catch_start_ip = self.chunk.code.len();
+                self.chunk.code[catch_idx] = (loc, OpCode::RegisterCatch(catch_start_ip));
+
+                // We build an environment for the error variable (which the VM will have pushed onto the stack)
+                self.chunk.write((loc, OpCode::BuildEnv(vec![err_var])));
+
+                if catch_body.is_empty() {
+                    let idx = self.chunk.add_constant(Value::Nil);
+                    self.chunk.write((loc, OpCode::Constant(idx)));
+                } else {
+                    let mut iter = catch_body.into_iter();
+                    let last = iter.next_back().unwrap();
+                    for expr in iter {
+                        self.compile(expr)?;
+                        self.chunk.write((loc, OpCode::Pop));
+                    }
+                    self.compile_expr(last, is_tail)?;
+                }
+
+                self.chunk.write((loc, OpCode::PopEnv));
+
+                let end_ip = self.chunk.code.len();
+                self.chunk.code[jump_end_idx] = (loc, OpCode::Jump(end_ip));
+            }
+            Ast::Yield(loc, val) => {
+                self.compile(*val)?;
+                self.chunk.write((loc, OpCode::Yield));
+            }
+            Ast::CoResume(loc, co, arg) => {
+                self.compile(*co)?;
+                self.compile(*arg)?;
+                self.chunk.write((loc, OpCode::CoResume));
             }
             Ast::List(loc, list) => {
                 if list.is_empty() {
@@ -578,7 +628,11 @@ impl<'a> Compiler<'a> {
                     self.compile(arg)?;
                     arg_count += 1;
                 }
-                self.chunk.write((loc, OpCode::Call(arg_count)));
+                if is_tail {
+                    self.chunk.write((loc, OpCode::TailCall(arg_count)));
+                } else {
+                    self.chunk.write((loc, OpCode::Call(arg_count)));
+                }
             }
             Ast::Record(loc, record) => {
                 self.chunk.write((loc, OpCode::MakeRecord));
@@ -604,7 +658,8 @@ impl<'a> Compiler<'a> {
                 let mut jump_ends = Vec::new();
 
                 for (i, expr) in exprs.iter().enumerate() {
-                    self.compile(expr.clone())?;
+                    let next_is_tail = if i == exprs.len() - 1 { is_tail } else { false };
+                    self.compile_expr(expr.clone(), next_is_tail)?;
                     if i < exprs.len() - 1 {
                         let jmp_false = self.chunk.code.len();
                         self.chunk.write((loc, OpCode::JumpIfFalse(0)));
@@ -627,7 +682,8 @@ impl<'a> Compiler<'a> {
 
                 let mut jump_ends = Vec::new();
                 for (i, expr) in exprs.iter().enumerate() {
-                    self.compile(expr.clone())?;
+                    let next_is_tail = if i == exprs.len() - 1 { is_tail } else { false };
+                    self.compile_expr(expr.clone(), next_is_tail)?;
                     if i < exprs.len() - 1 {
                         let jmp_false = self.chunk.code.len();
                         self.chunk.write((loc, OpCode::JumpIfFalse(0)));
@@ -714,11 +770,16 @@ pub enum OpCode {
     JumpIfFalse(usize),
     Jump(usize),
     Call(usize),
+    TailCall(usize),
     MakeClosure(usize),
     MakeMacro(u32, usize),
     Return,
     BuildEnv(Vec<u32>),
     PopEnv,
+    RegisterCatch(usize),
+    UnregisterCatch,
+    Yield,
+    CoResume,
     Import(u32),
     MakeRecord,
     AssocRecord(u32),
