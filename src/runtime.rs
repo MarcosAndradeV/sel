@@ -515,6 +515,41 @@ impl VM {
                                 ));
                             }
                         },
+                        Value::Symbol(sym) => match arg_count {
+                            1 => {
+                                let r = self.stack.pop().unwrap();
+                                if let Value::Record(_) = r {
+                                    let value = internal::rget(loc, vec![r, Value::Symbol(sym)])?;
+                                    self.stack.pop(); // pop callee (the symbol)
+                                    self.stack.push(value);
+                                } else {
+                                    return Err(SelError::Runtime(
+                                        loc,
+                                        format!("Attempt to call symbol on non-record: {}", r),
+                                    ));
+                                }
+                            }
+                            2 => {
+                                let v = self.stack.pop().unwrap();
+                                let r = self.stack.pop().unwrap();
+                                if let Value::Record(_) = r {
+                                    let value = internal::rset(loc, vec![r, Value::Symbol(sym), v])?;
+                                    self.stack.pop(); // pop callee (the symbol)
+                                    self.stack.push(value);
+                                } else {
+                                    return Err(SelError::Runtime(
+                                        loc,
+                                        format!("Attempt to call symbol on non-record: {}", r),
+                                    ));
+                                }
+                            }
+                            _ => {
+                                return Err(SelError::Runtime(
+                                    loc,
+                                    format!("Attempt to call non-function value: {}", callee),
+                                ));
+                            }
+                        },
                         _ => {
                             return Err(SelError::Runtime(
                                 loc,
@@ -625,6 +660,45 @@ impl VM {
                                 }
                             };
                             self.stack.pop(); // pop callee
+                            frames.pop();
+                            self.stack.push(res);
+                            if frames.is_empty() {
+                                return Ok(self.stack.pop().unwrap());
+                            }
+                        }
+                        Value::Symbol(sym) => {
+                            let res = match arg_count {
+                                1 => {
+                                    let r = self.stack.pop().unwrap();
+                                    if let Value::Record(_) = r {
+                                        internal::rget(loc, vec![r, Value::Symbol(sym)])?
+                                    } else {
+                                        return Err(SelError::Runtime(
+                                            loc,
+                                            format!("Attempt to call symbol on non-record: {}", r),
+                                        ));
+                                    }
+                                }
+                                2 => {
+                                    let v = self.stack.pop().unwrap();
+                                    let r = self.stack.pop().unwrap();
+                                    if let Value::Record(_) = r {
+                                        internal::rset(loc, vec![r, Value::Symbol(sym), v])?
+                                    } else {
+                                        return Err(SelError::Runtime(
+                                            loc,
+                                            format!("Attempt to call symbol on non-record: {}", r),
+                                        ));
+                                    }
+                                }
+                                _ => {
+                                    return Err(SelError::Runtime(
+                                        loc,
+                                        format!("Attempt to call non-function value: {}", callee),
+                                    ));
+                                }
+                            };
+                            self.stack.pop(); // pop callee (the symbol)
                             frames.pop();
                             self.stack.push(res);
                             if frames.is_empty() {
@@ -898,6 +972,13 @@ pub fn macro_expand(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
             loc,
             Box::new(macro_expand_quasiquote(*expr, env)?),
         )),
+        Ast::Record(loc, record) => {
+            let mut exp_fields = Vec::new();
+            for (sym, arg) in record {
+                exp_fields.push((sym, macro_expand(arg, env.clone())?));
+            }
+            Ok(Ast::Record(loc, exp_fields))
+        }
         _ => Ok(ast),
     }
 }
@@ -915,6 +996,13 @@ pub fn macro_expand_quasiquote(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
                 exp.push(macro_expand_quasiquote(item, env.clone())?);
             }
             Ok(Ast::List(loc, exp))
+        }
+        Ast::Record(loc, record) => {
+            let mut exp_fields = Vec::new();
+            for (sym, arg) in record {
+                exp_fields.push((sym, macro_expand_quasiquote(arg, env.clone())?));
+            }
+            Ok(Ast::Record(loc, exp_fields))
         }
         _ => Ok(ast),
     }

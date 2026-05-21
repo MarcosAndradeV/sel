@@ -143,3 +143,7 @@
               '_try_bind_res_
               (list 'let (list (list var (list 'unwrap '_try_bind_res_)))
                     body))))
+
+;; Record helpers
+(define (assoc rec k v) (rset rec k v))
+(define (dissoc rec k) (rdel rec k))

@@ -276,6 +276,13 @@ pub fn value_to_ast(val: Value, loc: Loc) -> Result<Ast> {
             }
             optimize_ast(ast_list, loc)
         }
+        Value::Record(r) => {
+            let mut fields = Vec::new();
+            for (&k, v) in r.fields().iter() {
+                fields.push((k, value_to_ast(v.clone(), loc)?));
+            }
+            Ok(Ast::Record(loc, fields))
+        }
         v => Err(SelError::SyntaxError(
             loc,
             format!("Cannot convert function or macro to AST ({v})"),

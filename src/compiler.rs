@@ -730,29 +730,36 @@ impl<'a> Compiler<'a> {
                     "unquote-splicing invalid at top level of quasiquote".into(),
                 ));
             }
-            Ast::List(loc, list) => {
-                let mut parts = 0;
-                for item in list {
-                    if let Ast::UnquoteSplicing(_, inner) = item {
-                        self.compile(*inner)?;
-                    } else {
-                        self.compile_quasiquote(item)?;
-                        self.chunk.write((loc, OpCode::MakeList(1)));
-                    }
-                    parts += 1;
-                }
-                if parts == 0 {
-                    let idx = self.chunk.add_constant(Value::Nil);
-                    self.chunk.write((loc, OpCode::Constant(idx)));
+        Ast::List(loc, list) => {
+            let mut parts = 0;
+            for item in list {
+                if let Ast::UnquoteSplicing(_, inner) = item {
+                    self.compile(*inner)?;
                 } else {
-                    self.chunk.write((loc, OpCode::ConcatList(parts)));
+                    self.compile_quasiquote(item)?;
+                    self.chunk.write((loc, OpCode::MakeList(1)));
                 }
+                parts += 1;
             }
-            _ => {
-                let (loc, val) = ast_to_value(ast);
-                let idx = self.chunk.add_constant(val);
+            if parts == 0 {
+                let idx = self.chunk.add_constant(Value::Nil);
                 self.chunk.write((loc, OpCode::Constant(idx)));
+            } else {
+                self.chunk.write((loc, OpCode::ConcatList(parts)));
             }
+        }
+        Ast::Record(loc, record) => {
+            self.chunk.write((loc, OpCode::MakeRecord));
+            for (sym, arg) in record {
+                self.compile_quasiquote(arg)?;
+                self.chunk.write((loc, OpCode::AssocRecord(sym)));
+            }
+        }
+        _ => {
+            let (loc, val) = ast_to_value(ast);
+            let idx = self.chunk.add_constant(val);
+            self.chunk.write((loc, OpCode::Constant(idx)));
+        }
         }
         Ok(())
     }

@@ -861,20 +861,95 @@ pub fn rset(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         Value::Record(r) => match index {
             Value::Symbol(sym) => {
                 let mut new_r = (*r).clone();
-                if let Some(v) = new_r.fields_mut().get_mut(&sym) {
-                    *v = value;
-                } else {
-                    return Ok(Value::Nil);
-                }
+                new_r.fields_mut().insert(sym, value);
                 Ok(Value::Record(Rc::new(new_r)))
             }
             _ => {
-                return Err(SelError::Runtime(loc, "rget requires a symbol".into()));
+                return Err(SelError::Runtime(loc, "rset requires a symbol".into()));
             }
         },
-        _ => Err(SelError::Runtime(loc, "rget requires a record".into())),
+        _ => Err(SelError::Runtime(loc, "rset requires a record".into())),
     }
 }
+
+pub fn rdel(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 2 arguments for rdel".into(),
+        ));
+    }
+    let index = args.pop().unwrap();
+    match args.pop().unwrap() {
+        Value::Record(r) => match index {
+            Value::Symbol(sym) => {
+                let mut new_r = (*r).clone();
+                new_r.fields_mut().shift_remove(&sym);
+                Ok(Value::Record(Rc::new(new_r)))
+            }
+            _ => Err(SelError::Runtime(loc, "rdel requires a symbol".into())),
+        },
+        _ => Err(SelError::Runtime(loc, "rdel requires a record".into())),
+    }
+}
+
+pub fn rkeys(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 1 argument for rkeys".into(),
+        ));
+    }
+    match args.pop().unwrap() {
+        Value::Record(r) => {
+            let keys_vec: Vec<Value> = r
+                .fields()
+                .keys()
+                .map(|&k| Value::Symbol(k))
+                .collect();
+            Ok(Value::List(Rc::new(keys_vec)))
+        }
+        _ => Err(SelError::Runtime(loc, "rkeys requires a record".into())),
+    }
+}
+
+pub fn rvals(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 1 argument for rvals".into(),
+        ));
+    }
+    match args.pop().unwrap() {
+        Value::Record(r) => {
+            let vals_vec: Vec<Value> = r
+                .fields()
+                .values()
+                .cloned()
+                .collect();
+            Ok(Value::List(Rc::new(vals_vec)))
+        }
+        _ => Err(SelError::Runtime(loc, "rvals requires a record".into())),
+    }
+}
+
+pub fn rcontains(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 2 arguments for rcontains?".into(),
+        ));
+    }
+    let index = args.pop().unwrap();
+    match args.pop().unwrap() {
+        Value::Record(r) => match index {
+            Value::Symbol(sym) => Ok(Value::Boolean(r.fields().contains_key(&sym))),
+            _ => Err(SelError::Runtime(loc, "rcontains? requires a symbol".into())),
+        },
+        _ => Err(SelError::Runtime(loc, "rcontains? requires a record".into())),
+    }
+}
+
 
 pub fn is_nil(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
@@ -1231,6 +1306,10 @@ pub fn load(env: Rc<RefCell<Env>>) {
 
     e.insert(intern("rget"), Value::NativeFunction(rget));
     e.insert(intern("rset"), Value::NativeFunction(rset));
+    e.insert(intern("rdel"), Value::NativeFunction(rdel));
+    e.insert(intern("rkeys"), Value::NativeFunction(rkeys));
+    e.insert(intern("rvals"), Value::NativeFunction(rvals));
+    e.insert(intern("rcontains?"), Value::NativeFunction(rcontains));
 
     e.insert(intern("nil?"), Value::NativeFunction(is_nil));
     e.insert(intern("list?"), Value::NativeFunction(is_list));
