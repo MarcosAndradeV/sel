@@ -403,6 +403,288 @@ pub fn ffi_dlsym(loc: Loc, args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[derive(Debug, Clone)]
+enum FfiType {
+    Void,
+    I32,
+    I64,
+    U32,
+    U64,
+    F32,
+    F64,
+    Bool,
+    U8,
+    Pointer,
+    Struct(Vec<FfiType>),
+}
+
+impl FfiType {
+    fn size_and_alignment(&self) -> (usize, usize) {
+        match self {
+            FfiType::Void => (0, 1),
+            FfiType::I32 | FfiType::U32 | FfiType::F32 => (4, 4),
+            FfiType::I64 | FfiType::U64 | FfiType::F64 | FfiType::Pointer => (8, 8),
+            FfiType::Bool | FfiType::U8 => (1, 1),
+            FfiType::Struct(fields) => {
+                let mut current_offset = 0;
+                let mut max_align = 1;
+                for field in fields {
+                    let (f_size, f_align) = field.size_and_alignment();
+                    if f_align > max_align {
+                        max_align = f_align;
+                    }
+                    current_offset = (current_offset + f_align - 1) & !(f_align - 1);
+                    current_offset += f_size;
+                }
+                let total_size = (current_offset + max_align - 1) & !(max_align - 1);
+                (total_size, max_align)
+            }
+        }
+    }
+
+    fn to_libffi_type(&self) -> libffi::middle::Type {
+        match self {
+            FfiType::Void => libffi::middle::Type::void(),
+            FfiType::I32 => libffi::middle::Type::i32(),
+            FfiType::I64 => libffi::middle::Type::i64(),
+            FfiType::U32 => libffi::middle::Type::u32(),
+            FfiType::U64 => libffi::middle::Type::u64(),
+            FfiType::F32 => libffi::middle::Type::f32(),
+            FfiType::F64 => libffi::middle::Type::f64(),
+            FfiType::Bool => libffi::middle::Type::u8(),
+            FfiType::U8 => libffi::middle::Type::u8(),
+            FfiType::Pointer => libffi::middle::Type::pointer(),
+            FfiType::Struct(fields) => {
+                let ffi_fields: Vec<_> = fields.iter().map(|f| f.to_libffi_type()).collect();
+                libffi::middle::Type::structure(ffi_fields)
+            }
+        }
+    }
+}
+
+fn parse_ffi_type(loc: Loc, val: &Value) -> Result<FfiType> {
+    match val {
+        Value::Symbol(s) => {
+            let sym = crate::lookup(*s);
+            match sym.as_str() {
+                "void" => Ok(FfiType::Void),
+                "i32" => Ok(FfiType::I32),
+                "i64" => Ok(FfiType::I64),
+                "u32" => Ok(FfiType::U32),
+                "u64" => Ok(FfiType::U64),
+                "f32" => Ok(FfiType::F32),
+                "f64" => Ok(FfiType::F64),
+                "bool" => Ok(FfiType::Bool),
+                "u8" => Ok(FfiType::U8),
+                "*u8" => Ok(FfiType::Pointer),
+                _ => Err(SelError::Runtime(loc, format!("Unsupported FFI primitive type: {sym}"))),
+            }
+        }
+        Value::List(l) => {
+            if l.len() != 2 {
+                return Err(SelError::Runtime(loc, "Invalid FFI type list: expected (struct (type1 type2 ...))".into()));
+            }
+            let first_sym = match &l[0] {
+                Value::Symbol(s) => crate::lookup(*s),
+                _ => return Err(SelError::Runtime(loc, "Expected symbol as first element of FFI type list".into())),
+            };
+            if first_sym != "struct" {
+                return Err(SelError::Runtime(loc, format!("Expected 'struct' keyword but got {first_sym}")));
+            }
+            let fields_list = match &l[1] {
+                Value::List(fl) => fl,
+                Value::Nil => return Ok(FfiType::Struct(Vec::new())),
+                _ => return Err(SelError::Runtime(loc, "Expected list of fields in struct type definition".into())),
+            };
+            let mut fields = Vec::with_capacity(fields_list.len());
+            for field in fields_list.iter() {
+                fields.push(parse_ffi_type(loc, field)?);
+            }
+            Ok(FfiType::Struct(fields))
+        }
+        _ => Err(SelError::Runtime(loc, format!("Invalid FFI type: {val}"))),
+    }
+}
+
+fn serialize_value(
+    loc: Loc,
+    val: &Value,
+    ty: &FfiType,
+    buf: &mut Vec<u8>,
+    c_strings: &mut Vec<std::ffi::CString>,
+) -> Result<()> {
+    match ty {
+        FfiType::Void => Ok(()),
+        FfiType::I32 => {
+            let n = match val {
+                Value::Integer(i) => *i as i32,
+                Value::Float(f) => *f as i32,
+                _ => return Err(SelError::Runtime(loc, format!("Expected integer/float for i32 but got {}", value_type_name(val)))),
+            };
+            buf.extend_from_slice(&n.to_ne_bytes());
+            Ok(())
+        }
+        FfiType::I64 => {
+            let n = match val {
+                Value::Integer(i) => *i,
+                Value::Float(f) => *f as i64,
+                _ => return Err(SelError::Runtime(loc, format!("Expected integer/float for i64 but got {}", value_type_name(val)))),
+            };
+            buf.extend_from_slice(&n.to_ne_bytes());
+            Ok(())
+        }
+        FfiType::U32 => {
+            let n = match val {
+                Value::Integer(i) => *i as u32,
+                Value::Float(f) => *f as u32,
+                _ => return Err(SelError::Runtime(loc, format!("Expected integer/float for u32 but got {}", value_type_name(val)))),
+            };
+            buf.extend_from_slice(&n.to_ne_bytes());
+            Ok(())
+        }
+        FfiType::U64 => {
+            let n = match val {
+                Value::Integer(i) => *i as u64,
+                Value::Float(f) => *f as u64,
+                _ => return Err(SelError::Runtime(loc, format!("Expected integer/float for u64 but got {}", value_type_name(val)))),
+            };
+            buf.extend_from_slice(&n.to_ne_bytes());
+            Ok(())
+        }
+        FfiType::F32 => {
+            let n = match val {
+                Value::Integer(i) => *i as f32,
+                Value::Float(f) => *f as f32,
+                _ => return Err(SelError::Runtime(loc, format!("Expected integer/float for f32 but got {}", value_type_name(val)))),
+            };
+            buf.extend_from_slice(&n.to_ne_bytes());
+            Ok(())
+        }
+        FfiType::F64 => {
+            let n = match val {
+                Value::Integer(i) => *i as f64,
+                Value::Float(f) => *f,
+                _ => return Err(SelError::Runtime(loc, format!("Expected integer/float for f64 but got {}", value_type_name(val)))),
+            };
+            buf.extend_from_slice(&n.to_ne_bytes());
+            Ok(())
+        }
+        FfiType::Bool | FfiType::U8 => {
+            let n = match val {
+                Value::Boolean(b) => if *b { 1u8 } else { 0u8 },
+                Value::Integer(i) => *i as u8,
+                _ => return Err(SelError::Runtime(loc, format!("Expected boolean or integer for u8/bool but got {}", value_type_name(val)))),
+            };
+            buf.push(n);
+            Ok(())
+        }
+        FfiType::Pointer => {
+            let ptr = match val {
+                Value::String(s) => {
+                    let cstr = std::ffi::CString::new(s.as_str()).unwrap();
+                    let ptr = cstr.as_ptr() as usize;
+                    c_strings.push(cstr);
+                    ptr
+                }
+                Value::Pointer(p) => *p,
+                Value::Nil => 0,
+                _ => return Err(SelError::Runtime(loc, format!("Expected string, pointer, or nil but got {}", value_type_name(val)))),
+            };
+            buf.extend_from_slice(&ptr.to_ne_bytes());
+            Ok(())
+        }
+        FfiType::Struct(fields) => {
+            let list = match val {
+                Value::List(l) => l.clone(),
+                Value::Record(r) => {
+                    Rc::new(r.fields().iter().map(|(_, v)| v.clone()).collect::<Vec<_>>())
+                }
+                _ => return Err(SelError::Runtime(loc, format!("Expected list or record for struct value but got {}", value_type_name(val)))),
+            };
+            if list.len() != fields.len() {
+                return Err(SelError::Runtime(
+                    loc,
+                    format!("Struct value field count mismatch: expected {} but got {}", fields.len(), list.len()),
+                ));
+            }
+            let mut current_offset = 0;
+            for (f_val, f_type) in list.iter().zip(fields) {
+                let (f_size, f_align) = f_type.size_and_alignment();
+                let target_offset = (current_offset + f_align - 1) & !(f_align - 1);
+                let padding = target_offset - current_offset;
+                buf.resize(buf.len() + padding, 0);
+                serialize_value(loc, f_val, f_type, buf, c_strings)?;
+                current_offset = target_offset + f_size;
+            }
+            let (_, s_align) = ty.size_and_alignment();
+            let total_size = (current_offset + s_align - 1) & !(s_align - 1);
+            let padding = total_size - current_offset;
+            buf.resize(buf.len() + padding, 0);
+            Ok(())
+        }
+    }
+}
+
+unsafe fn deserialize_value(ty: &FfiType, ptr: *const u8) -> Value {
+    unsafe {
+        match ty {
+            FfiType::Void => Value::Nil,
+            FfiType::I32 => {
+                let val = std::ptr::read_unaligned(ptr as *const i32);
+                Value::Integer(val as i64)
+            }
+            FfiType::I64 => {
+                let val = std::ptr::read_unaligned(ptr as *const i64);
+                Value::Integer(val)
+            }
+            FfiType::U32 => {
+                let val = std::ptr::read_unaligned(ptr as *const u32);
+                Value::Integer(val as i64)
+            }
+            FfiType::U64 => {
+                let val = std::ptr::read_unaligned(ptr as *const u64);
+                Value::Integer(val as i64)
+            }
+            FfiType::F32 => {
+                let val = std::ptr::read_unaligned(ptr as *const f32);
+                Value::Float(val as f64)
+            }
+            FfiType::F64 => {
+                let val = std::ptr::read_unaligned(ptr as *const f64);
+                Value::Float(val)
+            }
+            FfiType::Bool => {
+                let val = std::ptr::read(ptr as *const u8);
+                Value::Boolean(val != 0)
+            }
+            FfiType::U8 => {
+                let val = std::ptr::read(ptr as *const u8);
+                Value::Integer(val as i64)
+            }
+            FfiType::Pointer => {
+                let val = std::ptr::read_unaligned(ptr as *const usize);
+                if val == 0 {
+                    Value::Nil
+                } else {
+                    Value::Pointer(val)
+                }
+            }
+            FfiType::Struct(fields) => {
+                let mut list = Vec::with_capacity(fields.len());
+                let mut current_offset = 0;
+                for f_type in fields {
+                    let (f_size, f_align) = f_type.size_and_alignment();
+                    let target_offset = (current_offset + f_align - 1) & !(f_align - 1);
+                    let field_ptr = ptr.add(target_offset);
+                    list.push(deserialize_value(f_type, field_ptr));
+                    current_offset = target_offset + f_size;
+                }
+                Value::List(Rc::new(list))
+            }
+        }
+    }
+}
+
 pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() != 4 {
         return Err(SelError::Runtime(
@@ -417,284 +699,88 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
         }
     };
 
-    let ret_type_sym = match args[1] {
-        Value::Symbol(s) => crate::lookup(s),
-        _ => {
-            return Err(SelError::Runtime(
-                loc,
-                "ffi-call requires a return type symbol".into(),
-            ));
-        }
-    };
+    let ret_type = parse_ffi_type(loc, &args[1])?;
 
-    let arg_type_syms = match &args[2] {
-        Value::List(l) => {
-            let mut syms = Vec::new();
-            for v in l.iter() {
-                if let Value::Symbol(s) = v {
-                    syms.push(crate::lookup(*s));
-                } else {
-                    return Err(SelError::Runtime(
-                        loc,
-                        format!("arg_types must be a list of symbols {v}"),
-                    ));
-                }
-            }
-            syms
-        }
-        Value::Nil => Vec::new(),
-        _ => {
-            return Err(SelError::Runtime(loc, "arg_types must be a list".into()));
-        }
-    };
-
-    let arg_vals = match args[3].clone() {
-        Value::List(l) => l,
+    let arg_types_list = match &args[2] {
+        Value::List(l) => l.clone(),
         Value::Nil => Rc::new(Vec::new()),
-        _ => {
-            return Err(SelError::Runtime(loc, "arg_vals must be a list".into()));
-        }
+        _ => return Err(SelError::Runtime(loc, "arg_types must be a list".into())),
     };
-
-    let ret_type = match ret_type_sym.as_str() {
-        "void" => libffi::middle::Type::void(),
-        "i32" => libffi::middle::Type::i32(),
-        "i64" => libffi::middle::Type::i64(),
-        "u32" => libffi::middle::Type::u32(),
-        "u64" => libffi::middle::Type::u64(),
-        "f32" => libffi::middle::Type::f32(),
-        "f64" => libffi::middle::Type::f64(),
-        "bool" => libffi::middle::Type::u8(),
-        "*u8" => libffi::middle::Type::pointer(),
-        _ => {
-            return Err(SelError::Runtime(
-                loc,
-                format!("Unsupported return type: {}", ret_type_sym),
-            ));
-        }
-    };
-
-    let mut arg_types = Vec::new();
-    for sym in &arg_type_syms {
-        let t = match sym.as_str() {
-            "i32" => libffi::middle::Type::i32(),
-            "i64" => libffi::middle::Type::i64(),
-            "u32" => libffi::middle::Type::u32(),
-            "u64" => libffi::middle::Type::u64(),
-            "f32" => libffi::middle::Type::f32(),
-            "f64" => libffi::middle::Type::f64(),
-            "bool" => libffi::middle::Type::u8(),
-            "*u8" => libffi::middle::Type::pointer(),
-            _ => {
-                return Err(SelError::Runtime(
-                    loc,
-                    format!("Unsupported arg type: {}", sym),
-                ));
-            }
-        };
-        arg_types.push(t);
+    let mut arg_types = Vec::with_capacity(arg_types_list.len());
+    for t in arg_types_list.iter() {
+        arg_types.push(parse_ffi_type(loc, t)?);
     }
 
-    let cif = libffi::middle::Cif::new(arg_types, ret_type);
+    let arg_vals = match &args[3] {
+        Value::List(l) => l.clone(),
+        Value::Nil => Rc::new(Vec::new()),
+        _ => return Err(SelError::Runtime(loc, "arg_vals must be a list".into())),
+    };
+    if arg_vals.len() != arg_types.len() {
+        return Err(SelError::Runtime(
+            loc,
+            format!("Argument count mismatch: expected {} but got {}", arg_types.len(), arg_vals.len()),
+        ));
+    }
 
+    let ffi_ret_type = ret_type.to_libffi_type();
+    let ffi_arg_types: Vec<_> = arg_types.iter().map(|t| t.to_libffi_type()).collect();
+    let cif = libffi::middle::Cif::new(ffi_arg_types, ffi_ret_type);
+
+    let mut arg_buffers = Vec::with_capacity(arg_vals.len());
     let mut c_strings = Vec::new();
-
-    enum FfiArg {
-        I32(i32),
-        I64(i64),
-        U8(u8),
-        U32(u32),
-        U64(u64),
-        F32(f32),
-        F64(f64),
-        Ptr(*const std::ffi::c_void),
+    for (arg_val, arg_type) in arg_vals.iter().zip(&arg_types) {
+        let mut buf = Vec::new();
+        serialize_value(loc, arg_val, arg_type, &mut buf, &mut c_strings)?;
+        arg_buffers.push(buf);
     }
 
-    let mut ffi_args_storage = Vec::new();
-
-    for (i, arg_val) in arg_vals.iter().enumerate() {
-        let sym: &str = &arg_type_syms[i];
-        match sym {
-            "i32" => {
-                let v = match arg_val {
-                    Value::Integer(n) => *n as i32,
-                    Value::Float(f) => *f as i32,
-                    _ => {
-                        return Err(SelError::Runtime(
-                            loc,
-                            format!("Expected integer for arg {}", i),
-                        ));
-                    }
-                };
-                ffi_args_storage.push(FfiArg::I32(v));
-            }
-            "bool" => {
-                let v = match arg_val {
-                    Value::Boolean(b) => {
-                        if *b {
-                            1u8
-                        } else {
-                            0u8
-                        }
-                    }
-                    Value::Integer(n) => {
-                        if *n != 0 {
-                            1u8
-                        } else {
-                            0u8
-                        }
-                    }
-                    _ => {
-                        return Err(SelError::Runtime(
-                            loc,
-                            format!("Expected boolean for arg {}", i),
-                        ));
-                    }
-                };
-                ffi_args_storage.push(FfiArg::U8(v));
-            }
-            "i64" => {
-                let v = match arg_val {
-                    Value::Integer(n) => *n,
-                    Value::Float(f) => *f as i64,
-                    _ => {
-                        return Err(SelError::Runtime(
-                            loc,
-                            format!("Expected integer for arg {}", i),
-                        ));
-                    }
-                };
-                ffi_args_storage.push(FfiArg::I64(v));
-            }
-            "u32" => {
-                let v = match arg_val {
-                    Value::Integer(n) => *n as u32,
-                    Value::Float(f) => *f as u32,
-                    _ => {
-                        return Err(SelError::Runtime(
-                            loc,
-                            format!("Expected integer for arg {}", i),
-                        ));
-                    }
-                };
-                ffi_args_storage.push(FfiArg::U32(v));
-            }
-            "u64" => {
-                let v = match arg_val {
-                    Value::Integer(n) => *n as u64,
-                    Value::Float(f) => *f as u64,
-                    _ => {
-                        return Err(SelError::Runtime(
-                            loc,
-                            format!("Expected integer for arg {}", i),
-                        ));
-                    }
-                };
-                ffi_args_storage.push(FfiArg::U64(v));
-            }
-            "f32" => {
-                let v = match arg_val {
-                    Value::Integer(n) => *n as f32,
-                    Value::Float(f) => *f as f32,
-                    _ => {
-                        return Err(SelError::Runtime(
-                            loc,
-                            format!("Expected float for arg {}", i),
-                        ));
-                    }
-                };
-                ffi_args_storage.push(FfiArg::F32(v));
-            }
-            "f64" => {
-                let v = match arg_val {
-                    Value::Integer(n) => *n as f64,
-                    Value::Float(f) => *f,
-                    _ => {
-                        return Err(SelError::Runtime(
-                            loc,
-                            format!("Expected float for arg {}", i),
-                        ));
-                    }
-                };
-                ffi_args_storage.push(FfiArg::F64(v));
-            }
-            "*u8" => {
-                match arg_val {
-                    Value::String(s) => {
-                        let cstr = std::ffi::CString::new(s.as_str()).unwrap();
-                        let ptr = cstr.as_ptr() as *const std::ffi::c_void;
-                        c_strings.push(cstr); // keep alive
-                        ffi_args_storage.push(FfiArg::Ptr(ptr));
-                    }
-                    Value::Pointer(p) => {
-                        ffi_args_storage.push(FfiArg::Ptr(*p as *const std::ffi::c_void));
-                    }
-                    Value::Nil => {
-                        ffi_args_storage.push(FfiArg::Ptr(std::ptr::null()));
-                    }
-                    _ => {
-                        return Err(SelError::Runtime(
-                            loc,
-                            format!("Expected string or pointer for arg {}", i),
-                        ));
-                    }
-                }
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    let mut call_args = Vec::new();
-    for arg in &ffi_args_storage {
-        match arg {
-            FfiArg::I32(v) => call_args.push(libffi::middle::arg(v)),
-            FfiArg::I64(v) => call_args.push(libffi::middle::arg(v)),
-            FfiArg::U8(v) => call_args.push(libffi::middle::arg(v)),
-            FfiArg::U32(v) => call_args.push(libffi::middle::arg(v)),
-            FfiArg::U64(v) => call_args.push(libffi::middle::arg(v)),
-            FfiArg::F32(v) => call_args.push(libffi::middle::arg(v)),
-            FfiArg::F64(v) => call_args.push(libffi::middle::arg(v)),
-            FfiArg::Ptr(v) => call_args.push(libffi::middle::arg(v)),
+    let mut call_args = Vec::with_capacity(arg_vals.len());
+    for buf in &arg_buffers {
+        if buf.is_empty() {
+            call_args.push(libffi::middle::arg(&0u8));
+        } else {
+            call_args.push(libffi::middle::arg(&buf[0]));
         }
     }
 
     let code_ptr = libffi::middle::CodePtr::from_ptr(ptr as *mut _);
 
     unsafe {
-        match ret_type_sym.as_str() {
-            "void" => {
+        match ret_type {
+            FfiType::Void => {
                 cif.call::<()>(code_ptr, &call_args);
                 Ok(Value::Nil)
             }
-            "bool" => {
+            FfiType::Bool => {
                 let res: u8 = cif.call(code_ptr, &call_args);
                 Ok(Value::Boolean(res != 0))
             }
-            "i32" => {
+            FfiType::I32 => {
                 let res: i32 = cif.call(code_ptr, &call_args);
                 Ok(Value::Integer(res as i64))
             }
-            "i64" => {
+            FfiType::I64 => {
                 let res: i64 = cif.call(code_ptr, &call_args);
                 Ok(Value::Integer(res))
             }
-            "u32" => {
+            FfiType::U32 => {
                 let res: u32 = cif.call(code_ptr, &call_args);
                 Ok(Value::Integer(res as i64))
             }
-            "u64" => {
+            FfiType::U64 => {
                 let res: u64 = cif.call(code_ptr, &call_args);
                 Ok(Value::Integer(res as i64))
             }
-            "f32" => {
+            FfiType::F32 => {
                 let res: f32 = cif.call(code_ptr, &call_args);
                 Ok(Value::Float(res as f64))
             }
-            "f64" => {
+            FfiType::F64 => {
                 let res: f64 = cif.call(code_ptr, &call_args);
                 Ok(Value::Float(res))
             }
-            "*u8" => {
+            FfiType::Pointer => {
                 let res: *const std::ffi::c_char = cif.call(code_ptr, &call_args);
                 if res.is_null() {
                     Ok(Value::Nil)
@@ -703,7 +789,15 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
                     Ok(Value::String(Rc::new(c_str.to_string_lossy().into_owned())))
                 }
             }
-            _ => unreachable!(),
+            FfiType::U8 => {
+                let res: u8 = cif.call(code_ptr, &call_args);
+                Ok(Value::Integer(res as i64))
+            }
+            FfiType::Struct(ref _fields) => {
+                let res_val: [u64; 32] = cif.call(code_ptr, &call_args);
+                let ptr = res_val.as_ptr() as *const u8;
+                Ok(deserialize_value(&ret_type, ptr))
+            }
         }
     }
 }
