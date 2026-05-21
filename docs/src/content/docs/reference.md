@@ -123,8 +123,25 @@ Structured error handling framework. If the expression inside the `try` block tr
 
 ### import
 Loads external Scheme library files into the current runtime environment.
+
+`sel` supports module namespaces by prefixing exported names with the module name (e.g. `point/new-point`). You can customize this prefix using the `:as` keyword or a nested shorthand structure:
+
 ```lisp
-(import my-library)
+;; Standard import (prefix matches module name: 'point')
+(import point)
+(point/new-point 1 2)
+
+;; Inline alias using :as
+(import point :as p)
+(p/new-point 3 4)
+
+;; Nested list with :as
+(import (point :as pt))
+(pt/new-point 5 6)
+
+;; Nested list shorthand
+(import (point pnt))
+(pnt/new-point 7 8)
 ```
 
 ---

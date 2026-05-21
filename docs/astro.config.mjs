@@ -20,6 +20,7 @@ export default defineConfig({
           label: 'Guides & References',
           items: [
             { label: 'Language Reference', link: '/reference' },
+            { label: 'Interactive REPL', link: '/repl' },
             { label: 'Standard & Core Library', link: '/core' },
           ],
         },
