@@ -49,10 +49,6 @@ impl Env {
         self.bindings.insert(id, val);
     }
 
-    pub fn insert_checked(&mut self, id: u32, val: Value) -> Option<Value> {
-        self.bindings.insert(id, val)
-    }
-
     fn set(&mut self, id: u32, val: Value) -> bool {
         if let std::collections::hash_map::Entry::Occupied(mut e) = self.bindings.entry(id) {
             e.insert(val);
@@ -170,27 +166,45 @@ impl VM {
             let (loc, instruction) = frame.chunk.code[frame.ip].clone();
             frame.ip += 1;
             match instruction {
-                OpCode::Import(id) => {
+                OpCode::Import(id, alias) => {
                     let fp = PathBuf::from(lookup(loc.file_id));
-                    let (modname, fp) = if let Some(parent) = fp.parent()
-                        && parent.is_dir()
+                    let sym = lookup(id);
+                    
+                    let (modname, fp) = if lookup(loc.file_id) != "<repl>"
+                        && fp.parent().map_or(false, |p| p.is_dir() && p != std::path::Path::new(""))
                     {
-                        let sym = lookup(id);
+                        let parent = fp.parent().unwrap();
                         let pth = parent.join(format!("{}.scm", sym));
-                        (sym, pth)
+                        (sym.clone(), pth)
                     } else {
-                        todo!("{}", fp.display())
+                        let current = std::env::current_dir().unwrap_or_default();
+                        let pth = current.join(format!("{}.scm", sym));
+                        (sym.clone(), pth)
                     };
+                    
                     let src = read_script(&fp).map_err(|e| SelError::Internal(e.to_string()))?;
                     let asts = parse_all(&src, intern(fp.to_string_lossy().as_ref()))?;
                     let m_env = Rc::new(RefCell::new(Env::default()));
                     m_env.borrow_mut().parent = Some(load_core_lib());
-                    let rec = import_module(&modname, asts, m_env)?;
+                    
+                    // Extract base module name (e.g. "tests/math" -> "math")
+                    let base_name = PathBuf::from(&modname)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(&modname)
+                        .to_string();
+                        
+                    // Determine namespace prefix
+                    let prefix = if let Some(alias_id) = alias {
+                        lookup(alias_id)
+                    } else {
+                        base_name
+                    };
+                    
+                    let rec = import_module(&prefix, asts, m_env)?;
                     let mut frame_env = frame.env.borrow_mut();
                     for (sym, val) in rec.into_fields() {
-                        if frame_env.insert_checked(sym, val).is_some() {
-                            todo!("bind clash. How we should this?")
-                        }
+                        frame_env.insert(sym, val);
                     }
                 }
                 OpCode::MakeRecord => {

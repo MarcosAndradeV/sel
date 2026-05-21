@@ -13,7 +13,7 @@ type Result<T> = std::result::Result<T, SelError>;
 pub enum Ast {
     Define(Loc, u32, Box<Ast>),
     DefMacro(Loc, u32, Box<Ast>),
-    Import(Loc, u32),
+    Import(Loc, u32, Option<u32>),
     Let(Loc, Vec<(u32, Ast)>, Vec<Ast>),
     Set(Loc, u32, Box<Ast>),
     If(Loc, Box<Ast>, Box<Ast>, Option<Box<Ast>>),
@@ -135,10 +135,14 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
             ])),
 
         ),
-        Ast::Import(loc, id) => (
-            loc,
-            Value::List(Rc::new(vec![Value::Symbol(intern("import")), Value::Symbol(id)])),
-        ),
+        Ast::Import(loc, id, alias) => {
+            let mut list = vec![Value::Symbol(intern("import")), Value::Symbol(id)];
+            if let Some(a) = alias {
+                list.push(Value::Symbol(intern(":as")));
+                list.push(Value::Symbol(a));
+            }
+            (loc, Value::List(Rc::new(list)))
+        },
         Ast::Set(loc, id, val) => (
             loc,
             Value::List(Rc::new(vec![

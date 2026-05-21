@@ -28,8 +28,8 @@ impl<'a> Compiler<'a> {
 
     pub fn compile_expr(&mut self, ast: Ast, is_tail: bool) -> Result<()> {
         match ast {
-            Ast::Import(loc, id) => {
-                self.chunk.write((loc, OpCode::Import(id)));
+            Ast::Import(loc, id, alias) => {
+                self.chunk.write((loc, OpCode::Import(id, alias)));
             }
             Ast::Integer(loc, i) => {
                 let idx = self.chunk.add_constant(Value::Integer(i));
@@ -787,7 +787,7 @@ pub enum OpCode {
     UnregisterCatch,
     Yield,
     CoResume,
-    Import(u32),
+    Import(u32, Option<u32>),
     MakeRecord,
     AssocRecord(u32),
     MakeList(usize),
