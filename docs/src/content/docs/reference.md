@@ -263,6 +263,34 @@ Coroutines are cooperative multi-tasking blocks that can suspend execution, retu
 | `'i64`, `'u64` | `int64_t`, `uint64_t` | Maps to Lisp integers natively. |
 | `'f32`, `'f64` | `float`, `double` | Evaluates Lisp floats natively. |
 | `'*u8` | `void*` or `char*` | If passed a string, `sel` automatically allocates a null-terminated C-string array and manages its memory lifecycle for the duration of the call. |
+| `'(struct (t1 t2 ...))` | `struct` | Passed or returned by value. Represented in `sel` as nested lists matching the types of their fields. Padded automatically at runtime. |
+
+### Passing and Returning C Structures (by Value)
+
+Starting in `v0.1.1`, the FFI supports passing and returning C structures directly by value using the `'(struct (<field-types>))` selector.
+
+#### Representation
+C structures are mapped to `sel` lists or nested lists. Field offsets and padding alignments are calculated automatically according to the System V ABI standards:
+- A flat C `struct { float x; float y; }` maps to a list: `'(x_val y_val)`
+- A nested C `struct { struct Point pos; float w; float h; }` maps to a nested list: `'((x_val y_val) w_val h_val)`
+
+#### Struct FFI Example
+```lisp
+(define lib (ffi-dlopen "./libffi_test_structs.so"))
+
+;; 1. Pass a struct by value
+(define get-distance-sq (ffi-func (ffi-dlsym lib "get_distance_sq") 'f32 '((struct (f32 f32)))))
+(define d (get-distance-sq '(3.0 4.0))) ; Evaluates to 25.0
+
+;; 2. Return a struct by value
+(define make-point (ffi-func (ffi-dlsym lib "make_point") '(struct (f32 f32)) '(f32 f32)))
+(define p (make-point 5.0 12.0)) ; Evaluates to '(5.0 12.0)
+(assert (eq? (car p) 5.0))
+
+;; 3. Pass nested structures by value
+(define get-rect-area (ffi-func (ffi-dlsym lib "get_rect_area") 'f32 '((struct ((struct (f32 f32)) f32 f32)))))
+(define area (get-rect-area '((10.0 20.0) 5.0 8.0))) ; Evaluates to 40.0
+```
 
 ### Complete FFI Showcase
 ```lisp
