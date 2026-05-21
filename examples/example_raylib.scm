@@ -67,25 +67,25 @@
 
 
 (while (not (window-should-close))
-    (define x  (rget ball x))
-    (define dx (rget ball dx))
-    (define y  (rget ball y))
-    (define dy (rget ball dy))
+    (define x  (rget ball 'x))
+    (define dx (rget ball 'dx))
+    (define y  (rget ball 'y))
+    (define dy (rget ball 'dy))
 
     (define nx (+ x dx))
     (define ny (+ y dy))
 
 
     (if (collides-with-walls nx y w h)
-        (set! ball (rset ball dx (* -1 dx)))
-        (set! ball (rset ball x nx)))
+        (set! ball (rset ball 'dx (* -1 dx)))
+        (set! ball (rset ball 'x nx)))
     (if (collides-with-walls x ny w h)
-        (set! ball (rset ball dy (* -1 dy)))
-        (set! ball (rset ball y ny)))
+        (set! ball (rset ball 'dy (* -1 dy)))
+        (set! ball (rset ball 'y ny)))
 
     (begin-drawing)
         (clear-background 0xFF181818)
-        (draw-circle (rget ball x) (rget ball y) radius 0xFF0000FF)
+        (draw-circle (rget ball 'x) (rget ball 'y) radius 0xFF0000FF)
         (draw-fps 10 10)
     (end-drawing)
 )
