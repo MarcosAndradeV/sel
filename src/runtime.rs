@@ -169,9 +169,11 @@ impl VM {
                 OpCode::Import(id, alias) => {
                     let fp = PathBuf::from(lookup(loc.file_id));
                     let sym = lookup(id);
-                    
+
                     let (modname, fp) = if lookup(loc.file_id) != "<repl>"
-                        && fp.parent().map_or(false, |p| p.is_dir() && p != std::path::Path::new(""))
+                        && fp
+                            .parent()
+                            .map_or(false, |p| p.is_dir() && p != std::path::Path::new(""))
                     {
                         let parent = fp.parent().unwrap();
                         let pth = parent.join(format!("{}.scm", sym));
@@ -181,26 +183,26 @@ impl VM {
                         let pth = current.join(format!("{}.scm", sym));
                         (sym.clone(), pth)
                     };
-                    
+
                     let src = read_script(&fp).map_err(|e| SelError::Internal(e.to_string()))?;
                     let asts = parse_all(&src, intern(fp.to_string_lossy().as_ref()))?;
                     let m_env = Rc::new(RefCell::new(Env::default()));
                     m_env.borrow_mut().parent = Some(load_core_lib());
-                    
+
                     // Extract base module name (e.g. "tests/math" -> "math")
                     let base_name = PathBuf::from(&modname)
                         .file_stem()
                         .and_then(|s| s.to_str())
                         .unwrap_or(&modname)
                         .to_string();
-                        
+
                     // Determine namespace prefix
                     let prefix = if let Some(alias_id) = alias {
                         lookup(alias_id)
                     } else {
                         base_name
                     };
-                    
+
                     let rec = import_module(&prefix, asts, m_env)?;
                     let mut frame_env = frame.env.borrow_mut();
                     for (sym, val) in rec.into_fields() {
@@ -547,7 +549,8 @@ impl VM {
                                 let v = self.stack.pop().unwrap();
                                 let r = self.stack.pop().unwrap();
                                 if let Value::Record(_) = r {
-                                    let value = internal::rset(loc, vec![r, Value::Symbol(sym), v])?;
+                                    let value =
+                                        internal::rset(loc, vec![r, Value::Symbol(sym), v])?;
                                     self.stack.pop(); // pop callee (the symbol)
                                     self.stack.push(value);
                                 } else {
@@ -615,7 +618,7 @@ impl VM {
                             args.extend(self.stack.drain(start..));
                             self.stack.pop(); // pop callee
                             let res = f(loc, args)?;
-                            
+
                             frames.pop();
                             self.stack.push(res);
                             if frames.is_empty() {
@@ -634,7 +637,7 @@ impl VM {
                             args.extend(self.stack.drain(start..));
                             self.stack.pop(); // pop callee
                             let res = (f.0)(loc, args)?;
-                            
+
                             frames.pop();
                             self.stack.push(res);
                             if frames.is_empty() {
@@ -648,7 +651,10 @@ impl VM {
                                     if !matches!(s, Value::Symbol(_)) {
                                         return Err(SelError::Runtime(
                                             loc,
-                                            format!("Attempt to call non-function value: {}", callee),
+                                            format!(
+                                                "Attempt to call non-function value: {}",
+                                                callee
+                                            ),
                                         ));
                                     }
                                     let r = self.stack.pop().unwrap();
@@ -660,7 +666,10 @@ impl VM {
                                     if !matches!(s, Value::Symbol(_)) {
                                         return Err(SelError::Runtime(
                                             loc,
-                                            format!("Attempt to call non-function value: {}", callee),
+                                            format!(
+                                                "Attempt to call non-function value: {}",
+                                                callee
+                                            ),
                                         ));
                                     }
                                     let r = self.stack.pop().unwrap();
@@ -774,10 +783,16 @@ impl VM {
                     if let Value::Coroutine(co) = coroutine_val {
                         let state = co.state.get();
                         if state == CoroutineState::Dead {
-                            return Err(SelError::Runtime(frame.loc, "Cannot resume a dead coroutine".into()));
+                            return Err(SelError::Runtime(
+                                frame.loc,
+                                "Cannot resume a dead coroutine".into(),
+                            ));
                         }
                         if state == CoroutineState::Running {
-                            return Err(SelError::Runtime(frame.loc, "Cannot resume a running coroutine (re-entry is forbidden)".into()));
+                            return Err(SelError::Runtime(
+                                frame.loc,
+                                "Cannot resume a running coroutine (re-entry is forbidden)".into(),
+                            ));
                         }
 
                         co.state.set(CoroutineState::Running);
@@ -793,7 +808,10 @@ impl VM {
                                 let first_param = params[0];
                                 if crate::types::lookup(first_param).starts_with('&') {
                                     let name = &crate::types::lookup(first_param)[1..];
-                                    call_env.insert(crate::types::intern(name), Value::List(Rc::new(vec![arg.clone()])));
+                                    call_env.insert(
+                                        crate::types::intern(name),
+                                        Value::List(Rc::new(vec![arg.clone()])),
+                                    );
                                 } else {
                                     call_env.insert(first_param, arg.clone());
                                 }

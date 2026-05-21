@@ -902,11 +902,7 @@ pub fn rkeys(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
     match args.pop().unwrap() {
         Value::Record(r) => {
-            let keys_vec: Vec<Value> = r
-                .fields()
-                .keys()
-                .map(|&k| Value::Symbol(k))
-                .collect();
+            let keys_vec: Vec<Value> = r.fields().keys().map(|&k| Value::Symbol(k)).collect();
             Ok(Value::List(Rc::new(keys_vec)))
         }
         _ => Err(SelError::Runtime(loc, "rkeys requires a record".into())),
@@ -922,11 +918,7 @@ pub fn rvals(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
     match args.pop().unwrap() {
         Value::Record(r) => {
-            let vals_vec: Vec<Value> = r
-                .fields()
-                .values()
-                .cloned()
-                .collect();
+            let vals_vec: Vec<Value> = r.fields().values().cloned().collect();
             Ok(Value::List(Rc::new(vals_vec)))
         }
         _ => Err(SelError::Runtime(loc, "rvals requires a record".into())),
@@ -944,12 +936,17 @@ pub fn rcontains(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     match args.pop().unwrap() {
         Value::Record(r) => match index {
             Value::Symbol(sym) => Ok(Value::Boolean(r.fields().contains_key(&sym))),
-            _ => Err(SelError::Runtime(loc, "rcontains? requires a symbol".into())),
+            _ => Err(SelError::Runtime(
+                loc,
+                "rcontains? requires a symbol".into(),
+            )),
         },
-        _ => Err(SelError::Runtime(loc, "rcontains? requires a record".into())),
+        _ => Err(SelError::Runtime(
+            loc,
+            "rcontains? requires a record".into(),
+        )),
     }
 }
-
 
 pub fn is_nil(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
@@ -1269,9 +1266,7 @@ pub fn co_dead_p(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         ));
     }
     match args.pop().unwrap() {
-        Value::Coroutine(co) => {
-            Ok(Value::Boolean(co.state.get() == CoroutineState::Dead))
-        }
+        Value::Coroutine(co) => Ok(Value::Boolean(co.state.get() == CoroutineState::Dead)),
         val => Err(SelError::Runtime(
             loc,
             format!("co-dead?: expected coroutine but got {}", val),

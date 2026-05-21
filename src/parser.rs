@@ -88,11 +88,10 @@ pub fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
 fn parse_lambda_shorthand(tokens: &[Token], pos: &mut usize, open_token: &Token) -> Result<Ast> {
     let args = parse_expr(tokens, pos)?;
     let body = parse_expr(tokens, pos)?;
-    optimize_ast(vec![
-        Ast::Symbol(open_token.loc, intern("lambda")),
-        args,
-        body,
-    ], open_token.loc)
+    optimize_ast(
+        vec![Ast::Symbol(open_token.loc, intern("lambda")), args, body],
+        open_token.loc,
+    )
 }
 
 fn parse_record(tokens: &[Token], pos: &mut usize, open_token: &Token) -> Result<Ast> {
@@ -160,9 +159,9 @@ pub fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
             }
             "try" => {
                 let mut iter = list.into_iter().skip(1);
-                let body = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Missing body in try".into())
-                })?;
+                let body = iter
+                    .next()
+                    .ok_or_else(|| SelError::SyntaxError(s_loc, "Missing body in try".into()))?;
                 let catch_clause = iter.next().ok_or_else(|| {
                     SelError::SyntaxError(s_loc, "Missing catch clause in try".into())
                 })?;
@@ -171,25 +170,42 @@ pub fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                     Ast::List(c_loc, c_list) => {
                         let mut c_iter = c_list.into_iter();
                         let first = c_iter.next().ok_or_else(|| {
-                            SelError::SyntaxError(c_loc, "Expected (catch err-var ...) clause".into())
+                            SelError::SyntaxError(
+                                c_loc,
+                                "Expected (catch err-var ...) clause".into(),
+                            )
                         })?;
 
                         match first {
                             Ast::Symbol(_, catch_sym_id) if lookup(catch_sym_id) == "catch" => {
                                 let err_var = c_iter.next().ok_or_else(|| {
-                                    SelError::SyntaxError(c_loc, "Expected error variable in catch clause".into())
+                                    SelError::SyntaxError(
+                                        c_loc,
+                                        "Expected error variable in catch clause".into(),
+                                    )
                                 })?;
                                 let err_var_id = match err_var {
                                     Ast::Symbol(_, id) => id,
-                                    _ => return Err(SelError::SyntaxError(c_loc, "Expected symbol for error variable".into())),
+                                    _ => {
+                                        return Err(SelError::SyntaxError(
+                                            c_loc,
+                                            "Expected symbol for error variable".into(),
+                                        ));
+                                    }
                                 };
                                 let catch_body: Vec<Ast> = c_iter.collect();
                                 Ok(Ast::Try(s_loc, Box::new(body), err_var_id, catch_body))
                             }
-                            _ => Err(SelError::SyntaxError(c_loc, "Expected catch keyword as first element of catch clause".into())),
+                            _ => Err(SelError::SyntaxError(
+                                c_loc,
+                                "Expected catch keyword as first element of catch clause".into(),
+                            )),
                         }
                     }
-                    _ => Err(SelError::SyntaxError(s_loc, "Expected catch clause to be a list".into())),
+                    _ => Err(SelError::SyntaxError(
+                        s_loc,
+                        "Expected catch clause to be a list".into(),
+                    )),
                 }
             }
             "->" => {
@@ -215,7 +231,7 @@ pub fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                 let first = iter.next().ok_or_else(|| {
                     SelError::SyntaxError(s_loc, "Expected module name in import".into())
                 })?;
-                
+
                 match first {
                     Ast::Symbol(_, symbol) => {
                         // Check if there's an inline :as alias, e.g. (import foo :as f)
@@ -223,18 +239,30 @@ pub fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                             if let Ast::Symbol(_, as_sym) = next {
                                 if lookup(as_sym) == ":as" {
                                     let alias_ast = iter.next().ok_or_else(|| {
-                                        SelError::SyntaxError(s_loc, "Expected alias after :as".into())
+                                        SelError::SyntaxError(
+                                            s_loc,
+                                            "Expected alias after :as".into(),
+                                        )
                                     })?;
                                     if let Ast::Symbol(_, alias) = alias_ast {
                                         Ok(Ast::Import(s_loc, symbol, Some(alias)))
                                     } else {
-                                        Err(SelError::SyntaxError(s_loc, "Expected symbol for alias".into()))
+                                        Err(SelError::SyntaxError(
+                                            s_loc,
+                                            "Expected symbol for alias".into(),
+                                        ))
                                     }
                                 } else {
-                                    Err(SelError::SyntaxError(s_loc, "Expected :as keyword for alias".into()))
+                                    Err(SelError::SyntaxError(
+                                        s_loc,
+                                        "Expected :as keyword for alias".into(),
+                                    ))
                                 }
                             } else {
-                                Err(SelError::SyntaxError(s_loc, "Expected symbol for alias keyword".into()))
+                                Err(SelError::SyntaxError(
+                                    s_loc,
+                                    "Expected symbol for alias keyword".into(),
+                                ))
                             }
                         } else {
                             Ok(Ast::Import(s_loc, symbol, None))
@@ -248,31 +276,46 @@ pub fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                         let mut inner_iter = inner_list.into_iter();
                         let first_inner = inner_iter.next().unwrap();
                         let Ast::Symbol(_, symbol) = first_inner else {
-                            return Err(SelError::SyntaxError(s_loc, "Expected module name as symbol in import list".into()));
+                            return Err(SelError::SyntaxError(
+                                s_loc,
+                                "Expected module name as symbol in import list".into(),
+                            ));
                         };
                         if let Some(next) = inner_iter.next() {
                             match next {
                                 Ast::Symbol(_, as_sym) if lookup(as_sym) == ":as" => {
                                     let alias_ast = inner_iter.next().ok_or_else(|| {
-                                        SelError::SyntaxError(s_loc, "Expected alias after :as".into())
+                                        SelError::SyntaxError(
+                                            s_loc,
+                                            "Expected alias after :as".into(),
+                                        )
                                     })?;
                                     if let Ast::Symbol(_, alias) = alias_ast {
                                         Ok(Ast::Import(s_loc, symbol, Some(alias)))
                                     } else {
-                                        Err(SelError::SyntaxError(s_loc, "Expected symbol for alias".into()))
+                                        Err(SelError::SyntaxError(
+                                            s_loc,
+                                            "Expected symbol for alias".into(),
+                                        ))
                                     }
                                 }
                                 Ast::Symbol(_, alias) => {
                                     // e.g. (import (foo f))
                                     Ok(Ast::Import(s_loc, symbol, Some(alias)))
                                 }
-                                _ => Err(SelError::SyntaxError(s_loc, "Expected alias or :as keyword".into())),
+                                _ => Err(SelError::SyntaxError(
+                                    s_loc,
+                                    "Expected alias or :as keyword".into(),
+                                )),
                             }
                         } else {
                             Ok(Ast::Import(s_loc, symbol, None))
                         }
                     }
-                    _ => Err(SelError::SyntaxError(s_loc, "Expected symbol or list in import".into())),
+                    _ => Err(SelError::SyntaxError(
+                        s_loc,
+                        "Expected symbol or list in import".into(),
+                    )),
                 }
             }
             "if" => {

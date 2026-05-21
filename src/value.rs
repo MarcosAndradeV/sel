@@ -11,10 +11,18 @@ use crate::types::lookup;
 type Result<T> = std::result::Result<T, SelError>;
 
 #[derive(Debug, Clone)]
-pub struct Closure { pub params: Vec<u32>, pub chunk: Rc<Chunk>, pub env: Rc<RefCell<Env>> }
+pub struct Closure {
+    pub params: Vec<u32>,
+    pub chunk: Rc<Chunk>,
+    pub env: Rc<RefCell<Env>>,
+}
 
 #[derive(Debug, Clone)]
-pub struct Macro { pub params: Vec<u32>, pub chunk: Rc<Chunk>, pub env: Rc<RefCell<Env>> }
+pub struct Macro {
+    pub params: Vec<u32>,
+    pub chunk: Rc<Chunk>,
+    pub env: Rc<RefCell<Env>>,
+}
 
 #[derive(Clone)]
 pub struct NativeClosureFn(pub Rc<dyn Fn(Loc, Vec<Value>) -> Result<Value>>);
@@ -57,7 +65,8 @@ pub enum Value {
     Record(Rc<Record<Self>>),
     Closure(Rc<Closure>),
     NativeFunction(fn(loc: Loc, args: Vec<Value>) -> Result<Value>),
-    #[allow(unused)]NativeClosure(NativeClosureFn),
+    #[allow(unused)]
+    NativeClosure(NativeClosureFn),
     Macro(Rc<Macro>),
     Pointer(usize),
     Library(Rc<libloading::Library>),

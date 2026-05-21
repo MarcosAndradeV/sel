@@ -4,11 +4,11 @@ use std::env;
 use std::rc::Rc;
 
 use crate::cli::Cli;
-use crate::parser::parse_all;
 use crate::diagnostics::SelError;
 use crate::internal::load_core_lib;
 use crate::internal::read_script;
 use crate::internal::value_type_name;
+use crate::parser::parse_all;
 use crate::runtime::Env;
 use crate::runtime::execute_asts;
 use crate::types::intern;
@@ -16,15 +16,15 @@ use crate::types::lookup;
 use crate::value::Value;
 
 mod ast;
+mod cli;
 mod compiler;
 mod diagnostics;
 mod internal;
 mod lexer;
+mod parser;
 mod runtime;
 mod types;
 mod value;
-mod parser;
-mod cli;
 
 fn main() {
     match entry() {
@@ -33,9 +33,7 @@ fn main() {
     }
 }
 
-
 fn entry() -> Result<(), SelError> {
-
     let cmd = Cli::parse();
 
     let env = Rc::new(RefCell::new(Env::default()));
@@ -49,16 +47,14 @@ fn entry() -> Result<(), SelError> {
         Cli::Version => {
             println!("version: {}", env!("CARGO_PKG_VERSION"));
             Ok(())
-        },
+        }
         Cli::File(script_path) => {
             let src = read_script(&script_path)?;
             let asts = parse_all(&src, intern(&script_path.to_string()))?;
             execute_asts(asts, env.clone()).map(|_| ())?;
             Ok(())
         }
-        Cli::Repl => {
-            repl("sel> ", env)
-        }
+        Cli::Repl => repl("sel> ", env),
     }
 }
 
@@ -92,11 +88,19 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
                             println!("Available commands:");
                             println!("  :help, :?         Show this help message");
                             println!("  :summary          Show a summary of user-defined bindings");
-                            println!("  :env [all]        List bindings in the environment (use 'all' to include standard library)");
-                            println!("  :type <expr>      Evaluate an expression and show its type");
-                            println!("  :load <file>      Load and execute a Scheme file in the current environment");
+                            println!(
+                                "  :env [all]        List bindings in the environment (use 'all' to include standard library)"
+                            );
+                            println!(
+                                "  :type <expr>      Evaluate an expression and show its type"
+                            );
+                            println!(
+                                "  :load <file>      Load and execute a Scheme file in the current environment"
+                            );
                             println!("  :clear            Clear the screen");
-                            println!("  :reset            Reset the environment (clears user-defined bindings)");
+                            println!(
+                                "  :reset            Reset the environment (clears user-defined bindings)"
+                            );
                             println!("  :quit             Exit the REPL");
                             continue;
                         }
@@ -111,16 +115,29 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
                                     .map(|(id, v)| {
                                         let val_str = match v {
                                             Value::Closure(c) => {
-                                                let param_names: Vec<String> = c.params.iter().map(|&pid| lookup(pid)).collect();
+                                                let param_names: Vec<String> = c
+                                                    .params
+                                                    .iter()
+                                                    .map(|&pid| lookup(pid))
+                                                    .collect();
                                                 format!("<closure: ({})>", param_names.join(" "))
                                             }
                                             Value::Macro(m) => {
-                                                let param_names: Vec<String> = m.params.iter().map(|&pid| lookup(pid)).collect();
+                                                let param_names: Vec<String> = m
+                                                    .params
+                                                    .iter()
+                                                    .map(|&pid| lookup(pid))
+                                                    .collect();
                                                 format!("<macro: ({})>", param_names.join(" "))
                                             }
                                             other => other.to_string(),
                                         };
-                                        format!("  {} := {} ({})", lookup(*id), val_str, value_type_name(v))
+                                        format!(
+                                            "  {} := {} ({})",
+                                            lookup(*id),
+                                            val_str,
+                                            value_type_name(v)
+                                        )
                                     })
                                     .collect();
                                 entries.sort();
@@ -138,27 +155,56 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
                                 let bindings = curr_env.borrow().bindings.clone();
                                 let is_core = level > 0; // standard library or nested parent
                                 if is_core && !show_all {
-                                    println!("[Level {level}: Core Library ({} built-ins)]", bindings.len());
+                                    println!(
+                                        "[Level {level}: Core Library ({} built-ins)]",
+                                        bindings.len()
+                                    );
                                     break;
                                 } else {
-                                    let level_name = if level == 0 { "REPL".to_string() } else { format!("Parent Level {level}") };
-                                    println!("[Level {level}: {level_name} ({} bindings)]", bindings.len());
+                                    let level_name = if level == 0 {
+                                        "REPL".to_string()
+                                    } else {
+                                        format!("Parent Level {level}")
+                                    };
+                                    println!(
+                                        "[Level {level}: {level_name} ({} bindings)]",
+                                        bindings.len()
+                                    );
                                     if !bindings.is_empty() {
                                         let mut entries: Vec<_> = bindings
                                             .iter()
                                             .map(|(id, v)| {
                                                 let val_str = match v {
                                                     Value::Closure(c) => {
-                                                        let param_names: Vec<String> = c.params.iter().map(|&pid| lookup(pid)).collect();
-                                                        format!("<closure: ({})>", param_names.join(" "))
+                                                        let param_names: Vec<String> = c
+                                                            .params
+                                                            .iter()
+                                                            .map(|&pid| lookup(pid))
+                                                            .collect();
+                                                        format!(
+                                                            "<closure: ({})>",
+                                                            param_names.join(" ")
+                                                        )
                                                     }
                                                     Value::Macro(m) => {
-                                                        let param_names: Vec<String> = m.params.iter().map(|&pid| lookup(pid)).collect();
-                                                        format!("<macro: ({})>", param_names.join(" "))
+                                                        let param_names: Vec<String> = m
+                                                            .params
+                                                            .iter()
+                                                            .map(|&pid| lookup(pid))
+                                                            .collect();
+                                                        format!(
+                                                            "<macro: ({})>",
+                                                            param_names.join(" ")
+                                                        )
                                                     }
                                                     other => other.to_string(),
                                                 };
-                                                format!("  {} := {} ({})", lookup(*id), val_str, value_type_name(v))
+                                                format!(
+                                                    "  {} := {} ({})",
+                                                    lookup(*id),
+                                                    val_str,
+                                                    value_type_name(v)
+                                                )
                                             })
                                             .collect();
                                         entries.sort();
@@ -203,12 +249,10 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
                                 Ok(src) => {
                                     let load_file_id = intern(arg);
                                     match parse_all(&src, load_file_id) {
-                                        Ok(asts) => {
-                                            match execute_asts(asts, env.clone()) {
-                                                Ok(val) => println!("{val}"),
-                                                Err(e) => println!("{e}"),
-                                            }
-                                        }
+                                        Ok(asts) => match execute_asts(asts, env.clone()) {
+                                            Ok(val) => println!("{val}"),
+                                            Err(e) => println!("{e}"),
+                                        },
                                         Err(e) => println!("{e}"),
                                     }
                                 }
@@ -230,7 +274,9 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
                             continue;
                         }
                         _ => {
-                            println!("Unknown REPL command: `{cmd}`. Type `:help` for available commands.");
+                            println!(
+                                "Unknown REPL command: `{cmd}`. Type `:help` for available commands."
+                            );
                             continue;
                         }
                     }

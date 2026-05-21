@@ -1,10 +1,10 @@
 use crate::diagnostics::*;
 use crate::lexer::*;
+use crate::parser::optimize_ast;
 use crate::types::Record;
 use crate::types::intern;
 use crate::types::lookup;
 use crate::value::Value;
-use crate::parser::optimize_ast;
 use std::rc::Rc;
 
 type Result<T> = std::result::Result<T, SelError>;
@@ -124,7 +124,6 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
                 Value::Symbol(id),
                 ast_to_value(*val).1,
             ])),
-
         ),
         Ast::DefMacro(loc, id, val) => (
             loc,
@@ -133,7 +132,6 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
                 Value::Symbol(id),
                 ast_to_value(*val).1,
             ])),
-
         ),
         Ast::Import(loc, id, alias) => {
             let mut list = vec![Value::Symbol(intern("import")), Value::Symbol(id)];
@@ -142,7 +140,7 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
                 list.push(Value::Symbol(a));
             }
             (loc, Value::List(Rc::new(list)))
-        },
+        }
         Ast::Set(loc, id, val) => (
             loc,
             Value::List(Rc::new(vec![
@@ -150,7 +148,6 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
                 Value::Symbol(id),
                 ast_to_value(*val).1,
             ])),
-
         ),
         Ast::If(loc, cond, t, f) => {
             let mut list = vec![
@@ -180,7 +177,10 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
             let mut list = vec![Value::Symbol(intern("let"))];
             let mut bind_list = Vec::new();
             for (id, val) in bindings {
-                bind_list.push(Value::List(Rc::new(vec![Value::Symbol(id), ast_to_value(val).1])));
+                bind_list.push(Value::List(Rc::new(vec![
+                    Value::Symbol(id),
+                    ast_to_value(val).1,
+                ])));
             }
             list.push(Value::List(Rc::new(bind_list)));
             list.extend(body.into_iter().map(|a| ast_to_value(a).1));
@@ -188,7 +188,10 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
         }
         Ast::Quote(loc, val) => (
             loc,
-            Value::List(Rc::new(vec![Value::Symbol(intern("quote")), ast_to_value(*val).1])),
+            Value::List(Rc::new(vec![
+                Value::Symbol(intern("quote")),
+                ast_to_value(*val).1,
+            ])),
         ),
         Ast::Quasiquote(loc, val) => (
             loc,
@@ -199,7 +202,10 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
         ),
         Ast::Unquote(loc, val) => (
             loc,
-            Value::List(Rc::new(vec![Value::Symbol(intern("unquote")), ast_to_value(*val).1])),
+            Value::List(Rc::new(vec![
+                Value::Symbol(intern("unquote")),
+                ast_to_value(*val).1,
+            ])),
         ),
         Ast::UnquoteSplicing(loc, val) => (
             loc,
@@ -224,13 +230,11 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
                 Value::Symbol(intern("try")),
                 ast_to_value(*body).1,
                 Value::List(Rc::new({
-                    let mut catch_list = vec![
-                        Value::Symbol(intern("catch")),
-                        Value::Symbol(err_var),
-                    ];
+                    let mut catch_list =
+                        vec![Value::Symbol(intern("catch")), Value::Symbol(err_var)];
                     catch_list.extend(catch_body.into_iter().map(|a| ast_to_value(a).1));
                     catch_list
-                }))
+                })),
             ];
             (loc, Value::List(Rc::new(list)))
         }
@@ -251,9 +255,9 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
         ),
         Ast::Record(loc, record) => (
             loc,
-            Value::Record(Rc::new(
-                Record::new().populate(record.into_iter().map(|(k, ast)| (k, ast_to_value(ast).1))),
-            )),
+            Value::Record(Rc::new(Record::new().populate(
+                record.into_iter().map(|(k, ast)| (k, ast_to_value(ast).1)),
+            ))),
         ),
     }
 }

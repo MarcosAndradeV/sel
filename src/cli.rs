@@ -4,7 +4,7 @@ pub(crate) enum Cli {
     Help,
     Version,
     File(String),
-    Repl
+    Repl,
 }
 
 impl Cli {
@@ -21,7 +21,7 @@ impl Cli {
                 Cli::help();
                 exit(1);
             }
-            _ => Cli::File(first)
+            _ => Cli::File(first),
         }
     }
 
