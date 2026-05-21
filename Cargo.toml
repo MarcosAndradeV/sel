@@ -2,6 +2,14 @@
 name = "sel"
 version = "0.1.0"
 edition = "2024"
+authors = ["MarcosAndradeV <mastermarcos1212@hotmail.com>"]
+description = "A fast, embeddable, and extensible Scheme-like Lisp dialect in Rust"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/MarcosAndradeV/sel"
+homepage = "https://github.com/MarcosAndradeV/sel"
+keywords = ["lisp", "scheme", "interpreter", "embeddable", "ffi"]
+categories = ["development-tools", "compilers"]
 
 [dependencies]
 rustyline = "18.0.0"
