@@ -1,13 +1,12 @@
 (println "--- Testing OS Environment ---")
-(define user (os/getenv "USER"))
+(define user (system 'getenv "USER"))
 (println (if (nil? user) "USER not set" user))
 
 (println "--- Testing OS Args ---")
-(println (os/args))
+(println (system 'args))
 
 (println "--- Testing File I/O ---")
 (define filename "tests/test_output.txt")
-(io/write-string filename "Hello from sel Native I/O!")
-(assert (io/file-exists? filename))
-(assert (eq? (io/read-string filename) "Hello from sel Native I/O!"))
-
+(file-system 'write filename "Hello from sel Native I/O!")
+(assert (file-system 'exists? filename))
+(assert (eq? (file-system 'read filename) "Hello from sel Native I/O!"))

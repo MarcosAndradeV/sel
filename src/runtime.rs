@@ -6,16 +6,18 @@ use std::rc::Rc;
 use crate::ast::*;
 use crate::compiler::*;
 use crate::diagnostics::*;
-use crate::parser::parse_all;
-use crate::value::*;
 use crate::internal;
 use crate::internal::load_core_lib;
 use crate::internal::read_script;
 use crate::internal::value_type_name;
 use crate::lexer::Loc;
+use crate::parser::parse_all;
 use crate::types::Record;
 use crate::types::intern;
 use crate::types::lookup;
+use crate::value::Closure;
+use crate::value::Macro;
+use crate::value::*;
 
 type Result<T> = std::result::Result<T, SelError>;
 
@@ -398,11 +400,10 @@ impl VM {
                     }
                     let callee = self.stack[self.stack.len() - arg_count - 1].clone();
                     match callee {
-                        Value::Closure {
-                            params,
-                            chunk,
-                            env: c_env,
-                        } => {
+                        Value::Closure(c) => {
+                            let params = c.params.clone();
+                            let chunk = c.chunk.clone();
+                            let c_env = c.env.clone();
                             let mut call_env = Env::new(Some(c_env));
                             let mut has_rest = false;
                             for (i, id) in params.iter().enumerate() {
@@ -449,47 +450,52 @@ impl VM {
                             self.stack.pop();
                             self.stack.push(f(loc, args)?);
                         }
-                        Value::Macro { .. } => {
+                        Value::Macro(_) => {
                             return Err(SelError::Runtime(
                                 loc,
                                 "Cannot call macro at runtime".into(),
                             ));
                         }
-                        Value::Record(_) => {
-                            match arg_count {
-                                1 => {
-                                    let s = self.stack.pop().unwrap();
-                                    if !matches!(s, Value::Symbol(_)) {
-                                        return Err(SelError::Runtime(
-                                            loc,
-                                            format!("Attempt to call non-function value: {}", callee),
-                                        ));
-                                    }
-                                    let r = self.stack.pop().unwrap();
-                                    let value = internal::rget(loc, vec![r, s])?;
-                                    self.stack.push(value);
-                                }
-                                2 => {
-                                    let v = self.stack.pop().unwrap();
-                                    let s = self.stack.pop().unwrap();
-                                    if !matches!(s, Value::Symbol(_)) {
-                                        return Err(SelError::Runtime(
-                                            loc,
-                                            format!("Attempt to call non-function value: {}", callee),
-                                        ));
-                                    }
-                                    let r = self.stack.pop().unwrap();
-                                    let value = internal::rset(loc, vec![r, s, v])?;
-                                    self.stack.push(value);
-                                }
-                                _ => {
+                        Value::NativeClosure(f) => {
+                            let mut args = Vec::with_capacity(arg_count);
+                            let start = self.stack.len() - arg_count;
+                            args.extend(self.stack.drain(start..));
+                            self.stack.pop();
+                            self.stack.push((f.0)(loc, args)?);
+                        }
+                        Value::Record(_) => match arg_count {
+                            1 => {
+                                let s = self.stack.pop().unwrap();
+                                if !matches!(s, Value::Symbol(_)) {
                                     return Err(SelError::Runtime(
                                         loc,
                                         format!("Attempt to call non-function value: {}", callee),
                                     ));
                                 }
+                                let r = self.stack.pop().unwrap();
+                                let value = internal::rget(loc, vec![r, s])?;
+                                self.stack.push(value);
                             }
-                        }
+                            2 => {
+                                let v = self.stack.pop().unwrap();
+                                let s = self.stack.pop().unwrap();
+                                if !matches!(s, Value::Symbol(_)) {
+                                    return Err(SelError::Runtime(
+                                        loc,
+                                        format!("Attempt to call non-function value: {}", callee),
+                                    ));
+                                }
+                                let r = self.stack.pop().unwrap();
+                                let value = internal::rset(loc, vec![r, s, v])?;
+                                self.stack.push(value);
+                            }
+                            _ => {
+                                return Err(SelError::Runtime(
+                                    loc,
+                                    format!("Attempt to call non-function value: {}", callee),
+                                ));
+                            }
+                        },
                         _ => {
                             return Err(SelError::Runtime(
                                 loc,
@@ -520,23 +526,22 @@ impl VM {
                     frame.env = parent;
                 }
                 OpCode::MakeClosure(idx) => {
-                    if let Value::Closure { params, chunk, .. } = frame.chunk.constants[idx].clone()
-                    {
-                        let closure = Value::Closure {
-                            params,
-                            chunk,
+                    if let Value::Closure(c) = frame.chunk.constants[idx].clone() {
+                        let closure = Value::Closure(Rc::new(Closure {
+                            params: c.params.clone(),
+                            chunk: c.chunk.clone(),
                             env: frame.env.clone(),
-                        };
+                        }));
                         self.stack.push(closure);
                     }
                 }
                 OpCode::MakeMacro(id, idx) => {
-                    if let Value::Macro { params, chunk, .. } = frame.chunk.constants[idx].clone() {
-                        let mac = Value::Macro {
-                            params,
-                            chunk,
+                    if let Value::Macro(m) = frame.chunk.constants[idx].clone() {
+                        let mac = Value::Macro(Rc::new(Macro {
+                            params: m.params.clone(),
+                            chunk: m.chunk.clone(),
                             env: frame.env.clone(),
-                        };
+                        }));
                         frame.env.borrow_mut().insert(id, mac.clone());
                         self.stack.push(Value::Symbol(id));
                     }
@@ -577,12 +582,11 @@ pub fn macro_expand(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
             }
             if let Ast::Symbol(loc, id) = list[0].clone() {
                 let macro_opt = env.borrow().get(id);
-                if let Some(Value::Macro {
-                    params,
-                    chunk,
-                    env: m_env,
-                }) = macro_opt
-                {
+                if let Some(Value::Macro(mac)) = macro_opt {
+                    let params = mac.params.clone();
+                    let chunk = mac.chunk.clone();
+                    let m_env = mac.env.clone();
+
                     let mut list_iter = list.into_iter();
                     list_iter.next(); // skip head
                     let args_ast: Vec<Ast> = list_iter.collect();

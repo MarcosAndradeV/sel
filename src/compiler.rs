@@ -7,10 +7,11 @@ use crate::lexer::Loc;
 use crate::runtime::*;
 use crate::types::lookup;
 
+use crate::value::Closure;
+use crate::value::Macro;
 use crate::value::Value;
 
 type Result<T> = std::result::Result<T, SelError>;
-
 
 pub struct Compiler<'a> {
     pub chunk: &'a mut Chunk,
@@ -133,11 +134,11 @@ impl<'a> Compiler<'a> {
                 }
                 child_chunk.write((loc, OpCode::Return));
 
-                let stub = Value::Closure {
+                let stub = Value::Closure(Rc::new(Closure {
                     params,
                     chunk: Rc::new(child_chunk),
                     env: Rc::new(RefCell::new(Env::default())),
-                };
+                }));
                 let idx = self.chunk.add_constant(stub);
                 self.chunk.write((loc, OpCode::MakeClosure(idx)));
             }
@@ -160,11 +161,11 @@ impl<'a> Compiler<'a> {
                     }
                     child_chunk.write((loc, OpCode::Return));
 
-                    let stub = Value::Macro {
+                    let stub = Value::Macro(Rc::new(Macro {
                         params,
                         chunk: Rc::new(child_chunk),
                         env: Rc::new(RefCell::new(Env::default())),
-                    };
+                    }));
                     let idx = self.chunk.add_constant(stub);
                     self.chunk.write((loc, OpCode::MakeMacro(id, idx)));
                 } else {

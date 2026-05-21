@@ -11,6 +11,21 @@ use crate::types::lookup;
 type Result<T> = std::result::Result<T, SelError>;
 
 #[derive(Debug, Clone)]
+pub struct Closure { pub params: Vec<u32>, pub chunk: Rc<Chunk>, pub env: Rc<RefCell<Env>> }
+
+#[derive(Debug, Clone)]
+pub struct Macro { pub params: Vec<u32>, pub chunk: Rc<Chunk>, pub env: Rc<RefCell<Env>> }
+
+#[derive(Clone)]
+pub struct NativeClosureFn(pub Rc<dyn Fn(Loc, Vec<Value>) -> Result<Value>>);
+
+impl std::fmt::Debug for NativeClosureFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<native-closure>")
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum Value {
     Nil,
     Integer(i64),
@@ -20,17 +35,10 @@ pub enum Value {
     Symbol(u32),
     List(Rc<Vec<Value>>),
     Record(Rc<Record<Self>>),
-    Closure {
-        params: Vec<u32>,
-        chunk: Rc<Chunk>,
-        env: Rc<RefCell<Env>>,
-    },
+    Closure(Rc<Closure>),
     NativeFunction(fn(loc: Loc, args: Vec<Value>) -> Result<Value>),
-    Macro {
-        params: Vec<u32>,
-        chunk: Rc<Chunk>,
-        env: Rc<RefCell<Env>>,
-    },
+    #[allow(unused)]NativeClosure(NativeClosureFn),
+    Macro(Rc<Macro>),
     Pointer(usize),
     Library(Rc<libloading::Library>),
 }
@@ -73,9 +81,10 @@ fn format_value(val: &Value) -> String {
             s.push('}');
             s
         }
-        Value::Closure { .. } => "<closure>".to_string(),
+        Value::Closure(_) => "<closure>".to_string(),
+        Value::NativeClosure(_) => "<native-closure>".to_string(),
         Value::NativeFunction { .. } => "<function>".to_string(),
-        Value::Macro { .. } => "<macro>".to_string(),
+        Value::Macro(_) => "<macro>".to_string(),
         Value::Pointer(p) => format!("<pointer: {:#x}>", p),
         Value::Library(_) => "<library>".to_string(),
     }

@@ -2,13 +2,14 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
 
-use crate::parser::parse_all;
-use crate::value::*;
 use crate::diagnostics::*;
 use crate::lexer::Loc;
+use crate::parser::parse_all;
 use crate::runtime::Env;
 use crate::runtime::execute_asts;
 use crate::types::intern;
+use crate::types::lookup;
+use crate::value::*;
 
 type Result<T> = std::result::Result<T, SelError>;
 
@@ -257,7 +258,9 @@ fn is_value_equal(first: &Value, arg: &Value) -> bool {
         (Value::String(a), Value::String(b)) => a == b,
         (Value::Symbol(a), Value::Symbol(b)) => a == b,
         (Value::Pointer(a), Value::Pointer(b)) => a == b,
-        (Value::List(a), Value::List(b)) => a.iter().zip(b.iter()).all(|(a, b)| is_value_equal(a, b)),
+        (Value::List(a), Value::List(b)) => {
+            a.iter().zip(b.iter()).all(|(a, b)| is_value_equal(a, b))
+        }
         (Value::Record(a), Value::Record(b)) => a
             .fields()
             .iter()
@@ -304,7 +307,7 @@ pub fn value_type_name(v: &Value) -> &str {
         Value::Boolean(_) => "bool",
         Value::Symbol(_) => "symbol",
         Value::List(_) => "list",
-        Value::Closure { .. } | Value::NativeFunction(_) => "function",
+        Value::NativeClosure(_) | Value::Closure(_) | Value::NativeFunction(_) => "function",
         Value::Macro { .. } => "macro",
         Value::Pointer(_) => "pointer",
         Value::Library(_) => "library",
@@ -704,69 +707,6 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
     }
 }
 
-pub fn io_read_string(loc: Loc, args: Vec<Value>) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(SelError::SyntaxError(
-            loc,
-            "Expected exactly 1 arguments for io/read-string".into(),
-        ));
-    }
-    if let Value::String(path) = &args[0] {
-        match std::fs::read_to_string(path.as_str()) {
-            Ok(content) => Ok(Value::String(Rc::new(content))),
-            Err(e) => Err(SelError::Runtime(
-                loc,
-                format!("io/read-string failed: {}", e),
-            )),
-        }
-    } else {
-        Err(SelError::Runtime(
-            loc,
-            "io/read-string requires a string argument".into(),
-        ))
-    }
-}
-
-pub fn io_write_string(loc: Loc, args: Vec<Value>) -> Result<Value> {
-    if args.len() != 2 {
-        return Err(SelError::SyntaxError(
-            loc,
-            "Expected exactly 2 arguments for io/write-string".into(),
-        ));
-    }
-    if let (Value::String(path), Value::String(content)) = (&args[0], &args[1]) {
-        match std::fs::write(path.as_str(), content.as_str()) {
-            Ok(_) => Ok(Value::Nil),
-            Err(e) => Err(SelError::Runtime(
-                loc,
-                format!("io/write-string failed: {}", e),
-            )),
-        }
-    } else {
-        Err(SelError::Runtime(
-            loc,
-            "io/write-string requires string arguments".into(),
-        ))
-    }
-}
-
-pub fn io_file_exists(loc: Loc, args: Vec<Value>) -> Result<Value> {
-    if args.len() != 1 {
-        return Err(SelError::SyntaxError(
-            loc,
-            "Expected exactly 1 arguments for io/file-exists?".into(),
-        ));
-    }
-    if let Value::String(path) = &args[0] {
-        Ok(Value::Boolean(std::path::Path::new(path.as_str()).exists()))
-    } else {
-        Err(SelError::Runtime(
-            loc,
-            "io/file-exists? requires a string argument".into(),
-        ))
-    }
-}
-
 pub fn cons(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
         return Err(SelError::SyntaxError(
@@ -917,22 +857,20 @@ pub fn rset(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     let value = args.pop().unwrap();
     let index = args.pop().unwrap();
     match args.pop().unwrap() {
-        Value::Record(r) => {
-            match index {
-                Value::Symbol(sym) => {
-                    let mut new_r = (*r).clone();
-                    if let Some(v) = new_r.fields_mut().get_mut(&sym) {
-                        *v = value;
-                    } else {
-                        return Ok(Value::Nil);
-                    }
-                    Ok(Value::Record(Rc::new(new_r)))
+        Value::Record(r) => match index {
+            Value::Symbol(sym) => {
+                let mut new_r = (*r).clone();
+                if let Some(v) = new_r.fields_mut().get_mut(&sym) {
+                    *v = value;
+                } else {
+                    return Ok(Value::Nil);
                 }
-                _ => {
-                    return Err(SelError::Runtime(loc, "rget requires a symbol".into()));
-                }
+                Ok(Value::Record(Rc::new(new_r)))
             }
-        }
+            _ => {
+                return Err(SelError::Runtime(loc, "rget requires a symbol".into()));
+            }
+        },
         _ => Err(SelError::Runtime(loc, "rget requires a record".into())),
     }
 }
@@ -1024,7 +962,7 @@ pub fn is_function(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         ));
     }
     match args.pop().unwrap() {
-        Value::Closure { .. } => Ok(Value::Boolean(true)),
+        Value::Closure(_) => Ok(Value::Boolean(true)),
         Value::NativeFunction(_) => Ok(Value::Boolean(true)),
         _ => Ok(Value::Boolean(false)),
     }
@@ -1052,38 +990,152 @@ pub fn newline(loc: Loc, args: Vec<Value>) -> Result<Value> {
     Ok(Value::Nil)
 }
 
-pub fn os_getenv(loc: Loc, args: Vec<Value>) -> Result<Value> {
-    if args.len() != 1 {
+pub fn file_system(loc: Loc, mut call_args: Vec<Value>) -> Result<Value> {
+    let args = call_args.split_off(1);
+    if let Some(Value::Symbol(sym)) = call_args.pop() {
+        match lookup(sym).as_str() {
+            "exists?" => {
+                if args.len() != 1 {
+                    return Err(SelError::SyntaxError(
+                        loc,
+                        "Expected exactly 1 arguments for file-exists?".into(),
+                    ));
+                }
+                if let Value::String(path) = &args[0] {
+                    Ok(Value::Boolean(std::path::Path::new(path.as_str()).exists()))
+                } else {
+                    Err(SelError::Runtime(
+                        loc,
+                        "file-exists? requires a string argument".into(),
+                    ))
+                }
+            }
+            "write" => fs_write(loc, &args),
+            "read" => fs_read(loc, &args),
+            _ => todo!(),
+        }
+    } else {
         return Err(SelError::SyntaxError(
             loc,
-            "Expected exactly 1 arguments for os/getenv".into(),
+            "Expected symbol for system".into(),
         ));
     }
-    if let Value::String(key) = &args[0] {
-        match std::env::var(key.as_str()) {
-            Ok(val) => Ok(Value::String(Rc::new(val))),
-            Err(_) => Ok(Value::Nil),
+}
+
+fn fs_write(loc: Loc, args: &Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(SelError::SyntaxError(
+            loc,
+            "Expected exactly 2 arguments for write".into(),
+        ));
+    }
+    if let (Value::String(path), Value::String(content)) = (&args[0], &args[1]) {
+        match std::fs::write(path.as_str(), content.as_str()) {
+            Ok(_) => Ok(Value::Nil),
+            Err(e) => Err(SelError::Runtime(loc, format!("write failed: {}", e))),
         }
     } else {
         Err(SelError::Runtime(
             loc,
-            "os/getenv requires a string argument".into(),
+            "write requires string arguments".into(),
         ))
     }
 }
 
-pub fn os_args(loc: Loc, args: Vec<Value>) -> Result<Value> {
-    if !args.is_empty() {
+fn fs_read(loc: Loc, args: &Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
         return Err(SelError::SyntaxError(
             loc,
-            "Expected exactly 0 arguments for os/args".into(),
+            "Expected exactly 1 arguments for read".into(),
         ));
     }
-    let args_vec = std::env::args()
-        .skip(1)
-        .map(|s| Value::String(Rc::new(s)))
-        .collect::<Vec<_>>();
-    Ok(Value::List(Rc::new(args_vec)))
+    if let Value::String(path) = &args[0] {
+        match std::fs::read_to_string(path.as_str()) {
+            Ok(content) => Ok(Value::String(Rc::new(content))),
+            Err(e) => Err(SelError::Runtime(loc, format!("read failed: {}", e))),
+        }
+    } else {
+        Err(SelError::Runtime(
+            loc,
+            "read requires a string argument".into(),
+        ))
+    }
+}
+
+pub fn system(loc: Loc, mut system_args: Vec<Value>) -> Result<Value> {
+    let mut args = system_args.split_off(1);
+    if let Some(Value::Symbol(sym)) = system_args.pop() {
+        match lookup(sym).as_str() {
+            "args" => {
+                if args.len() != 0 {
+                    return Err(SelError::SyntaxError(
+                        loc,
+                        "Expected exactly 0 arguments for args".into(),
+                    ));
+                }
+                let args_vec = std::env::args()
+                    .skip(1)
+                    .map(|s| Value::String(Rc::new(s)))
+                    .collect::<Vec<_>>();
+                Ok(Value::List(Rc::new(args_vec)))
+            }
+            "getenv" => {
+                if args.len() != 1 {
+                    return Err(SelError::SyntaxError(
+                        loc,
+                        "Expected exactly 1 arguments for getenv".into(),
+                    ));
+                }
+                if let Value::String(key) = &args[0] {
+                    match std::env::var(key.as_str()) {
+                        Ok(val) => Ok(Value::String(Rc::new(val))),
+                        Err(_) => Ok(Value::Nil),
+                    }
+                } else {
+                    Err(SelError::Runtime(
+                        loc,
+                        "getenv requires a string argument".into(),
+                    ))
+                }
+            }
+            "exit" => {
+                if args.len() > 1 {
+                    return Err(SelError::SyntaxError(
+                        loc,
+                        "Expected exactly 0 or 1 arguments for exit".into(),
+                    ));
+                }
+                let code = match args.pop() {
+                    Some(Value::Integer(code)) => code as _,
+                    _ => 0,
+                };
+                std::process::exit(code)
+            }
+            "sleep" => {
+                if args.len() != 1 {
+                    return Err(SelError::SyntaxError(
+                        loc,
+                        "Expected exactly 1 arguments for sleep".into(),
+                    ));
+                }
+                if let Value::Integer(d) = &args[0] {
+                    std::thread::sleep(std::time::Duration::from_secs(*d as _));
+                    Ok(Value::Nil)
+                } else {
+                    Err(SelError::Runtime(
+                        loc,
+                        "getenv requires a string argument".into(),
+                    ))
+                }
+            }
+            _ => todo!(),
+        }
+    } else {
+        return Err(SelError::SyntaxError(
+            loc,
+            "Expected symbol for system".into(),
+        ));
+    }
 }
 
 pub fn load(env: Rc<RefCell<Env>>) {
@@ -1133,21 +1185,8 @@ pub fn load(env: Rc<RefCell<Env>>) {
     e.insert(intern("ffi-dlsym"), Value::NativeFunction(ffi_dlsym));
     e.insert(intern("ffi-call"), Value::NativeFunction(ffi_call));
 
-    e.insert(
-        intern("io/read-string"),
-        Value::NativeFunction(io_read_string),
-    );
-    e.insert(
-        intern("io/write-string"),
-        Value::NativeFunction(io_write_string),
-    );
-    e.insert(
-        intern("io/file-exists?"),
-        Value::NativeFunction(io_file_exists),
-    );
-
-    e.insert(intern("os/getenv"), Value::NativeFunction(os_getenv));
-    e.insert(intern("os/args"), Value::NativeFunction(os_args));
+    e.insert(intern("system"), Value::NativeFunction(system));
+    e.insert(intern("file-system"), Value::NativeFunction(file_system));
 }
 
 pub fn read_script<P>(script_path: P) -> Result<String>
