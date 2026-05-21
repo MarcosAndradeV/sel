@@ -14,15 +14,15 @@ export default defineConfig({
         {
           label: 'Getting Started',
           items: [
-            { label: 'Introduction', link: '/' },
+            { label: 'Introduction', link: '/sel/' },
           ],
         },
         {
           label: 'Guides & References',
           items: [
-            { label: 'Language Reference', link: '/reference' },
-            { label: 'Interactive REPL', link: '/repl' },
-            { label: 'Standard & Core Library', link: '/core' },
+            { label: 'Language Reference', link: '/sel/reference' },
+            { label: 'Interactive REPL', link: '/sel/repl' },
+            { label: 'Standard & Core Library', link: '/sel/core' },
           ],
         },
       ],
