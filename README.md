@@ -62,6 +62,22 @@ You can write numeric literals using different bases, which will automatically b
 (define permissions 0o755)
 ```
 
+### System and File I/O (Message Passing)
+`sel` provides an idiomatic, closure-based message passing API for OS and file system interactions using the `system` and `file-system` native functions.
+
+```lisp
+;; OS interactions
+(system 'getenv "USER") ;; Returns the environment variable or nil
+(system 'args)          ;; Returns a list of command line arguments
+(system 'sleep 1)       ;; Sleeps for 1 second
+(system 'exit 0)        ;; Exits the process
+
+;; File system interactions
+(file-system 'write "test.txt" "Hello World")
+(file-system 'exists? "test.txt")
+(file-system 'read "test.txt")
+```
+
 ### Dynamic Foreign Function Interface (FFI)
 Call native shared objects (`.so` / `.dll` / `.dylib`) directly from your `sel` scripts without writing any Rust bindings. The FFI layer maps strings to C-strings and coercions automatically.
 
