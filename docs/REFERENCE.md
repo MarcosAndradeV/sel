@@ -264,7 +264,7 @@ Coroutines are cooperative multi-tasking blocks that can suspend execution, retu
 
 ### Passing and Returning C Structures (by Value)
 
-Starting in `v0.1.1`, the FFI supports passing and returning C structures directly by value using the `'(struct (<field-types>))` selector.
+The FFI supports passing and returning C structures directly by value using the `'(struct (<field-types>))` selector.
 
 #### Representation
 C structures are mapped to `sel` lists or nested lists. Field offsets and padding alignments are calculated automatically according to the System V ABI standards:
