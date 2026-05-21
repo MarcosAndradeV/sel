@@ -1,0 +1,35 @@
+---
+title: sel Lisp
+description: A fast, embeddable, and extensible Scheme-like Lisp dialect implemented in Rust.
+template: splash
+hero:
+  tagline: A fast, embeddable, and extensible Scheme-like Lisp dialect in Rust.
+  actions:
+    - text: Language Reference
+      link: /reference
+      icon: right-arrow
+      variant: primary
+    - text: Standard & Core Library
+      link: /core
+      icon: open-book
+      variant: secondary
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Core Features
+
+<CardGrid>
+  <Card title="Tail Call Optimization (TCO)" icon="rocket">
+    Infinite recursive calls run without growing the stack, guaranteeing safe and memory-efficient execution of pure functional loops.
+  </Card>
+  <Card title="Zero-Boilerplate FFI" icon="setting">
+    Natively open shared object libraries (`.so` / `.dll` / `.dylib`) and invoke external C functions directly without intermediate bindings.
+  </Card>
+  <Card title="True Metaprogramming" icon="code">
+    Extend syntax natively using a true macro system (`defmacro`) with quasiquotation (`` ` ``), unquote (`~`), and unquote-splicing (`~@`).
+  </Card>
+  <Card title="Modern Primitive Types" icon="pencil">
+    Rich support for modern constructs like **curly-brace record structures** (`{key value}`), multiple integer bases, thread-first pipelines (`->`), and native coroutines.
+  </Card>
+</CardGrid>
