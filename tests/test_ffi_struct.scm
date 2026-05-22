@@ -1,4 +1,4 @@
-(define lib (ffi-dlopen "./libffi_test_structs.so"))
+(define lib (ffi-dlopen "./tests/libffi_test_structs.so"))
 
 ;; 1. Test passing struct by value
 (define get-distance-sq-sym (ffi-dlsym lib "get_distance_sq"))

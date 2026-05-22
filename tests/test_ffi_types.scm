@@ -1,4 +1,4 @@
-(define lib (ffi-dlopen "./libffi_test_structs.so"))
+(define lib (ffi-dlopen "./tests/libffi_test_structs.so"))
 
 ;; 1. Test 16-bit signed short addition ('i16)
 (define add-shorts (ffi-func (ffi-dlsym lib "add_shorts") 'i16 '(i16 i16)))
