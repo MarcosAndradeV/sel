@@ -24,3 +24,19 @@ All REPL-specific directives start with a colon (`:`). The following commands ar
 The REPL uses `rustyline` for a modern CLI experience:
 - **Command History**: Navigate through previously executed lines using the **Up** and **Down** arrow keys. History is automatically saved in your home directory under `~/.sel_history`.
 - **Keyboard Shortcuts**: Supports standard shell line-editing shortcuts like `Ctrl-A` (go to beginning of line), `Ctrl-E` (go to end of line), and `Ctrl-D` / `Ctrl-C` to gracefully terminate.
+
+## Static Analysis Linter
+
+`sel` includes a built-in static analysis linter designed to detect common syntax and semantic issues before runtime. You can run the linter on any Scheme script using the `--lint` CLI flag:
+
+```bash
+sel --lint path/to/script.scm
+```
+
+The linter performs resilient parsing and static checks to report the following:
+- **Undefined Variables**: Detects references to symbols that are not defined in the global core library, imported modules, or local lexical scopes (such as `let` blocks or `lambda` parameters).
+- **Unbound Variable Mutation**: Checks if `set!` statements are mutating undefined/unbound variables.
+- **Arity Mismatches**: Validates function application argument counts against user-defined top-level functions (including proper handling of variadic `&` rest parameter functions).
+
+If any syntax errors or static linter warnings are detected, the command displays them clearly and exits with status code `1`. If the script is clean, it prints a success message and exits with status `0`.
+

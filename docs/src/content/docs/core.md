@@ -45,11 +45,26 @@ These predicates allow runtime type introspection. They all take **1 argument** 
 - `(symbol? x)`: Returns `#t` if `x` is an interned symbol.
 - `(function? x)`: Returns `#t` if `x` is a native function or compiled Scheme closure.
 - `(record? x)`: Returns `#t` if `x` is a record mapping.
+- `(char? x)`: Returns `#t` if `x` is a first-class character.
 - `(type-of x)`: Evaluates `x` and returns its type name as an interned symbol:
   ```lisp
   (type-of 10)       ; 'integer
   (type-of "hello")  ; 'string
   (type-of {a 1})    ; 'record
+  (type-of #\a)      ; 'char
+  ```
+
+### Character Conversions
+
+These functions convert between character values and their corresponding integer Unicode scalar values.
+
+- `(char->integer char)`: Returns the Unicode scalar value integer of the character `char`.
+  ```lisp
+  (char->integer #\a) ; 97
+  ```
+- `(integer->char int)`: Returns the first-class character corresponding to the Unicode scalar value integer `int`.
+  ```lisp
+  (integer->char 97)  ; #\a
   ```
 
 ### List Manipulation Primitives

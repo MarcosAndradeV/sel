@@ -44,6 +44,18 @@ Strings are UTF-8 encoded and enclosed in double quotes:
 "Hello, Lisp!"
 ```
 
+### Characters
+Characters are first-class values in `sel`. They are written using the `#\` prefix:
+- **Single character**: `#\a`, `#\A`, `#\ `, `#\\`, `#\(`
+- **Special character names**:
+  - `#\space` (evaluates to `' '`)
+  - `#\newline` (evaluates to `'\n'`)
+  - `#\tab` (evaluates to `'\t'`)
+  - `#\return` (evaluates to `'\r'`)
+
+Character values can be compared using `eq?`, converted using `char->integer` and `integer->char`, and queried via the `char?` predicate.
+
+
 ### Symbols
 Symbols are unique identifiers representing names of variables, functions, or keys. They are interned by the runtime for fast lookup:
 ```lisp
@@ -142,6 +154,36 @@ Loads external Scheme library files into the current runtime environment.
 ;; Nested list shorthand
 (import (point pnt))
 (pnt/new-point 7 8)
+```
+
+#### Module Visibility & Directives (`:public` / `:private`)
+When defining a module in a separate file (e.g., `math.scm`), all top-level bindings are **public** and exported by default. You can control visibility using module directives:
+- **`:private`**: Switches subsequent bindings to private scope. They can only be accessed internally within the module file.
+- **`:public`**: Switches subsequent bindings back to public scope (exported).
+
+Example module (`mod_example.scm`):
+```lisp
+;; mod_example.scm
+(define a 10) ; Public by default
+
+:private
+(define b 20) ; Private (not exported)
+(define c 30) ; Private (not exported)
+
+:public
+(define d 40) ; Public again
+(define f 50) ; Public again
+```
+
+When importing this module:
+```lisp
+(import mod_example)
+
+(println mod_example/a) ; Prints 10
+(println mod_example/d) ; Prints 40
+
+;; Accessing private bindings throws a runtime error:
+mod_example/b ; Error: Undefined/private variable mod_example/b
 ```
 
 ---
@@ -259,8 +301,9 @@ Coroutines are cooperative multi-tasking blocks that can suspend execution, retu
 | :--- | :--- | :--- |
 | `'void` | `void` | Used only as return type. Returns `nil` in `sel`. |
 | `'bool` | `bool` / `u8` | Maps to `Value::Boolean`. |
-| `'u8`, `'uchar` | `uint8_t`, `unsigned char` | Maps Lisp integers to 8-bit unsigned integer structures. |
-| `'i8`, `'ichar`, `'char` | `int8_t`, `char`, `signed char` | Maps Lisp integers to 8-bit signed integer structures. |
+| `'u8`, `'uchar` | `uint8_t`, `unsigned char` | Maps Lisp integers to 8-bit unsigned integer structures. (Also accepts character literals `#\a` via automatic coercion). |
+| `'i8`, `'ichar` | `int8_t`, `signed char` | Maps Lisp integers to 8-bit signed integer structures. (Also accepts character literals `#\a` via automatic coercion). |
+| `'char` | `char` | Maps to first-class Lisp character (`char`) values directly. |
 | `'u16` | `uint16_t`, `unsigned short` | Maps Lisp integers to 16-bit unsigned integer structures. |
 | `'i16` | `int16_t`, `short` | Maps Lisp integers to 16-bit signed integer structures. |
 | `'i32`, `'u32` | `int32_t`, `uint32_t` | Evaluates Lisp numbers to 32-bit width integer structures. |

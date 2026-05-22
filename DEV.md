@@ -49,8 +49,8 @@ The source code is organized into modular components under `src/`:
 - **`src/main.rs`**: System entry point, argument parsing via the CLI module, and the core rustyline-powered REPL loop.
 - **`src/lexer.rs`**: Tokenizer that converts raw S-expression string buffers into streamable lexical tokens.
 - **`src/parser.rs` & `src/ast.rs`**: S-expression AST generator. Handles structural parenthesis matching, quotes, and literal types.
-- **`src/compiler.rs`**: Bytecode compiler. Lowers parsed AST forms into linear VM bytecode instruction chunks (`Chunk` / `OpCode`).
-- **`src/runtime.rs`**: Stack-based virtual machine evaluator. Contains the main instruction dispatch loop, environment binding maps, scope structures, tail call optimization (TCO), try/catch blocks, and coroutines.
+- **`src/compiler.rs`**: Bytecode compiler. Lowers parsed AST forms into linear VM bytecode instruction chunks (`Chunk` / `OpCode`). Bytecode is serialized into a flat linear byte buffer (`Vec<u8>`) with explicit compile-time jump patching to resolve control flow offsets, reducing execution overhead.
+- **`src/runtime.rs`**: Stack-based virtual machine evaluator. Contains the main instruction dispatch loop, environment binding maps, scope structures, tail call optimization (TCO), try/catch blocks, and coroutines. Local variables are compiled into stack index offsets and resolved via highly efficient `LoadLocal` and `StoreLocal` opcodes, bypassing dynamic environment map lookups.
 - **`src/value.rs`**: Primitive and compound value types (e.g. Lists, Records, Closures, Macros, Coroutines) and their coercion utilities.
 - **`src/diagnostics.rs`**: Lexical, compile-time syntax, and runtime exception systems with line-number context reporting.
 
