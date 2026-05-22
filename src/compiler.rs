@@ -100,8 +100,7 @@ impl<'a> Compiler<'a> {
                 let jump_end_idx = self.chunk.code.len();
                 self.chunk.write((loc, OpCode::Jump(0)));
 
-                self.chunk.code[jump_if_false_idx] =
-                    (loc, OpCode::JumpIfFalse(self.chunk.code.len()));
+                self.chunk.patch_jump(jump_if_false_idx, self.chunk.code.len());
                 self.chunk.write((loc, OpCode::Pop));
 
                 if let Some(fb) = false_branch {
@@ -111,7 +110,7 @@ impl<'a> Compiler<'a> {
                     self.chunk.write((loc, OpCode::Constant(idx)));
                 }
 
-                self.chunk.code[jump_end_idx] = (loc, OpCode::Jump(self.chunk.code.len()));
+                self.chunk.patch_jump(jump_end_idx, self.chunk.code.len());
             }
             Ast::Begin(loc, mut exprs) => {
                 if exprs.is_empty() {
@@ -240,7 +239,7 @@ impl<'a> Compiler<'a> {
 
                 // This is the start of the catch block
                 let catch_start_ip = self.chunk.code.len();
-                self.chunk.code[catch_idx] = (loc, OpCode::RegisterCatch(catch_start_ip));
+                self.chunk.patch_jump(catch_idx, catch_start_ip);
 
                 // We build an environment for the error variable (which the VM will have pushed onto the stack)
                 self.chunk.write((loc, OpCode::BuildEnv(vec![err_var])));
@@ -261,7 +260,7 @@ impl<'a> Compiler<'a> {
                 self.chunk.write((loc, OpCode::PopEnv(1)));
 
                 let end_ip = self.chunk.code.len();
-                self.chunk.code[jump_end_idx] = (loc, OpCode::Jump(end_ip));
+                self.chunk.patch_jump(jump_end_idx, end_ip);
             }
             Ast::Yield(loc, val) => {
                 self.compile(*val)?;
@@ -702,6 +701,7 @@ impl<'a> Compiler<'a> {
                     self.chunk.write((loc, OpCode::Constant(idx)));
                     return Ok(());
                 }
+
                 let mut jump_ends = Vec::new();
 
                 for (i, expr) in exprs.iter().enumerate() {
@@ -717,7 +717,7 @@ impl<'a> Compiler<'a> {
 
                 let end_pos = self.chunk.code.len();
                 for jmp in jump_ends {
-                    self.chunk.code[jmp] = (loc, OpCode::JumpIfFalse(end_pos));
+                    self.chunk.patch_jump(jmp, end_pos);
                 }
             }
             Ast::Or(loc, exprs) => {
@@ -739,15 +739,14 @@ impl<'a> Compiler<'a> {
                         self.chunk.write((loc, OpCode::Jump(0)));
                         jump_ends.push(jmp_end);
 
-                        self.chunk.code[jmp_false] =
-                            (loc, OpCode::JumpIfFalse(self.chunk.code.len()));
+                        self.chunk.patch_jump(jmp_false, self.chunk.code.len());
                         self.chunk.write((loc, OpCode::Pop));
                     }
                 }
 
                 let end_pos = self.chunk.code.len();
                 for jmp in jump_ends {
-                    self.chunk.code[jmp] = (loc, OpCode::Jump(end_pos));
+                    self.chunk.patch_jump(jmp, end_pos);
                 }
             }
             Ast::Unquote(loc, _) | Ast::UnquoteSplicing(loc, _) => {
@@ -872,8 +871,9 @@ pub enum OpCode {
 
 #[derive(Debug, Clone)]
 pub struct Chunk {
-    pub code: Vec<OpCodeLoc>,
+    pub code: Vec<u8>,
     pub constants: Vec<Value>,
+    pub locations: Vec<(usize, Loc)>,
 }
 
 impl Chunk {
@@ -881,15 +881,240 @@ impl Chunk {
         Self {
             code: Vec::new(),
             constants: Vec::new(),
+            locations: Vec::new(),
         }
     }
 
-    pub fn write(&mut self, op: OpCodeLoc) {
-        self.code.push(op);
+    pub fn write(&mut self, op_loc: OpCodeLoc) {
+        let (loc, op) = op_loc;
+        let start_offset = self.code.len();
+        self.locations.push((start_offset, loc));
+
+        match op {
+            OpCode::Constant(idx) => {
+                self.code.push(1);
+                self.code.extend_from_slice(&(idx as u32).to_le_bytes());
+            }
+            OpCode::LoadVar(id) => {
+                self.code.push(2);
+                self.code.extend_from_slice(&id.to_le_bytes());
+            }
+            OpCode::StoreVar(id) => {
+                self.code.push(3);
+                self.code.extend_from_slice(&id.to_le_bytes());
+            }
+            OpCode::DefVar(id) => {
+                self.code.push(4);
+                self.code.extend_from_slice(&id.to_le_bytes());
+            }
+            OpCode::LoadLocal(idx) => {
+                self.code.push(5);
+                self.code.push(idx);
+            }
+            OpCode::StoreLocal(idx) => {
+                self.code.push(6);
+                self.code.push(idx);
+            }
+            OpCode::Pop => {
+                self.code.push(7);
+            }
+            OpCode::JumpIfFalse(target) => {
+                self.code.push(8);
+                self.code.extend_from_slice(&(target as u32).to_le_bytes());
+            }
+            OpCode::Jump(target) => {
+                self.code.push(9);
+                self.code.extend_from_slice(&(target as u32).to_le_bytes());
+            }
+            OpCode::Call(arity) => {
+                self.code.push(10);
+                self.code.extend_from_slice(&(arity as u32).to_le_bytes());
+            }
+            OpCode::TailCall(arity) => {
+                self.code.push(11);
+                self.code.extend_from_slice(&(arity as u32).to_le_bytes());
+            }
+            OpCode::MakeClosure(idx) => {
+                self.code.push(12);
+                self.code.extend_from_slice(&(idx as u32).to_le_bytes());
+            }
+            OpCode::MakeMacro(id, idx) => {
+                self.code.push(13);
+                self.code.extend_from_slice(&id.to_le_bytes());
+                self.code.extend_from_slice(&(idx as u32).to_le_bytes());
+            }
+            OpCode::Return => {
+                self.code.push(14);
+            }
+            OpCode::BuildEnv(ids) => {
+                self.code.push(15);
+                self.code.extend_from_slice(&(ids.len() as u32).to_le_bytes());
+                for id in ids {
+                    self.code.extend_from_slice(&id.to_le_bytes());
+                }
+            }
+            OpCode::PopEnv(count) => {
+                self.code.push(16);
+                self.code.extend_from_slice(&(count as u32).to_le_bytes());
+            }
+            OpCode::RegisterCatch(target) => {
+                self.code.push(17);
+                self.code.extend_from_slice(&(target as u32).to_le_bytes());
+            }
+            OpCode::UnregisterCatch => {
+                self.code.push(18);
+            }
+            OpCode::Yield => {
+                self.code.push(19);
+            }
+            OpCode::CoResume => {
+                self.code.push(20);
+            }
+            OpCode::Import(mod_name_id, alias_opt) => {
+                self.code.push(21);
+                self.code.extend_from_slice(&mod_name_id.to_le_bytes());
+                match alias_opt {
+                    None => {
+                        self.code.push(0);
+                    }
+                    Some(alias_id) => {
+                        self.code.push(1);
+                        self.code.extend_from_slice(&alias_id.to_le_bytes());
+                    }
+                }
+            }
+            OpCode::SetVisibility(is_public) => {
+                self.code.push(22);
+                self.code.push(if is_public { 1 } else { 0 });
+            }
+            OpCode::MakeRecord => {
+                self.code.push(23);
+            }
+            OpCode::AssocRecord(sym) => {
+                self.code.push(24);
+                self.code.extend_from_slice(&sym.to_le_bytes());
+            }
+            OpCode::MakeList(len) => {
+                self.code.push(25);
+                self.code.extend_from_slice(&(len as u32).to_le_bytes());
+            }
+            OpCode::ConcatList(count) => {
+                self.code.push(26);
+                self.code.extend_from_slice(&(count as u32).to_le_bytes());
+            }
+            OpCode::Sum(arity) => {
+                self.code.push(27);
+                self.code.extend_from_slice(&arity.to_le_bytes());
+            }
+            OpCode::Sub(arity) => {
+                self.code.push(28);
+                self.code.extend_from_slice(&arity.to_le_bytes());
+            }
+            OpCode::Mul(arity) => {
+                self.code.push(29);
+                self.code.extend_from_slice(&arity.to_le_bytes());
+            }
+            OpCode::Div(arity) => {
+                self.code.push(30);
+                self.code.extend_from_slice(&arity.to_le_bytes());
+            }
+            OpCode::Mod => {
+                self.code.push(31);
+            }
+            OpCode::Eq(arity) => {
+                self.code.push(32);
+                self.code.extend_from_slice(&arity.to_le_bytes());
+            }
+            OpCode::NumEq(arity) => {
+                self.code.push(33);
+                self.code.extend_from_slice(&arity.to_le_bytes());
+            }
+            OpCode::NumNotEq(arity) => {
+                self.code.push(34);
+                self.code.extend_from_slice(&arity.to_le_bytes());
+            }
+            OpCode::NumLt(arity) => {
+                self.code.push(35);
+                self.code.extend_from_slice(&arity.to_le_bytes());
+            }
+            OpCode::NumGt(arity) => {
+                self.code.push(36);
+                self.code.extend_from_slice(&arity.to_le_bytes());
+            }
+            OpCode::NumLte(arity) => {
+                self.code.push(37);
+                self.code.extend_from_slice(&arity.to_le_bytes());
+            }
+            OpCode::NumGte(arity) => {
+                self.code.push(38);
+                self.code.extend_from_slice(&arity.to_le_bytes());
+            }
+            OpCode::Cons => {
+                self.code.push(39);
+            }
+            OpCode::Car => {
+                self.code.push(40);
+            }
+            OpCode::Cdr => {
+                self.code.push(41);
+            }
+            OpCode::Nth => {
+                self.code.push(42);
+            }
+            OpCode::Count => {
+                self.code.push(43);
+            }
+            OpCode::Empty => {
+                self.code.push(44);
+            }
+            OpCode::IsNil => {
+                self.code.push(45);
+            }
+            OpCode::IsList => {
+                self.code.push(46);
+            }
+            OpCode::IsNumber => {
+                self.code.push(47);
+            }
+            OpCode::IsString => {
+                self.code.push(48);
+            }
+            OpCode::IsSymbol => {
+                self.code.push(49);
+            }
+            OpCode::IsFunction => {
+                self.code.push(50);
+            }
+            OpCode::TypeOf => {
+                self.code.push(51);
+            }
+            OpCode::Not(arity) => {
+                self.code.push(52);
+                self.code.extend_from_slice(&arity.to_le_bytes());
+            }
+        }
     }
 
     pub fn add_constant(&mut self, value: Value) -> usize {
         self.constants.push(value);
         self.constants.len() - 1
+    }
+
+    pub fn patch_jump(&mut self, offset: usize, target: usize) {
+        let bytes = (target as u32).to_le_bytes();
+        self.code[offset + 1..offset + 5].copy_from_slice(&bytes);
+    }
+
+    pub fn get_loc(&self, ip: usize) -> Loc {
+        match self.locations.binary_search_by_key(&ip, |&(offset, _)| offset) {
+            Ok(idx) => self.locations[idx].1,
+            Err(idx) => {
+                if idx > 0 {
+                    self.locations[idx - 1].1
+                } else {
+                    Loc::default()
+                }
+            }
+        }
     }
 }
