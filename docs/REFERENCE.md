@@ -256,6 +256,10 @@ Coroutines are cooperative multi-tasking blocks that can suspend execution, retu
 | :--- | :--- | :--- |
 | `'void` | `void` | Used only as return type. Returns `nil` in `sel`. |
 | `'bool` | `bool` / `u8` | Maps to `Value::Boolean`. |
+| `'u8`, `'uchar` | `uint8_t`, `unsigned char` | Maps Lisp integers to 8-bit unsigned integer structures. |
+| `'i8`, `'ichar`, `'char` | `int8_t`, `char`, `signed char` | Maps Lisp integers to 8-bit signed integer structures. |
+| `'u16` | `uint16_t`, `unsigned short` | Maps Lisp integers to 16-bit unsigned integer structures. |
+| `'i16` | `int16_t`, `short` | Maps Lisp integers to 16-bit signed integer structures. |
 | `'i32`, `'u32` | `int32_t`, `uint32_t` | Evaluates Lisp numbers to 32-bit width integer structures. |
 | `'i64`, `'u64` | `int64_t`, `uint64_t` | Maps to Lisp integers natively. |
 | `'f32`, `'f64` | `float`, `double` | Evaluates Lisp floats natively. |

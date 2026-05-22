@@ -406,6 +406,10 @@ pub fn ffi_dlsym(loc: Loc, args: Vec<Value>) -> Result<Value> {
 #[derive(Debug, Clone)]
 enum FfiType {
     Void,
+    I8,
+    U8,
+    I16,
+    U16,
     I32,
     I64,
     U32,
@@ -413,7 +417,6 @@ enum FfiType {
     F32,
     F64,
     Bool,
-    U8,
     Pointer,
     Struct(Vec<FfiType>),
 }
@@ -422,9 +425,10 @@ impl FfiType {
     fn size_and_alignment(&self) -> (usize, usize) {
         match self {
             FfiType::Void => (0, 1),
+            FfiType::I8 | FfiType::U8 | FfiType::Bool => (1, 1),
+            FfiType::I16 | FfiType::U16 => (2, 2),
             FfiType::I32 | FfiType::U32 | FfiType::F32 => (4, 4),
             FfiType::I64 | FfiType::U64 | FfiType::F64 | FfiType::Pointer => (8, 8),
-            FfiType::Bool | FfiType::U8 => (1, 1),
             FfiType::Struct(fields) => {
                 let mut current_offset = 0;
                 let mut max_align = 1;
@@ -445,6 +449,10 @@ impl FfiType {
     fn to_libffi_type(&self) -> libffi::middle::Type {
         match self {
             FfiType::Void => libffi::middle::Type::void(),
+            FfiType::I8 => libffi::middle::Type::i8(),
+            FfiType::U8 => libffi::middle::Type::u8(),
+            FfiType::I16 => libffi::middle::Type::i16(),
+            FfiType::U16 => libffi::middle::Type::u16(),
             FfiType::I32 => libffi::middle::Type::i32(),
             FfiType::I64 => libffi::middle::Type::i64(),
             FfiType::U32 => libffi::middle::Type::u32(),
@@ -452,7 +460,6 @@ impl FfiType {
             FfiType::F32 => libffi::middle::Type::f32(),
             FfiType::F64 => libffi::middle::Type::f64(),
             FfiType::Bool => libffi::middle::Type::u8(),
-            FfiType::U8 => libffi::middle::Type::u8(),
             FfiType::Pointer => libffi::middle::Type::pointer(),
             FfiType::Struct(fields) => {
                 let ffi_fields: Vec<_> = fields.iter().map(|f| f.to_libffi_type()).collect();
@@ -468,6 +475,10 @@ fn parse_ffi_type(loc: Loc, val: &Value) -> Result<FfiType> {
             let sym = crate::lookup(*s);
             match sym.as_str() {
                 "void" => Ok(FfiType::Void),
+                "i8" | "ichar" | "char" => Ok(FfiType::I8),
+                "u8" | "uchar" => Ok(FfiType::U8),
+                "i16" => Ok(FfiType::I16),
+                "u16" => Ok(FfiType::U16),
                 "i32" => Ok(FfiType::I32),
                 "i64" => Ok(FfiType::I64),
                 "u32" => Ok(FfiType::U32),
@@ -475,7 +486,6 @@ fn parse_ffi_type(loc: Loc, val: &Value) -> Result<FfiType> {
                 "f32" => Ok(FfiType::F32),
                 "f64" => Ok(FfiType::F64),
                 "bool" => Ok(FfiType::Bool),
-                "u8" => Ok(FfiType::U8),
                 "*u8" => Ok(FfiType::Pointer),
                 _ => Err(SelError::Runtime(loc, format!("Unsupported FFI primitive type: {sym}"))),
             }
@@ -569,6 +579,15 @@ fn serialize_value(
             buf.extend_from_slice(&n.to_ne_bytes());
             Ok(())
         }
+        FfiType::I8 => {
+            let n = match val {
+                Value::Boolean(b) => if *b { 1i8 } else { 0i8 },
+                Value::Integer(i) => *i as i8,
+                _ => return Err(SelError::Runtime(loc, format!("Expected boolean or integer for i8 but got {}", value_type_name(val)))),
+            };
+            buf.extend_from_slice(&n.to_ne_bytes());
+            Ok(())
+        }
         FfiType::Bool | FfiType::U8 => {
             let n = match val {
                 Value::Boolean(b) => if *b { 1u8 } else { 0u8 },
@@ -576,6 +595,24 @@ fn serialize_value(
                 _ => return Err(SelError::Runtime(loc, format!("Expected boolean or integer for u8/bool but got {}", value_type_name(val)))),
             };
             buf.push(n);
+            Ok(())
+        }
+        FfiType::I16 => {
+            let n = match val {
+                Value::Integer(i) => *i as i16,
+                Value::Float(f) => *f as i16,
+                _ => return Err(SelError::Runtime(loc, format!("Expected integer/float for i16 but got {}", value_type_name(val)))),
+            };
+            buf.extend_from_slice(&n.to_ne_bytes());
+            Ok(())
+        }
+        FfiType::U16 => {
+            let n = match val {
+                Value::Integer(i) => *i as u16,
+                Value::Float(f) => *f as u16,
+                _ => return Err(SelError::Runtime(loc, format!("Expected integer/float for u16 but got {}", value_type_name(val)))),
+            };
+            buf.extend_from_slice(&n.to_ne_bytes());
             Ok(())
         }
         FfiType::Pointer => {
@@ -629,6 +666,18 @@ unsafe fn deserialize_value(ty: &FfiType, ptr: *const u8) -> Value {
     unsafe {
         match ty {
             FfiType::Void => Value::Nil,
+            FfiType::I8 => {
+                let val = std::ptr::read(ptr as *const i8);
+                Value::Integer(val as i64)
+            }
+            FfiType::I16 => {
+                let val = std::ptr::read_unaligned(ptr as *const i16);
+                Value::Integer(val as i64)
+            }
+            FfiType::U16 => {
+                let val = std::ptr::read_unaligned(ptr as *const u16);
+                Value::Integer(val as i64)
+            }
             FfiType::I32 => {
                 let val = std::ptr::read_unaligned(ptr as *const i32);
                 Value::Integer(val as i64)
@@ -751,6 +800,18 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
             FfiType::Void => {
                 cif.call::<()>(code_ptr, &call_args);
                 Ok(Value::Nil)
+            }
+            FfiType::I8 => {
+                let res: i8 = cif.call(code_ptr, &call_args);
+                Ok(Value::Integer(res as i64))
+            }
+            FfiType::I16 => {
+                let res: i16 = cif.call(code_ptr, &call_args);
+                Ok(Value::Integer(res as i64))
+            }
+            FfiType::U16 => {
+                let res: u16 = cif.call(code_ptr, &call_args);
+                Ok(Value::Integer(res as i64))
             }
             FfiType::Bool => {
                 let res: u8 = cif.call(code_ptr, &call_args);

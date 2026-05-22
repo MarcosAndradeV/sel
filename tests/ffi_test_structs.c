@@ -32,3 +32,15 @@ struct Rect make_rect(float x, float y, float w, float h) {
     r.h = h;
     return r;
 }
+
+short add_shorts(short a, short b) {
+    return a + b;
+}
+
+unsigned char next_char(unsigned char c) {
+    return c + 1;
+}
+
+char invert_char_sign(char c) {
+    return -c;
+}
