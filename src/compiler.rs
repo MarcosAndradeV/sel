@@ -13,13 +13,25 @@ use crate::value::Value;
 
 type Result<T> = std::result::Result<T, SelError>;
 
+#[derive(Debug, Clone)]
+pub struct Local {
+    pub name: u32,
+    pub depth: usize,
+}
+
 pub struct Compiler<'a> {
     pub chunk: &'a mut Chunk,
+    pub locals: Vec<Local>,
+    pub scope_depth: usize,
 }
 
 impl<'a> Compiler<'a> {
     pub fn new(chunk: &'a mut Chunk) -> Self {
-        Self { chunk }
+        Self {
+            chunk,
+            locals: Vec::new(),
+            scope_depth: 0,
+        }
     }
 
     pub fn compile(&mut self, ast: Ast) -> Result<()> {
@@ -59,7 +71,11 @@ impl<'a> Compiler<'a> {
                 self.chunk.write((loc, OpCode::Constant(idx)));
             }
             Ast::Symbol(loc, id) => {
-                self.chunk.write((loc, OpCode::LoadVar(id)));
+                if let Some(index) = self.locals.iter().rposition(|local| local.name == id) {
+                    self.chunk.write((loc, OpCode::LoadLocal(index as u8)));
+                } else {
+                    self.chunk.write((loc, OpCode::LoadVar(id)));
+                }
             }
             Ast::Define(loc, id, expr) => {
                 self.compile(*expr)?;
@@ -67,7 +83,11 @@ impl<'a> Compiler<'a> {
             }
             Ast::Set(loc, id, expr) => {
                 self.compile(*expr)?;
-                self.chunk.write((loc, OpCode::StoreVar(id)));
+                if let Some(index) = self.locals.iter().rposition(|local| local.name == id) {
+                    self.chunk.write((loc, OpCode::StoreLocal(index as u8)));
+                } else {
+                    self.chunk.write((loc, OpCode::StoreVar(id)));
+                }
             }
             Ast::If(loc, cond, true_branch, false_branch) => {
                 self.compile(*cond)?;
@@ -107,12 +127,17 @@ impl<'a> Compiler<'a> {
                 }
             }
             Ast::Let(loc, bindings, mut body) => {
+                self.scope_depth += 1;
                 let mut ids = Vec::new();
                 for (id, val) in bindings {
                     self.compile(val)?;
                     ids.push(id);
+                    self.locals.push(Local {
+                        name: id,
+                        depth: self.scope_depth,
+                    });
                 }
-                self.chunk.write((loc, OpCode::BuildEnv(ids)));
+                self.chunk.write((loc, OpCode::BuildEnv(ids.clone())));
 
                 if body.is_empty() {
                     let idx = self.chunk.add_constant(Value::Nil);
@@ -126,11 +151,20 @@ impl<'a> Compiler<'a> {
                     self.compile_expr(last, is_tail)?;
                 }
 
-                self.chunk.write((loc, OpCode::PopEnv));
+                let count = ids.len();
+                self.chunk.write((loc, OpCode::PopEnv(count)));
+                self.locals.retain(|local| local.depth < self.scope_depth);
+                self.scope_depth -= 1;
             }
             Ast::Lambda(loc, params, mut body_asts) => {
                 let mut child_chunk = Chunk::new();
                 let mut child_compiler = Compiler::new(&mut child_chunk);
+                for param_id in &params {
+                    child_compiler.locals.push(Local {
+                        name: *param_id,
+                        depth: 0,
+                    });
+                }
 
                 if body_asts.is_empty() {
                     let idx = child_chunk.add_constant(Value::Nil);
@@ -158,6 +192,12 @@ impl<'a> Compiler<'a> {
                 if let Ast::Lambda(_, params, mut body_asts) = *expr {
                     let mut child_chunk = Chunk::new();
                     let mut child_compiler = Compiler::new(&mut child_chunk);
+                    for param_id in &params {
+                        child_compiler.locals.push(Local {
+                            name: *param_id,
+                            depth: 0,
+                        });
+                    }
 
                     if body_asts.is_empty() {
                         let idx = child_chunk.add_constant(Value::Nil);
@@ -218,7 +258,7 @@ impl<'a> Compiler<'a> {
                     self.compile_expr(last, is_tail)?;
                 }
 
-                self.chunk.write((loc, OpCode::PopEnv));
+                self.chunk.write((loc, OpCode::PopEnv(1)));
 
                 let end_ip = self.chunk.code.len();
                 self.chunk.code[jump_end_idx] = (loc, OpCode::Jump(end_ip));
@@ -780,6 +820,8 @@ pub enum OpCode {
     LoadVar(u32),
     StoreVar(u32),
     DefVar(u32),
+    LoadLocal(u8),
+    StoreLocal(u8),
     Pop,
     JumpIfFalse(usize),
     Jump(usize),
@@ -789,7 +831,7 @@ pub enum OpCode {
     MakeMacro(u32, usize),
     Return,
     BuildEnv(Vec<u32>),
-    PopEnv,
+    PopEnv(usize),
     RegisterCatch(usize),
     UnregisterCatch,
     Yield,

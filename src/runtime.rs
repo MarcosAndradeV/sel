@@ -89,6 +89,7 @@ pub struct CallFrame {
     pub chunk: Rc<Chunk>,
     pub ip: usize,
     pub env: Rc<RefCell<Env>>,
+    pub locals: Vec<Value>,
 }
 
 #[derive(Clone)]
@@ -112,12 +113,13 @@ impl VM {
         }
     }
 
-    pub fn run(&mut self, loc: Loc, chunk: Rc<Chunk>, env: Rc<RefCell<Env>>) -> Result<Value> {
+    pub fn run(&mut self, loc: Loc, chunk: Rc<Chunk>, env: Rc<RefCell<Env>>, locals: Vec<Value>) -> Result<Value> {
         let mut frames = vec![CallFrame {
             loc,
             chunk,
             ip: 0,
             env,
+            locals,
         }];
         loop {
             match self.run_internal(&mut frames) {
@@ -427,6 +429,14 @@ impl VM {
                 OpCode::Constant(idx) => {
                     self.stack.push(frame.chunk.constants[idx].clone());
                 }
+                OpCode::LoadLocal(idx) => {
+                    let val = frame.locals[idx as usize].clone();
+                    self.stack.push(val);
+                }
+                OpCode::StoreLocal(idx) => {
+                    let val = self.stack.last().unwrap().clone();
+                    frame.locals[idx as usize] = val;
+                }
                 OpCode::LoadVar(id) => {
                     if let Some(val) = frame.env.borrow().get(id) {
                         self.stack.push(val);
@@ -470,18 +480,23 @@ impl VM {
                             let chunk = c.chunk.clone();
                             let c_env = c.env.clone();
                             let mut call_env = Env::new(Some(c_env));
+                            let mut locals = Vec::new();
                             let mut has_rest = false;
                             for (i, id) in params.iter().enumerate() {
                                 if lookup(*id).starts_with('&') {
                                     let rest_args =
                                         self.stack.split_off(self.stack.len() - (arg_count - i));
                                     let name = &lookup(*id)[1..];
-                                    call_env.insert(intern(name), Value::List(Rc::new(rest_args)));
+                                    let rest_val = Value::List(Rc::new(rest_args));
+                                    call_env.insert(intern(name), rest_val.clone());
+                                    locals.push(rest_val);
                                     has_rest = true;
                                     break;
                                 } else {
                                     let arg_idx = self.stack.len() - arg_count + i;
-                                    call_env.insert(*id, self.stack[arg_idx].clone());
+                                    let arg_val = self.stack[arg_idx].clone();
+                                    call_env.insert(*id, arg_val.clone());
+                                    locals.push(arg_val);
                                 }
                             }
                             if !has_rest {
@@ -500,6 +515,7 @@ impl VM {
                                 chunk,
                                 ip: 0,
                                 env: Rc::new(RefCell::new(call_env)),
+                                locals,
                             });
                         }
                         Value::NativeFunction(f) => {
@@ -607,18 +623,23 @@ impl VM {
                             let chunk = c.chunk.clone();
                             let c_env = c.env.clone();
                             let mut call_env = Env::new(Some(c_env));
+                            let mut locals = Vec::new();
                             let mut has_rest = false;
                             for (i, id) in params.iter().enumerate() {
                                 if lookup(*id).starts_with('&') {
                                     let rest_args =
                                         self.stack.split_off(self.stack.len() - (arg_count - i));
                                     let name = &lookup(*id)[1..];
-                                    call_env.insert(intern(name), Value::List(Rc::new(rest_args)));
+                                    let rest_val = Value::List(Rc::new(rest_args));
+                                    call_env.insert(intern(name), rest_val.clone());
+                                    locals.push(rest_val);
                                     has_rest = true;
                                     break;
                                 } else {
                                     let arg_idx = self.stack.len() - arg_count + i;
-                                    call_env.insert(*id, self.stack[arg_idx].clone());
+                                    let arg_val = self.stack[arg_idx].clone();
+                                    call_env.insert(*id, arg_val.clone());
+                                    locals.push(arg_val);
                                 }
                             }
                             if !has_rest {
@@ -635,6 +656,7 @@ impl VM {
                             frame.chunk = chunk;
                             frame.ip = 0;
                             frame.env = Rc::new(RefCell::new(call_env));
+                            frame.locals = locals;
                         }
                         Value::NativeFunction(f) => {
                             let mut args = Vec::with_capacity(arg_count);
@@ -775,13 +797,16 @@ impl VM {
                     let start = self.stack.len() - ids.len();
                     let vals: Vec<Value> = self.stack.drain(start..).collect();
                     for (id, val) in ids.into_iter().zip(vals) {
-                        let_env.insert(id, val);
+                        let_env.insert(id, val.clone());
+                        frame.locals.push(val);
                     }
                     frame.env = Rc::new(RefCell::new(let_env));
                 }
-                OpCode::PopEnv => {
+                OpCode::PopEnv(count) => {
                     let parent = frame.env.borrow().parent.clone().unwrap();
                     frame.env = parent;
+                    let new_len = frame.locals.len().saturating_sub(count);
+                    frame.locals.truncate(new_len);
                 }
                 OpCode::RegisterCatch(catch_ip) => {
                     self.catch_handlers.push(CatchHandler {
@@ -828,16 +853,20 @@ impl VM {
                         if co_frames.is_empty() {
                             let mut call_env = Env::new(Some(co.closure.env.clone()));
                             let params = &co.closure.params;
+                            let mut locals = Vec::new();
                             if !params.is_empty() {
                                 let first_param = params[0];
                                 if crate::types::lookup(first_param).starts_with('&') {
                                     let name = &crate::types::lookup(first_param)[1..];
+                                    let rest_val = Value::List(Rc::new(vec![arg.clone()]));
                                     call_env.insert(
                                         crate::types::intern(name),
-                                        Value::List(Rc::new(vec![arg.clone()])),
+                                        rest_val.clone(),
                                     );
+                                    locals.push(rest_val);
                                 } else {
                                     call_env.insert(first_param, arg.clone());
+                                    locals.push(arg.clone());
                                 }
                             }
                             co_frames.push(CallFrame {
@@ -845,6 +874,7 @@ impl VM {
                                 chunk: co.closure.chunk.clone(),
                                 ip: 0,
                                 env: Rc::new(RefCell::new(call_env)),
+                                locals,
                             });
                         } else {
                             self.stack.push(arg);
@@ -952,15 +982,20 @@ pub fn macro_expand(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
                     }
 
                     let mut call_env = Env::new(Some(m_env));
+                    let mut locals = Vec::new();
 
                     for (i, pid) in params.iter().enumerate() {
                         if lookup(*pid).starts_with('&') {
                             let rest_args = args.split_off(i);
                             let name = &lookup(*pid)[1..];
-                            call_env.insert(intern(name), Value::List(Rc::new(rest_args)));
+                            let rest_val = Value::List(Rc::new(rest_args));
+                            call_env.insert(intern(name), rest_val.clone());
+                            locals.push(rest_val);
                             break;
                         } else if i < args.len() {
-                            call_env.insert(*pid, args[i].clone());
+                            let arg_val = args[i].clone();
+                            call_env.insert(*pid, arg_val.clone());
+                            locals.push(arg_val);
                         } else {
                             return Err(SelError::ArityMismatch {
                                 loc,
@@ -971,7 +1006,7 @@ pub fn macro_expand(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
                     }
 
                     let mut vm = VM::new();
-                    let result_val = vm.run(loc, chunk, Rc::new(RefCell::new(call_env)))?;
+                    let result_val = vm.run(loc, chunk, Rc::new(RefCell::new(call_env)), locals)?;
 
                     let expanded_ast = value_to_ast(result_val, loc)?;
                     return macro_expand(expanded_ast, env);
@@ -1073,7 +1108,7 @@ pub fn execute_asts(asts: Vec<Ast>, env: Rc<RefCell<Env>>) -> Result<Value> {
         let mut compiler = Compiler::new(&mut chunk);
         compiler.compile(expanded)?;
         let mut vm = VM::new();
-        last_val = vm.run(loc, Rc::new(chunk), env.clone())?;
+        last_val = vm.run(loc, Rc::new(chunk), env.clone(), Vec::new())?;
     }
     Ok(last_val)
 }
@@ -1091,7 +1126,7 @@ pub fn import_module(
         let mut compiler = Compiler::new(&mut chunk);
         compiler.compile(expanded)?;
         let mut vm = VM::new();
-        vm.run(loc, Rc::new(chunk), env.clone())?;
+        vm.run(loc, Rc::new(chunk), env.clone(), Vec::new())?;
     }
     for (sym, value) in env.borrow().bindings.iter() {
         if env.borrow().private_bindings.contains(sym) {
