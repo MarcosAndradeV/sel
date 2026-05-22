@@ -35,7 +35,7 @@
 
 (define draw-circle-sym (ffi-dlsym raylib "DrawCircle"))
 (define draw-circle
-    (ffi-func draw-circle-sym 'void '(i32 i32 f32 i32)))
+    (ffi-func draw-circle-sym 'void '(i32 i32 f32 (struct (u8 u8 u8 u8)))))
 
 (define get-frame-time-sym (ffi-dlsym raylib "GetFrameTime"))
 (define get-frame-time
@@ -56,6 +56,7 @@
 
 (define radius 50)
 (define velocity 10)
+(define color { r 255 g 0 b 0 a 255 })
 
 (define ball {x 100 dx velocity y 100 dy velocity})
 
@@ -85,7 +86,7 @@
 
     (begin-drawing)
         (clear-background 0xFF181818)
-        (draw-circle (ball 'x) (ball 'y) radius 0xFF0000FF)
+        (draw-circle (ball 'x) (ball 'y) radius color)
         (draw-fps 10 10)
     (end-drawing)
 )
