@@ -61,6 +61,7 @@ pub fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
         }
         TokenKind::String => Ok(Ast::String(t.loc, t.source.clone())),
         TokenKind::Boolean => Ok(Ast::Boolean(t.loc, t.source == "#t")),
+        TokenKind::Char(c) => Ok(Ast::Char(t.loc, c)),
         TokenKind::Number(base) => {
             let s = match base {
                 NumberBase::X => t.source.trim_start_matches("0x").trim_start_matches("0X"),

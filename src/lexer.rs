@@ -88,6 +88,7 @@ pub enum TokenKind {
     Boolean,
     Ampersand,
     BackSlash,
+    Char(char),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -273,15 +274,56 @@ impl<'a> Lexer<'a> {
             }
             '#' => {
                 self.advance();
-                if let Some(&c2) = self.peek()
-                    && (c2 == 't' || c2 == 'f')
-                {
-                    self.advance();
-                    return Ok(Some(Token {
-                        kind: TokenKind::Boolean,
-                        source: format!("#{}", c2),
-                        loc: start_loc,
-                    }));
+                if let Some(&c2) = self.peek() {
+                    if c2 == 't' || c2 == 'f' {
+                        self.advance();
+                        return Ok(Some(Token {
+                            kind: TokenKind::Boolean,
+                            source: format!("#{}", c2),
+                            loc: start_loc,
+                        }));
+                    } else if c2 == '\\' {
+                        self.advance(); // consume '\\'
+                        let mut char_str = String::new();
+                        if let Some(&next_c) = self.peek() {
+                            if next_c.is_alphabetic() {
+                                while let Some(&ch) = self.peek() {
+                                    if ch.is_alphabetic() {
+                                        char_str.push(self.advance().unwrap());
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            } else {
+                                char_str.push(self.advance().unwrap());
+                            }
+                        } else {
+                            return Err(SelError::SyntaxError(
+                                start_loc,
+                                "Unexpected EOF in character literal".into(),
+                            ));
+                        }
+
+                        let parsed_char = match char_str.as_str() {
+                            "space" => ' ',
+                            "newline" => '\n',
+                            "tab" => '\t',
+                            "return" => '\r',
+                            s if s.chars().count() == 1 => s.chars().next().unwrap(),
+                            s => {
+                                return Err(SelError::SyntaxError(
+                                    start_loc,
+                                    format!("Unknown character literal name: #\\{}", s),
+                                ));
+                            }
+                        };
+
+                        return Ok(Some(Token {
+                            kind: TokenKind::Char(parsed_char),
+                            source: format!("#\\{}", char_str),
+                            loc: start_loc,
+                        }));
+                    }
                 }
                 Err(SelError::Runtime(
                     start_loc,

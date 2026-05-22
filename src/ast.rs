@@ -37,6 +37,7 @@ pub enum Ast {
     Try(Loc, Box<Ast>, u32, Vec<Ast>),
     Yield(Loc, Box<Ast>),
     CoResume(Loc, Box<Ast>, Box<Ast>),
+    Char(Loc, char),
 }
 
 impl Ast {
@@ -68,6 +69,7 @@ impl Ast {
             Ast::Try(loc, ..) => *loc,
             Ast::Yield(loc, ..) => *loc,
             Ast::CoResume(loc, ..) => *loc,
+            Ast::Char(loc, ..) => *loc,
         }
     }
 }
@@ -101,6 +103,13 @@ impl std::fmt::Display for Ast {
             Ast::Try(..) => write!(f, "try"),
             Ast::Yield(..) => write!(f, "co-yield"),
             Ast::CoResume(..) => write!(f, "co-resume"),
+            Ast::Char(_, c) => match c {
+                ' ' => write!(f, "#\\space"),
+                '\n' => write!(f, "#\\newline"),
+                '\t' => write!(f, "#\\tab"),
+                '\r' => write!(f, "#\\return"),
+                ch => write!(f, "#\\{}", ch),
+            },
         }
     }
 }
@@ -253,6 +262,7 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
                 ast_to_value(*arg).1,
             ])),
         ),
+        Ast::Char(loc, c) => (loc, Value::Char(c)),
         Ast::Record(loc, record) => (
             loc,
             Value::Record(Rc::new(Record::new().populate(
@@ -270,6 +280,7 @@ pub fn value_to_ast(val: Value, loc: Loc) -> Result<Ast> {
         Value::String(s) => Ok(Ast::String(loc, (*s).clone())),
         Value::Boolean(b) => Ok(Ast::Boolean(loc, b)),
         Value::Symbol(id) => Ok(Ast::Symbol(loc, id)),
+        Value::Char(c) => Ok(Ast::Char(loc, c)),
         Value::List(l) => {
             let mut ast_list = Vec::new();
             for v in l.iter() {

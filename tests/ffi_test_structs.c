@@ -44,3 +44,8 @@ unsigned char next_char(unsigned char c) {
 char invert_char_sign(char c) {
     return -c;
 }
+
+char next_char_ffi(char c) {
+    return c + 1;
+}
+

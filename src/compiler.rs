@@ -47,6 +47,10 @@ impl<'a> Compiler<'a> {
                 let idx = self.chunk.add_constant(Value::Boolean(b));
                 self.chunk.write((loc, OpCode::Constant(idx)));
             }
+            Ast::Char(loc, c) => {
+                let idx = self.chunk.add_constant(Value::Char(c));
+                self.chunk.write((loc, OpCode::Constant(idx)));
+            }
             Ast::Nil(loc) => {
                 let idx = self.chunk.add_constant(Value::Nil);
                 self.chunk.write((loc, OpCode::Constant(idx)));

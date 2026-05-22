@@ -71,6 +71,7 @@ pub enum Value {
     Pointer(usize),
     Library(Rc<libloading::Library>),
     Coroutine(Rc<Coroutine>),
+    Char(char),
 }
 
 fn format_value(val: &Value) -> String {
@@ -87,6 +88,13 @@ fn format_value(val: &Value) -> String {
             }
         }
         Value::Symbol(id) => lookup(*id),
+        Value::Char(c) => match c {
+            ' ' => "#\\space".to_string(),
+            '\n' => "#\\newline".to_string(),
+            '\t' => "#\\tab".to_string(),
+            '\r' => "#\\return".to_string(),
+            ch => format!("#\\{}", ch),
+        },
         Value::List(l) => {
             let mut s = String::from("(");
             for (i, v) in l.iter().enumerate() {

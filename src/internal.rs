@@ -266,6 +266,7 @@ fn is_value_equal(first: &Value, arg: &Value) -> bool {
             .iter()
             .zip(b.fields())
             .all(|((ka, va), (kb, vb))| *ka == *kb && is_value_equal(va, vb)),
+        (Value::Char(a), Value::Char(b)) => a == b,
         _ => false,
     }
 }
@@ -313,6 +314,7 @@ pub fn value_type_name(v: &Value) -> &str {
         Value::Library(_) => "library",
         Value::Record(_) => "record",
         Value::Coroutine(_) => "coroutine",
+        Value::Char(_) => "char",
     }
 }
 
@@ -417,6 +419,7 @@ enum FfiType {
     F32,
     F64,
     Bool,
+    Char,
     Pointer,
     Struct(Vec<FfiType>),
 }
@@ -425,7 +428,7 @@ impl FfiType {
     fn size_and_alignment(&self) -> (usize, usize) {
         match self {
             FfiType::Void => (0, 1),
-            FfiType::I8 | FfiType::U8 | FfiType::Bool => (1, 1),
+            FfiType::I8 | FfiType::U8 | FfiType::Bool | FfiType::Char => (1, 1),
             FfiType::I16 | FfiType::U16 => (2, 2),
             FfiType::I32 | FfiType::U32 | FfiType::F32 => (4, 4),
             FfiType::I64 | FfiType::U64 | FfiType::F64 | FfiType::Pointer => (8, 8),
@@ -460,6 +463,7 @@ impl FfiType {
             FfiType::F32 => libffi::middle::Type::f32(),
             FfiType::F64 => libffi::middle::Type::f64(),
             FfiType::Bool => libffi::middle::Type::u8(),
+            FfiType::Char => libffi::middle::Type::i8(),
             FfiType::Pointer => libffi::middle::Type::pointer(),
             FfiType::Struct(fields) => {
                 let ffi_fields: Vec<_> = fields.iter().map(|f| f.to_libffi_type()).collect();
@@ -475,7 +479,8 @@ fn parse_ffi_type(loc: Loc, val: &Value) -> Result<FfiType> {
             let sym = crate::lookup(*s);
             match sym.as_str() {
                 "void" => Ok(FfiType::Void),
-                "i8" | "ichar" | "char" => Ok(FfiType::I8),
+                "i8" | "ichar" => Ok(FfiType::I8),
+                "char" => Ok(FfiType::Char),
                 "u8" | "uchar" => Ok(FfiType::U8),
                 "i16" => Ok(FfiType::I16),
                 "u16" => Ok(FfiType::U16),
@@ -583,7 +588,8 @@ fn serialize_value(
             let n = match val {
                 Value::Boolean(b) => if *b { 1i8 } else { 0i8 },
                 Value::Integer(i) => *i as i8,
-                _ => return Err(SelError::Runtime(loc, format!("Expected boolean or integer for i8 but got {}", value_type_name(val)))),
+                Value::Char(c) => *c as i8,
+                _ => return Err(SelError::Runtime(loc, format!("Expected boolean, integer, or char for i8 but got {}", value_type_name(val)))),
             };
             buf.extend_from_slice(&n.to_ne_bytes());
             Ok(())
@@ -592,7 +598,17 @@ fn serialize_value(
             let n = match val {
                 Value::Boolean(b) => if *b { 1u8 } else { 0u8 },
                 Value::Integer(i) => *i as u8,
-                _ => return Err(SelError::Runtime(loc, format!("Expected boolean or integer for u8/bool but got {}", value_type_name(val)))),
+                Value::Char(c) => *c as u8,
+                _ => return Err(SelError::Runtime(loc, format!("Expected boolean, integer, or char for u8/bool but got {}", value_type_name(val)))),
+            };
+            buf.push(n);
+            Ok(())
+        }
+        FfiType::Char => {
+            let n = match val {
+                Value::Char(c) => *c as u8,
+                Value::Integer(i) => *i as u8,
+                _ => return Err(SelError::Runtime(loc, format!("Expected char or integer for char but got {}", value_type_name(val)))),
             };
             buf.push(n);
             Ok(())
@@ -709,6 +725,10 @@ unsafe fn deserialize_value(ty: &FfiType, ptr: *const u8) -> Value {
             FfiType::U8 => {
                 let val = std::ptr::read(ptr as *const u8);
                 Value::Integer(val as i64)
+            }
+            FfiType::Char => {
+                let val = std::ptr::read(ptr as *const u8);
+                Value::Char(val as char)
             }
             FfiType::Pointer => {
                 let val = std::ptr::read_unaligned(ptr as *const usize);
@@ -853,6 +873,10 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
             FfiType::U8 => {
                 let res: u8 = cif.call(code_ptr, &call_args);
                 Ok(Value::Integer(res as i64))
+            }
+            FfiType::Char => {
+                let res: u8 = cif.call(code_ptr, &call_args);
+                Ok(Value::Char(res as char))
             }
             FfiType::Struct(ref _fields) => {
                 let res_val: [u64; 32] = cif.call(code_ptr, &call_args);
@@ -1196,6 +1220,60 @@ pub fn is_function(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+pub fn is_char(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 1 arguments for char?".into(),
+        ));
+    }
+    match args.pop().unwrap() {
+        Value::Char(_) => Ok(Value::Boolean(true)),
+        _ => Ok(Value::Boolean(false)),
+    }
+}
+
+pub fn char_to_integer(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 1 argument for char->integer".into(),
+        ));
+    }
+    match args.pop().unwrap() {
+        Value::Char(c) => Ok(Value::Integer(c as i64)),
+        v => Err(SelError::Runtime(
+            loc,
+            format!("char->integer: expected char, found {}", value_type_name(&v)),
+        )),
+    }
+}
+
+pub fn integer_to_char(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 1 argument for integer->char".into(),
+        ));
+    }
+    match args.pop().unwrap() {
+        Value::Integer(i) => {
+            if let Some(c) = std::char::from_u32(i as u32) {
+                Ok(Value::Char(c))
+            } else {
+                Err(SelError::Runtime(
+                    loc,
+                    format!("integer->char: invalid unicode scalar value {}", i),
+                ))
+            }
+        }
+        v => Err(SelError::Runtime(
+            loc,
+            format!("integer->char: expected integer, found {}", value_type_name(&v)),
+        )),
+    }
+}
+
 pub fn type_of(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::Runtime(
@@ -1468,6 +1546,9 @@ pub fn load(env: Rc<RefCell<Env>>) {
     e.insert(intern("symbol?"), Value::NativeFunction(is_symbol));
     e.insert(intern("function?"), Value::NativeFunction(is_function));
     e.insert(intern("record?"), Value::NativeFunction(is_record));
+    e.insert(intern("char?"), Value::NativeFunction(is_char));
+    e.insert(intern("char->integer"), Value::NativeFunction(char_to_integer));
+    e.insert(intern("integer->char"), Value::NativeFunction(integer_to_char));
 
     e.insert(intern("type-of"), Value::NativeFunction(type_of));
 

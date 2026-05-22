@@ -18,14 +18,24 @@
 ;; 255 wraps to 0 due to overflow in C unsigned char
 (assert (eq? (next-char-uchar 255) 0))
 
-;; 3. Test 8-bit signed character operations ('i8, 'ichar, and 'char)
+;; 3. Test 8-bit signed character operations ('i8, 'ichar, and first-class 'char)
 (define invert-i8 (ffi-func (ffi-dlsym lib "invert_char_sign") 'i8 '(i8)))
 (define invert-ichar (ffi-func (ffi-dlsym lib "invert_char_sign") 'ichar '(ichar)))
-(define invert-char (ffi-func (ffi-dlsym lib "invert_char_sign") 'char '(char)))
+(define next-char-ffi (ffi-func (ffi-dlsym lib "next_char_ffi") 'char '(char)))
 
-(println "Testing invert_char_sign (i8 / ichar / char):")
+(println "Testing invert_char_sign (i8 / ichar):")
 (assert (eq? (invert-i8 42) -42))
 (assert (eq? (invert-ichar -15) 15))
-(assert (eq? (invert-char 127) -127))
+
+;; Test passing first-class characters to FFI integer parameters
+(assert (eq? (invert-i8 #\A) -65))
+(assert (eq? (next-char-u8 #\A) 66))
+
+;; Test first-class FFI character type exchange
+(println "Testing first-class FFI character type ('char):")
+(assert (char? (next-char-ffi #\a)))
+(assert (eq? (next-char-ffi #\a) #\b))
+(assert (eq? (next-char-ffi #\A) #\B))
+(assert (eq? (next-char-ffi #\space) #\!)) ; space (32) + 1 = ! (33)
 
 (println "All FFI types and aliases integration tests passed successfully!")
