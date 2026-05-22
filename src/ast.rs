@@ -38,6 +38,7 @@ pub enum Ast {
     Yield(Loc, Box<Ast>),
     CoResume(Loc, Box<Ast>, Box<Ast>),
     Char(Loc, char),
+    VisibilityDirective(Loc, bool),
 }
 
 impl Ast {
@@ -70,6 +71,7 @@ impl Ast {
             Ast::Yield(loc, ..) => *loc,
             Ast::CoResume(loc, ..) => *loc,
             Ast::Char(loc, ..) => *loc,
+            Ast::VisibilityDirective(loc, ..) => *loc,
         }
     }
 }
@@ -110,6 +112,7 @@ impl std::fmt::Display for Ast {
                 '\r' => write!(f, "#\\return"),
                 ch => write!(f, "#\\{}", ch),
             },
+            Ast::VisibilityDirective(_, is_public) => write!(f, "{}", if *is_public { ":public" } else { ":private" }),
         }
     }
 }
@@ -263,6 +266,12 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
             ])),
         ),
         Ast::Char(loc, c) => (loc, Value::Char(c)),
+        Ast::VisibilityDirective(loc, is_public) => (
+            loc,
+            Value::List(Rc::new(vec![
+                Value::Symbol(intern(if is_public { ":public" } else { ":private" })),
+            ])),
+        ),
         Ast::Record(loc, record) => (
             loc,
             Value::Record(Rc::new(Record::new().populate(

@@ -31,6 +31,9 @@ impl<'a> Compiler<'a> {
             Ast::Import(loc, id, alias) => {
                 self.chunk.write((loc, OpCode::Import(id, alias)));
             }
+            Ast::VisibilityDirective(loc, is_public) => {
+                self.chunk.write((loc, OpCode::SetVisibility(is_public)));
+            }
             Ast::Integer(loc, i) => {
                 let idx = self.chunk.add_constant(Value::Integer(i));
                 self.chunk.write((loc, OpCode::Constant(idx)));
@@ -792,6 +795,7 @@ pub enum OpCode {
     Yield,
     CoResume,
     Import(u32, Option<u32>),
+    SetVisibility(bool),
     MakeRecord,
     AssocRecord(u32),
     MakeList(usize),

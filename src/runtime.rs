@@ -21,10 +21,23 @@ use crate::value::*;
 
 type Result<T> = std::result::Result<T, SelError>;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Env {
     pub bindings: HashMap<u32, Value>,
     pub parent: Option<Rc<RefCell<Env>>>,
+    pub private_bindings: std::collections::HashSet<u32>,
+    pub current_visibility_public: bool,
+}
+
+impl Default for Env {
+    fn default() -> Self {
+        Self {
+            bindings: HashMap::new(),
+            parent: None,
+            private_bindings: std::collections::HashSet::new(),
+            current_visibility_public: true,
+        }
+    }
 }
 
 impl Env {
@@ -32,6 +45,8 @@ impl Env {
         Self {
             bindings: HashMap::new(),
             parent,
+            private_bindings: std::collections::HashSet::new(),
+            current_visibility_public: true,
         }
     }
 
@@ -47,6 +62,11 @@ impl Env {
 
     pub fn insert(&mut self, id: u32, val: Value) {
         self.bindings.insert(id, val);
+        if !self.current_visibility_public {
+            self.private_bindings.insert(id);
+        } else {
+            self.private_bindings.remove(&id);
+        }
     }
 
     fn set(&mut self, id: u32, val: Value) -> bool {
@@ -424,6 +444,10 @@ impl VM {
                     let val = self.stack.pop().unwrap();
                     frame.env.borrow_mut().insert(id, val);
                     self.stack.push(Value::Symbol(id)); // define returns symbol
+                }
+                OpCode::SetVisibility(is_public) => {
+                    frame.env.borrow_mut().current_visibility_public = is_public;
+                    self.stack.push(Value::Nil);
                 }
                 OpCode::Pop => {
                     self.stack.pop();
@@ -1070,6 +1094,9 @@ pub fn import_module(
         vm.run(loc, Rc::new(chunk), env.clone())?;
     }
     for (sym, value) in env.borrow().bindings.iter() {
+        if env.borrow().private_bindings.contains(sym) {
+            continue;
+        }
         file_record.fields_mut().insert(
             intern(&format!("{module_name}/{}", lookup(*sym))),
             value.clone(),

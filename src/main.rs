@@ -54,6 +54,10 @@ fn entry() -> Result<(), SelError> {
             execute_asts(asts, env.clone()).map(|_| ())?;
             Ok(())
         }
+        Cli::Lint(script_path) => {
+            run_linter(&script_path, env.clone())?;
+            Ok(())
+        }
         Cli::Repl => repl("sel> ", env),
     }
 }
@@ -314,6 +318,265 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
     }
     _ = rl.save_history(&sel_history_path);
     Ok(())
+}
+
+fn run_linter(script_path: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
+    let src = match read_script(script_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error reading file `{script_path}`: {e}");
+            std::process::exit(1);
+        }
+    };
+    
+    let mut diags = Vec::new();
+    let file_id = intern(script_path);
+    let asts = crate::parser::parse_all_resilient(&src, file_id, &mut diags);
+    
+    let mut lint_errors = Vec::new();
+    let mut global_functions = std::collections::HashMap::new();
+    
+    for ast in &asts {
+        collect_defines(ast, &mut global_functions);
+    }
+    
+    let mut local_scopes = Vec::new();
+    let mut globals = std::collections::HashSet::new();
+    for &id in global_functions.keys() {
+        globals.insert(id);
+    }
+    for &id in env.borrow().bindings.keys() {
+        globals.insert(id);
+    }
+    if let Some(parent) = &env.borrow().parent {
+        for &id in parent.borrow().bindings.keys() {
+            globals.insert(id);
+        }
+    }
+    local_scopes.push(globals);
+    
+    for ast in &asts {
+        check_ast(ast, &mut local_scopes, &global_functions, &mut lint_errors);
+    }
+    
+    let total_syntax_errors = diags.len();
+    let total_lint_errors = lint_errors.len();
+    
+    if total_syntax_errors > 0 || total_lint_errors > 0 {
+        if total_syntax_errors > 0 {
+            eprintln!("\n=== Syntax Errors ({total_syntax_errors}) ===");
+            for err in &diags {
+                eprintln!("{err}");
+            }
+        }
+        if total_lint_errors > 0 {
+            eprintln!("\n=== Linter Warnings ({total_lint_errors}) ===");
+            for err in &lint_errors {
+                eprintln!("{err}");
+            }
+        }
+        std::process::exit(1);
+    } else {
+        println!("No syntax or static analysis issues found in `{script_path}`.");
+        Ok(())
+    }
+}
+
+fn collect_defines(ast: &crate::ast::Ast, global_functions: &mut std::collections::HashMap<u32, (usize, bool)>) {
+    match ast {
+        crate::ast::Ast::Define(_, id, body) => {
+            if let crate::ast::Ast::Lambda(_, params, _) = &**body {
+                let mut has_rest = false;
+                let mut min_args = 0;
+                for p in params {
+                    if lookup(*p).starts_with('&') {
+                        has_rest = true;
+                    } else {
+                        min_args += 1;
+                    }
+                }
+                global_functions.insert(*id, (min_args, has_rest));
+            }
+        }
+        crate::ast::Ast::Begin(_, exprs) => {
+            for e in exprs {
+                collect_defines(e, global_functions);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn check_ast(
+    ast: &crate::ast::Ast,
+    scopes: &mut Vec<std::collections::HashSet<u32>>,
+    global_functions: &std::collections::HashMap<u32, (usize, bool)>,
+    errors: &mut Vec<SelError>,
+) {
+    match ast {
+        crate::ast::Ast::Define(_loc, id, body) => {
+            check_ast(body, scopes, global_functions, errors);
+            if let Some(globals) = scopes.first_mut() {
+                globals.insert(*id);
+            }
+        }
+        crate::ast::Ast::DefMacro(_loc, id, body) => {
+            check_ast(body, scopes, global_functions, errors);
+            if let Some(globals) = scopes.first_mut() {
+                globals.insert(*id);
+            }
+        }
+        crate::ast::Ast::Let(_loc, bindings, body) => {
+            let mut let_scope = std::collections::HashSet::new();
+            for (id, val) in bindings {
+                check_ast(val, scopes, global_functions, errors);
+                let_scope.insert(*id);
+            }
+            scopes.push(let_scope);
+            for b in body {
+                check_ast(b, scopes, global_functions, errors);
+            }
+            scopes.pop();
+        }
+        crate::ast::Ast::Set(loc, id, body) => {
+            check_ast(body, scopes, global_functions, errors);
+            let mut found = false;
+            for s in scopes.iter() {
+                if s.contains(id) {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                errors.push(SelError::UnboundVariable(*loc, *id));
+            }
+        }
+        crate::ast::Ast::Lambda(_loc, params, body) => {
+            let mut lambda_scope = std::collections::HashSet::new();
+            for p in params {
+                let name = if lookup(*p).starts_with('&') {
+                    &lookup(*p)[1..]
+                } else {
+                    &lookup(*p)
+                };
+                lambda_scope.insert(intern(name));
+            }
+            scopes.push(lambda_scope);
+            for b in body {
+                check_ast(b, scopes, global_functions, errors);
+            }
+            scopes.pop();
+        }
+        crate::ast::Ast::If(_loc, cond, t, f) => {
+            check_ast(cond, scopes, global_functions, errors);
+            check_ast(t, scopes, global_functions, errors);
+            if let Some(f_branch) = f {
+                check_ast(f_branch, scopes, global_functions, errors);
+            }
+        }
+        crate::ast::Ast::Begin(_loc, exprs) => {
+            for e in exprs {
+                check_ast(e, scopes, global_functions, errors);
+            }
+        }
+        crate::ast::Ast::Symbol(loc, id) => {
+            let mut found = false;
+            for s in scopes.iter() {
+                if s.contains(id) {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                let name = lookup(*id);
+                if name != "define"
+                    && name != "lambda"
+                    && name != "let"
+                    && name != "if"
+                    && name != "begin"
+                    && name != "quote"
+                    && name != "quasiquote"
+                    && name != "unquote"
+                    && name != "unquote-splicing"
+                    && name != "and"
+                    && name != "or"
+                    && name != "try"
+                    && name != "catch"
+                    && name != "co-yield"
+                    && name != "co-resume"
+                    && name != "nil"
+                    && name != "set!"
+                    && name != "import"
+                    && name != ":private"
+                    && name != ":public"
+                    && !name.contains('/')
+                {
+                    errors.push(SelError::UndefinedVariable(*loc, *id));
+                }
+            }
+        }
+        crate::ast::Ast::List(_loc, list) => {
+            if list.is_empty() {
+                return;
+            }
+            if let crate::ast::Ast::Symbol(s_loc, id) = &list[0] {
+                if let Some(&(min_args, has_rest)) = global_functions.get(id) {
+                    let actual = list.len() - 1;
+                    if has_rest {
+                        if actual < min_args {
+                            errors.push(SelError::ArityMismatch {
+                                loc: *s_loc,
+                                expected: min_args,
+                                actual,
+                            });
+                        }
+                    } else if actual != min_args {
+                        errors.push(SelError::ArityMismatch {
+                            loc: *s_loc,
+                            expected: min_args,
+                            actual,
+                        });
+                    }
+                }
+            }
+            for e in list {
+                check_ast(e, scopes, global_functions, errors);
+            }
+        }
+        crate::ast::Ast::Record(_loc, record) => {
+            for (_, v) in record {
+                check_ast(v, scopes, global_functions, errors);
+            }
+        }
+        crate::ast::Ast::Try(_loc, body, err_var, catch_body) => {
+            check_ast(body, scopes, global_functions, errors);
+            let mut catch_scope = std::collections::HashSet::new();
+            catch_scope.insert(*err_var);
+            scopes.push(catch_scope);
+            for b in catch_body {
+                check_ast(b, scopes, global_functions, errors);
+            }
+            scopes.pop();
+        }
+        crate::ast::Ast::Yield(_loc, val) => {
+            check_ast(val, scopes, global_functions, errors);
+        }
+        crate::ast::Ast::CoResume(_loc, co, arg) => {
+            check_ast(co, scopes, global_functions, errors);
+            check_ast(arg, scopes, global_functions, errors);
+        }
+        crate::ast::Ast::Quote(_, _) => {}
+        crate::ast::Ast::Quasiquote(_loc, body) => {
+            check_ast(body, scopes, global_functions, errors);
+        }
+        crate::ast::Ast::Unquote(_loc, body) => {
+            check_ast(body, scopes, global_functions, errors);
+        }
+        crate::ast::Ast::UnquoteSplicing(_loc, body) => {
+            check_ast(body, scopes, global_functions, errors);
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]
