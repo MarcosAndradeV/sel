@@ -225,7 +225,7 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
                             let asts = parse_all(arg, repl_file_id, &mut diags);
                             if !diags.is_empty() {
                                 for diag in &diags {
-                                    eprintln!("Error parsing core.scm: {}", diag);
+                                    eprintln!("{}", diag);
                                 }
                                 continue;
                             }
@@ -250,7 +250,7 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
                                     let asts = parse_all(&src, load_file_id, &mut diags);
                                     if !diags.is_empty() {
                                         for diag in &diags {
-                                            eprintln!("Error parsing core.scm: {}", diag);
+                                            eprintln!("{}", diag);
                                         }
                                         continue;
                                     }
@@ -292,7 +292,7 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
                 let asts = parse_all(line, repl_file_id, &mut diags);
                 if !diags.is_empty() {
                     for diag in &diags {
-                        eprintln!("Error parsing core.scm: {}", diag);
+                        eprintln!("{}", diag);
                     }
                     continue;
                 }
