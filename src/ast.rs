@@ -112,7 +112,9 @@ impl std::fmt::Display for Ast {
                 '\r' => write!(f, "#\\return"),
                 ch => write!(f, "#\\{}", ch),
             },
-            Ast::VisibilityDirective(_, is_public) => write!(f, "{}", if *is_public { ":public" } else { ":private" }),
+            Ast::VisibilityDirective(_, is_public) => {
+                write!(f, "{}", if *is_public { ":public" } else { ":private" })
+            }
         }
     }
 }
@@ -268,9 +270,11 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
         Ast::Char(loc, c) => (loc, Value::Char(c)),
         Ast::VisibilityDirective(loc, is_public) => (
             loc,
-            Value::List(Rc::new(vec![
-                Value::Symbol(intern(if is_public { ":public" } else { ":private" })),
-            ])),
+            Value::List(Rc::new(vec![Value::Symbol(intern(if is_public {
+                ":public"
+            } else {
+                ":private"
+            }))])),
         ),
         Ast::Record(loc, record) => (
             loc,

@@ -100,7 +100,8 @@ impl<'a> Compiler<'a> {
                 let jump_end_idx = self.chunk.code.len();
                 self.chunk.write((loc, OpCode::Jump(0)));
 
-                self.chunk.patch_jump(jump_if_false_idx, self.chunk.code.len());
+                self.chunk
+                    .patch_jump(jump_if_false_idx, self.chunk.code.len());
                 self.chunk.write((loc, OpCode::Pop));
 
                 if let Some(fb) = false_branch {
@@ -948,7 +949,8 @@ impl Chunk {
             }
             OpCode::BuildEnv(ids) => {
                 self.code.push(15);
-                self.code.extend_from_slice(&(ids.len() as u32).to_le_bytes());
+                self.code
+                    .extend_from_slice(&(ids.len() as u32).to_le_bytes());
                 for id in ids {
                     self.code.extend_from_slice(&id.to_le_bytes());
                 }
@@ -1106,7 +1108,10 @@ impl Chunk {
     }
 
     pub fn get_loc(&self, ip: usize) -> Loc {
-        match self.locations.binary_search_by_key(&ip, |&(offset, _)| offset) {
+        match self
+            .locations
+            .binary_search_by_key(&ip, |&(offset, _)| offset)
+        {
             Ok(idx) => self.locations[idx].1,
             Err(idx) => {
                 if idx > 0 {

@@ -35,7 +35,7 @@
 (defmacro ffi-func (sym ret arg-types)
     (list 'lambda '(&args) `(ffi-call ~sym ~ret ~arg-types args)))
 
-(defun assert (test &args)
+(define (assert test &args)
     (if (empty? args)
         (when (not test)
             (error "Assertion fail"))

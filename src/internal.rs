@@ -492,24 +492,43 @@ fn parse_ffi_type(loc: Loc, val: &Value) -> Result<FfiType> {
                 "f64" => Ok(FfiType::F64),
                 "bool" => Ok(FfiType::Bool),
                 "*u8" => Ok(FfiType::Pointer),
-                _ => Err(SelError::Runtime(loc, format!("Unsupported FFI primitive type: {sym}"))),
+                _ => Err(SelError::Runtime(
+                    loc,
+                    format!("Unsupported FFI primitive type: {sym}"),
+                )),
             }
         }
         Value::List(l) => {
             if l.len() != 2 {
-                return Err(SelError::Runtime(loc, "Invalid FFI type list: expected (struct (type1 type2 ...))".into()));
+                return Err(SelError::Runtime(
+                    loc,
+                    "Invalid FFI type list: expected (struct (type1 type2 ...))".into(),
+                ));
             }
             let first_sym = match &l[0] {
                 Value::Symbol(s) => crate::lookup(*s),
-                _ => return Err(SelError::Runtime(loc, "Expected symbol as first element of FFI type list".into())),
+                _ => {
+                    return Err(SelError::Runtime(
+                        loc,
+                        "Expected symbol as first element of FFI type list".into(),
+                    ));
+                }
             };
             if first_sym != "struct" {
-                return Err(SelError::Runtime(loc, format!("Expected 'struct' keyword but got {first_sym}")));
+                return Err(SelError::Runtime(
+                    loc,
+                    format!("Expected 'struct' keyword but got {first_sym}"),
+                ));
             }
             let fields_list = match &l[1] {
                 Value::List(fl) => fl,
                 Value::Nil => return Ok(FfiType::Struct(Vec::new())),
-                _ => return Err(SelError::Runtime(loc, "Expected list of fields in struct type definition".into())),
+                _ => {
+                    return Err(SelError::Runtime(
+                        loc,
+                        "Expected list of fields in struct type definition".into(),
+                    ));
+                }
             };
             let mut fields = Vec::with_capacity(fields_list.len());
             for field in fields_list.iter() {
@@ -534,7 +553,15 @@ fn serialize_value(
             let n = match val {
                 Value::Integer(i) => *i as i32,
                 Value::Float(f) => *f as i32,
-                _ => return Err(SelError::Runtime(loc, format!("Expected integer/float for i32 but got {}", value_type_name(val)))),
+                _ => {
+                    return Err(SelError::Runtime(
+                        loc,
+                        format!(
+                            "Expected integer/float for i32 but got {}",
+                            value_type_name(val)
+                        ),
+                    ));
+                }
             };
             buf.extend_from_slice(&n.to_ne_bytes());
             Ok(())
@@ -543,7 +570,15 @@ fn serialize_value(
             let n = match val {
                 Value::Integer(i) => *i,
                 Value::Float(f) => *f as i64,
-                _ => return Err(SelError::Runtime(loc, format!("Expected integer/float for i64 but got {}", value_type_name(val)))),
+                _ => {
+                    return Err(SelError::Runtime(
+                        loc,
+                        format!(
+                            "Expected integer/float for i64 but got {}",
+                            value_type_name(val)
+                        ),
+                    ));
+                }
             };
             buf.extend_from_slice(&n.to_ne_bytes());
             Ok(())
@@ -552,7 +587,15 @@ fn serialize_value(
             let n = match val {
                 Value::Integer(i) => *i as u32,
                 Value::Float(f) => *f as u32,
-                _ => return Err(SelError::Runtime(loc, format!("Expected integer/float for u32 but got {}", value_type_name(val)))),
+                _ => {
+                    return Err(SelError::Runtime(
+                        loc,
+                        format!(
+                            "Expected integer/float for u32 but got {}",
+                            value_type_name(val)
+                        ),
+                    ));
+                }
             };
             buf.extend_from_slice(&n.to_ne_bytes());
             Ok(())
@@ -561,7 +604,15 @@ fn serialize_value(
             let n = match val {
                 Value::Integer(i) => *i as u64,
                 Value::Float(f) => *f as u64,
-                _ => return Err(SelError::Runtime(loc, format!("Expected integer/float for u64 but got {}", value_type_name(val)))),
+                _ => {
+                    return Err(SelError::Runtime(
+                        loc,
+                        format!(
+                            "Expected integer/float for u64 but got {}",
+                            value_type_name(val)
+                        ),
+                    ));
+                }
             };
             buf.extend_from_slice(&n.to_ne_bytes());
             Ok(())
@@ -570,7 +621,15 @@ fn serialize_value(
             let n = match val {
                 Value::Integer(i) => *i as f32,
                 Value::Float(f) => *f as f32,
-                _ => return Err(SelError::Runtime(loc, format!("Expected integer/float for f32 but got {}", value_type_name(val)))),
+                _ => {
+                    return Err(SelError::Runtime(
+                        loc,
+                        format!(
+                            "Expected integer/float for f32 but got {}",
+                            value_type_name(val)
+                        ),
+                    ));
+                }
             };
             buf.extend_from_slice(&n.to_ne_bytes());
             Ok(())
@@ -579,27 +638,63 @@ fn serialize_value(
             let n = match val {
                 Value::Integer(i) => *i as f64,
                 Value::Float(f) => *f,
-                _ => return Err(SelError::Runtime(loc, format!("Expected integer/float for f64 but got {}", value_type_name(val)))),
+                _ => {
+                    return Err(SelError::Runtime(
+                        loc,
+                        format!(
+                            "Expected integer/float for f64 but got {}",
+                            value_type_name(val)
+                        ),
+                    ));
+                }
             };
             buf.extend_from_slice(&n.to_ne_bytes());
             Ok(())
         }
         FfiType::I8 => {
             let n = match val {
-                Value::Boolean(b) => if *b { 1i8 } else { 0i8 },
+                Value::Boolean(b) => {
+                    if *b {
+                        1i8
+                    } else {
+                        0i8
+                    }
+                }
                 Value::Integer(i) => *i as i8,
                 Value::Char(c) => *c as i8,
-                _ => return Err(SelError::Runtime(loc, format!("Expected boolean, integer, or char for i8 but got {}", value_type_name(val)))),
+                _ => {
+                    return Err(SelError::Runtime(
+                        loc,
+                        format!(
+                            "Expected boolean, integer, or char for i8 but got {}",
+                            value_type_name(val)
+                        ),
+                    ));
+                }
             };
             buf.extend_from_slice(&n.to_ne_bytes());
             Ok(())
         }
         FfiType::Bool | FfiType::U8 => {
             let n = match val {
-                Value::Boolean(b) => if *b { 1u8 } else { 0u8 },
+                Value::Boolean(b) => {
+                    if *b {
+                        1u8
+                    } else {
+                        0u8
+                    }
+                }
                 Value::Integer(i) => *i as u8,
                 Value::Char(c) => *c as u8,
-                _ => return Err(SelError::Runtime(loc, format!("Expected boolean, integer, or char for u8/bool but got {}", value_type_name(val)))),
+                _ => {
+                    return Err(SelError::Runtime(
+                        loc,
+                        format!(
+                            "Expected boolean, integer, or char for u8/bool but got {}",
+                            value_type_name(val)
+                        ),
+                    ));
+                }
             };
             buf.push(n);
             Ok(())
@@ -608,7 +703,15 @@ fn serialize_value(
             let n = match val {
                 Value::Char(c) => *c as u8,
                 Value::Integer(i) => *i as u8,
-                _ => return Err(SelError::Runtime(loc, format!("Expected char or integer for char but got {}", value_type_name(val)))),
+                _ => {
+                    return Err(SelError::Runtime(
+                        loc,
+                        format!(
+                            "Expected char or integer for char but got {}",
+                            value_type_name(val)
+                        ),
+                    ));
+                }
             };
             buf.push(n);
             Ok(())
@@ -617,7 +720,15 @@ fn serialize_value(
             let n = match val {
                 Value::Integer(i) => *i as i16,
                 Value::Float(f) => *f as i16,
-                _ => return Err(SelError::Runtime(loc, format!("Expected integer/float for i16 but got {}", value_type_name(val)))),
+                _ => {
+                    return Err(SelError::Runtime(
+                        loc,
+                        format!(
+                            "Expected integer/float for i16 but got {}",
+                            value_type_name(val)
+                        ),
+                    ));
+                }
             };
             buf.extend_from_slice(&n.to_ne_bytes());
             Ok(())
@@ -626,7 +737,15 @@ fn serialize_value(
             let n = match val {
                 Value::Integer(i) => *i as u16,
                 Value::Float(f) => *f as u16,
-                _ => return Err(SelError::Runtime(loc, format!("Expected integer/float for u16 but got {}", value_type_name(val)))),
+                _ => {
+                    return Err(SelError::Runtime(
+                        loc,
+                        format!(
+                            "Expected integer/float for u16 but got {}",
+                            value_type_name(val)
+                        ),
+                    ));
+                }
             };
             buf.extend_from_slice(&n.to_ne_bytes());
             Ok(())
@@ -641,7 +760,15 @@ fn serialize_value(
                 }
                 Value::Pointer(p) => *p,
                 Value::Nil => 0,
-                _ => return Err(SelError::Runtime(loc, format!("Expected string, pointer, or nil but got {}", value_type_name(val)))),
+                _ => {
+                    return Err(SelError::Runtime(
+                        loc,
+                        format!(
+                            "Expected string, pointer, or nil but got {}",
+                            value_type_name(val)
+                        ),
+                    ));
+                }
             };
             buf.extend_from_slice(&ptr.to_ne_bytes());
             Ok(())
@@ -649,15 +776,30 @@ fn serialize_value(
         FfiType::Struct(fields) => {
             let list = match val {
                 Value::List(l) => l.clone(),
-                Value::Record(r) => {
-                    Rc::new(r.fields().iter().map(|(_, v)| v.clone()).collect::<Vec<_>>())
+                Value::Record(r) => Rc::new(
+                    r.fields()
+                        .iter()
+                        .map(|(_, v)| v.clone())
+                        .collect::<Vec<_>>(),
+                ),
+                _ => {
+                    return Err(SelError::Runtime(
+                        loc,
+                        format!(
+                            "Expected list or record for struct value but got {}",
+                            value_type_name(val)
+                        ),
+                    ));
                 }
-                _ => return Err(SelError::Runtime(loc, format!("Expected list or record for struct value but got {}", value_type_name(val)))),
             };
             if list.len() != fields.len() {
                 return Err(SelError::Runtime(
                     loc,
-                    format!("Struct value field count mismatch: expected {} but got {}", fields.len(), list.len()),
+                    format!(
+                        "Struct value field count mismatch: expected {} but got {}",
+                        fields.len(),
+                        list.len()
+                    ),
                 ));
             }
             let mut current_offset = 0;
@@ -719,15 +861,15 @@ unsafe fn deserialize_value(ty: &FfiType, ptr: *const u8) -> Value {
                 Value::Float(val)
             }
             FfiType::Bool => {
-                let val = std::ptr::read(ptr as *const u8);
+                let val = std::ptr::read(ptr);
                 Value::Boolean(val != 0)
             }
             FfiType::U8 => {
-                let val = std::ptr::read(ptr as *const u8);
+                let val = std::ptr::read(ptr);
                 Value::Integer(val as i64)
             }
             FfiType::Char => {
-                let val = std::ptr::read(ptr as *const u8);
+                let val = std::ptr::read(ptr);
                 Value::Char(val as char)
             }
             FfiType::Pointer => {
@@ -788,7 +930,11 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if arg_vals.len() != arg_types.len() {
         return Err(SelError::Runtime(
             loc,
-            format!("Argument count mismatch: expected {} but got {}", arg_types.len(), arg_vals.len()),
+            format!(
+                "Argument count mismatch: expected {} but got {}",
+                arg_types.len(),
+                arg_vals.len()
+            ),
         ));
     }
 
@@ -1043,9 +1189,7 @@ pub fn rset(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
                 new_r.fields_mut().insert(sym, value);
                 Ok(Value::Record(Rc::new(new_r)))
             }
-            _ => {
-                return Err(SelError::Runtime(loc, "rset requires a symbol".into()));
-            }
+            _ => Err(SelError::Runtime(loc, "rset requires a symbol".into())),
         },
         _ => Err(SelError::Runtime(loc, "rset requires a record".into())),
     }
@@ -1244,7 +1388,10 @@ pub fn char_to_integer(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         Value::Char(c) => Ok(Value::Integer(c as i64)),
         v => Err(SelError::Runtime(
             loc,
-            format!("char->integer: expected char, found {}", value_type_name(&v)),
+            format!(
+                "char->integer: expected char, found {}",
+                value_type_name(&v)
+            ),
         )),
     }
 }
@@ -1269,7 +1416,10 @@ pub fn integer_to_char(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         }
         v => Err(SelError::Runtime(
             loc,
-            format!("integer->char: expected integer, found {}", value_type_name(&v)),
+            format!(
+                "integer->char: expected integer, found {}",
+                value_type_name(&v)
+            ),
         )),
     }
 }
@@ -1321,14 +1471,14 @@ pub fn file_system(loc: Loc, mut call_args: Vec<Value>) -> Result<Value> {
             _ => todo!(),
         }
     } else {
-        return Err(SelError::SyntaxError(
+        Err(SelError::SyntaxError(
             loc,
             "Expected symbol for system".into(),
-        ));
+        ))
     }
 }
 
-fn fs_write(loc: Loc, args: &Vec<Value>) -> Result<Value> {
+fn fs_write(loc: Loc, args: &[Value]) -> Result<Value> {
     if args.len() != 2 {
         return Err(SelError::SyntaxError(
             loc,
@@ -1348,7 +1498,7 @@ fn fs_write(loc: Loc, args: &Vec<Value>) -> Result<Value> {
     }
 }
 
-fn fs_read(loc: Loc, args: &Vec<Value>) -> Result<Value> {
+fn fs_read(loc: Loc, args: &[Value]) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::SyntaxError(
             loc,
@@ -1373,7 +1523,7 @@ pub fn system(loc: Loc, mut system_args: Vec<Value>) -> Result<Value> {
     if let Some(Value::Symbol(sym)) = system_args.pop() {
         match lookup(sym).as_str() {
             "args" => {
-                if args.len() != 0 {
+                if !args.is_empty() {
                     return Err(SelError::SyntaxError(
                         loc,
                         "Expected exactly 0 arguments for args".into(),
@@ -1437,10 +1587,10 @@ pub fn system(loc: Loc, mut system_args: Vec<Value>) -> Result<Value> {
             _ => todo!(),
         }
     } else {
-        return Err(SelError::SyntaxError(
+        Err(SelError::SyntaxError(
             loc,
             "Expected symbol for system".into(),
-        ));
+        ))
     }
 }
 
@@ -1547,8 +1697,14 @@ pub fn load(env: Rc<RefCell<Env>>) {
     e.insert(intern("function?"), Value::NativeFunction(is_function));
     e.insert(intern("record?"), Value::NativeFunction(is_record));
     e.insert(intern("char?"), Value::NativeFunction(is_char));
-    e.insert(intern("char->integer"), Value::NativeFunction(char_to_integer));
-    e.insert(intern("integer->char"), Value::NativeFunction(integer_to_char));
+    e.insert(
+        intern("char->integer"),
+        Value::NativeFunction(char_to_integer),
+    );
+    e.insert(
+        intern("integer->char"),
+        Value::NativeFunction(integer_to_char),
+    );
 
     e.insert(intern("type-of"), Value::NativeFunction(type_of));
 
@@ -1592,13 +1748,18 @@ pub fn load_core_lib() -> Rc<RefCell<Env>> {
     {
         let core_src = include_str!("core.scm");
 
-        match parse_all(core_src, intern("<core>")) {
-            Ok(asts) => {
-                if let Err(e) = execute_asts(asts, env.clone()) {
-                    eprintln!("Error loading core.scm: {}", e);
-                }
+        let mut diags = Vec::new();
+        let file_id = intern("<core>");
+
+        let asts = parse_all(core_src, file_id, &mut diags);
+        if !diags.is_empty() {
+            for diag in diags {
+                eprintln!("{}", diag);
             }
-            Err(e) => eprintln!("Error parsing core.scm: {}", e),
+        }
+
+        if let Err(e) = execute_asts(asts, env.clone()) {
+            eprintln!("Error loading core.scm:\n{}", e);
         }
     }
     env

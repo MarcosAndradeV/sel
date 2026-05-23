@@ -5,141 +5,6 @@ use crate::types::{intern, lookup};
 
 type Result<T> = std::result::Result<T, SelError>;
 
-pub fn parse_all(line: &str, file_id: u32) -> Result<Vec<Ast>> {
-    let mut lex = Lexer::new(line, file_id);
-    let mut tokens = Vec::new();
-    while let Some(t) = lex.next_token()? {
-        tokens.push(t);
-    }
-    let mut pos = 0;
-    let mut asts = Vec::new();
-    while pos < tokens.len() {
-        asts.push(parse_expr(&tokens, &mut pos)?);
-    }
-    Ok(asts)
-}
-
-pub fn parse_expr(tokens: &[Token], pos: &mut usize) -> Result<Ast> {
-    if *pos >= tokens.len() {
-        return Err(SelError::UnexpectedEOF(
-            tokens.last().map(|t| t.loc).unwrap_or_default(),
-        ));
-    }
-    let t = &tokens[*pos];
-    *pos += 1;
-
-    match t.kind {
-        TokenKind::BackSlash => parse_lambda_shorthand(tokens, pos, t),
-        TokenKind::OpenCurly => parse_record(tokens, pos, t),
-        TokenKind::OpenParen => parse_list(tokens, pos, t),
-        TokenKind::CloseParen => Err(SelError::SyntaxError(t.loc, "Unexpected `)`".to_string())),
-        TokenKind::CloseCurly => Err(SelError::SyntaxError(t.loc, "Unexpected `}`".to_string())),
-        TokenKind::Quote => {
-            let expr = parse_expr(tokens, pos)?;
-            Ok(Ast::Quote(t.loc, Box::new(expr)))
-        }
-        TokenKind::Ampersand => {
-            if let Ast::Symbol(loc, id) = parse_expr(tokens, pos)? {
-                return Ok(Ast::Bind(loc, id));
-            }
-            Err(SelError::SyntaxError(
-                t.loc,
-                "Expected identifier after &".into(),
-            ))
-        }
-        TokenKind::QuasiQuote => {
-            let expr = parse_expr(tokens, pos)?;
-            Ok(Ast::Quasiquote(t.loc, Box::new(expr)))
-        }
-        TokenKind::Unquote => {
-            let expr = parse_expr(tokens, pos)?;
-            Ok(Ast::Unquote(t.loc, Box::new(expr)))
-        }
-        TokenKind::UnquoteSplicing => {
-            let expr = parse_expr(tokens, pos)?;
-            Ok(Ast::UnquoteSplicing(t.loc, Box::new(expr)))
-        }
-        TokenKind::String => Ok(Ast::String(t.loc, t.source.clone())),
-        TokenKind::Boolean => Ok(Ast::Boolean(t.loc, t.source == "#t")),
-        TokenKind::Char(c) => Ok(Ast::Char(t.loc, c)),
-        TokenKind::Number(base) => {
-            let s = match base {
-                NumberBase::X => t.source.trim_start_matches("0x").trim_start_matches("0X"),
-                NumberBase::B => t.source.trim_start_matches("0b").trim_start_matches("0B"),
-                NumberBase::O => t.source.trim_start_matches("0o").trim_start_matches("0O"),
-                NumberBase::D => &t.source,
-            };
-
-            if let Ok(i) = i64::from_str_radix(s, base.radix()) {
-                return Ok(Ast::Integer(t.loc, i));
-            } else if base == NumberBase::D
-                && let Ok(f) = t.source.parse::<f64>()
-            {
-                return Ok(Ast::Float(t.loc, f));
-            }
-            Err(SelError::InvalidNumber(t.clone()))
-        }
-        TokenKind::Identifier => match t.source.as_str() {
-            "nil" => Ok(Ast::Nil(t.loc)),
-            ":private" => Ok(Ast::VisibilityDirective(t.loc, false)),
-            ":public" => Ok(Ast::VisibilityDirective(t.loc, true)),
-            _ => Ok(Ast::Symbol(t.loc, intern(&t.source))),
-        },
-    }
-}
-
-fn parse_lambda_shorthand(tokens: &[Token], pos: &mut usize, open_token: &Token) -> Result<Ast> {
-    let args = parse_expr(tokens, pos)?;
-    let body = parse_expr(tokens, pos)?;
-    optimize_ast(
-        vec![Ast::Symbol(open_token.loc, intern("lambda")), args, body],
-        open_token.loc,
-    )
-}
-
-fn parse_record(tokens: &[Token], pos: &mut usize, open_token: &Token) -> Result<Ast> {
-    let mut record = Vec::new();
-    while *pos < tokens.len() && tokens[*pos].kind != TokenKind::CloseCurly {
-        let sym = match parse_expr(tokens, pos)? {
-            Ast::Symbol(_, sym) => sym,
-            ast => {
-                return Err(SelError::SyntaxError(
-                    ast.loc(),
-                    format!("Expected identifier-value pair in records found {ast}"),
-                ));
-            }
-        };
-        let v = match parse_expr(tokens, pos)? {
-            Ast::List(loc, list) => optimize_ast(list, loc)?,
-            ast => ast,
-        };
-        record.push((sym, v));
-    }
-    if *pos >= tokens.len() {
-        return Err(SelError::SyntaxError(
-            open_token.loc,
-            "Missing closing curly brace".into(),
-        ));
-    }
-    *pos += 1; // consume '}'
-    Ok(Ast::Record(open_token.loc, record))
-}
-
-fn parse_list(tokens: &[Token], pos: &mut usize, open_token: &Token) -> Result<Ast> {
-    let mut list = Vec::new();
-    while *pos < tokens.len() && tokens[*pos].kind != TokenKind::CloseParen {
-        list.push(parse_expr(tokens, pos)?);
-    }
-    if *pos >= tokens.len() {
-        return Err(SelError::SyntaxError(
-            open_token.loc,
-            "Missing closing parenthesis".into(),
-        ));
-    }
-    *pos += 1; // consume ')'
-    optimize_ast(list, open_token.loc)
-}
-
 pub fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
     if list.is_empty() {
         return Ok(Ast::Nil(loc));
@@ -568,7 +433,7 @@ pub fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
     }
 }
 
-pub fn parse_all_resilient(line: &str, file_id: u32, diags: &mut Vec<SelError>) -> Vec<Ast> {
+pub fn parse_all(line: &str, file_id: u32, diags: &mut Vec<SelError>) -> Vec<Ast> {
     let mut lex = Lexer::new(line, file_id);
     let mut tokens = Vec::new();
     loop {
@@ -583,7 +448,7 @@ pub fn parse_all_resilient(line: &str, file_id: u32, diags: &mut Vec<SelError>) 
     let mut pos = 0;
     let mut asts = Vec::new();
     while pos < tokens.len() {
-        match parse_expr_resilient(&tokens, &mut pos, diags) {
+        match parse_expr(&tokens, &mut pos, diags) {
             Ok(ast) => asts.push(ast),
             Err(e) => {
                 diags.push(e);
@@ -594,7 +459,7 @@ pub fn parse_all_resilient(line: &str, file_id: u32, diags: &mut Vec<SelError>) 
     asts
 }
 
-pub fn parse_expr_resilient(tokens: &[Token], pos: &mut usize, diags: &mut Vec<SelError>) -> Result<Ast> {
+pub fn parse_expr(tokens: &[Token], pos: &mut usize, diags: &mut Vec<SelError>) -> Result<Ast> {
     if *pos >= tokens.len() {
         return Err(SelError::UnexpectedEOF(
             tokens.last().map(|t| t.loc).unwrap_or_default(),
@@ -604,17 +469,17 @@ pub fn parse_expr_resilient(tokens: &[Token], pos: &mut usize, diags: &mut Vec<S
     *pos += 1;
 
     match t.kind {
-        TokenKind::BackSlash => parse_lambda_shorthand_resilient(tokens, pos, t, diags),
-        TokenKind::OpenCurly => parse_record_resilient(tokens, pos, t, diags),
-        TokenKind::OpenParen => parse_list_resilient(tokens, pos, t, diags),
+        TokenKind::BackSlash => parse_lambda_shorthand(tokens, pos, t, diags),
+        TokenKind::OpenCurly => parse_record(tokens, pos, t, diags),
+        TokenKind::OpenParen => parse_list(tokens, pos, t, diags),
         TokenKind::CloseParen => Err(SelError::SyntaxError(t.loc, "Unexpected `)`".to_string())),
         TokenKind::CloseCurly => Err(SelError::SyntaxError(t.loc, "Unexpected `}`".to_string())),
         TokenKind::Quote => {
-            let expr = parse_expr_resilient(tokens, pos, diags)?;
+            let expr = parse_expr(tokens, pos, diags)?;
             Ok(Ast::Quote(t.loc, Box::new(expr)))
         }
         TokenKind::Ampersand => {
-            let expr = parse_expr_resilient(tokens, pos, diags)?;
+            let expr = parse_expr(tokens, pos, diags)?;
             if let Ast::Symbol(loc, id) = expr {
                 return Ok(Ast::Bind(loc, id));
             }
@@ -624,15 +489,15 @@ pub fn parse_expr_resilient(tokens: &[Token], pos: &mut usize, diags: &mut Vec<S
             ))
         }
         TokenKind::QuasiQuote => {
-            let expr = parse_expr_resilient(tokens, pos, diags)?;
+            let expr = parse_expr(tokens, pos, diags)?;
             Ok(Ast::Quasiquote(t.loc, Box::new(expr)))
         }
         TokenKind::Unquote => {
-            let expr = parse_expr_resilient(tokens, pos, diags)?;
+            let expr = parse_expr(tokens, pos, diags)?;
             Ok(Ast::Unquote(t.loc, Box::new(expr)))
         }
         TokenKind::UnquoteSplicing => {
-            let expr = parse_expr_resilient(tokens, pos, diags)?;
+            let expr = parse_expr(tokens, pos, diags)?;
             Ok(Ast::UnquoteSplicing(t.loc, Box::new(expr)))
         }
         TokenKind::Identifier => match t.source.as_str() {
@@ -651,7 +516,9 @@ pub fn parse_expr_resilient(tokens: &[Token], pos: &mut usize, diags: &mut Vec<S
 
             if let Ok(i) = i64::from_str_radix(s, base.radix()) {
                 return Ok(Ast::Integer(t.loc, i));
-            } else if base == NumberBase::D && let Ok(f) = t.source.parse::<f64>() {
+            } else if base == NumberBase::D
+                && let Ok(f) = t.source.parse::<f64>()
+            {
                 return Ok(Ast::Float(t.loc, f));
             }
             Err(SelError::InvalidNumber(t.clone()))
@@ -662,21 +529,21 @@ pub fn parse_expr_resilient(tokens: &[Token], pos: &mut usize, diags: &mut Vec<S
     }
 }
 
-fn parse_lambda_shorthand_resilient(
+fn parse_lambda_shorthand(
     tokens: &[Token],
     pos: &mut usize,
     open_token: &Token,
     diags: &mut Vec<SelError>,
 ) -> Result<Ast> {
-    let args = parse_expr_resilient(tokens, pos, diags)?;
-    let body = parse_expr_resilient(tokens, pos, diags)?;
+    let args = parse_expr(tokens, pos, diags)?;
+    let body = parse_expr(tokens, pos, diags)?;
     optimize_ast(
         vec![Ast::Symbol(open_token.loc, intern("lambda")), args, body],
         open_token.loc,
     )
 }
 
-fn parse_record_resilient(
+fn parse_record(
     tokens: &[Token],
     pos: &mut usize,
     open_token: &Token,
@@ -684,7 +551,7 @@ fn parse_record_resilient(
 ) -> Result<Ast> {
     let mut record = Vec::new();
     while *pos < tokens.len() && tokens[*pos].kind != TokenKind::CloseCurly {
-        let sym_expr = match parse_expr_resilient(tokens, pos, diags) {
+        let sym_expr = match parse_expr(tokens, pos, diags) {
             Ok(ast) => ast,
             Err(e) => {
                 diags.push(e);
@@ -703,7 +570,7 @@ fn parse_record_resilient(
                 continue;
             }
         };
-        let v_expr = match parse_expr_resilient(tokens, pos, diags) {
+        let v_expr = match parse_expr(tokens, pos, diags) {
             Ok(ast) => ast,
             Err(e) => {
                 diags.push(e);
@@ -734,7 +601,7 @@ fn parse_record_resilient(
     Ok(Ast::Record(open_token.loc, record))
 }
 
-fn parse_list_resilient(
+fn parse_list(
     tokens: &[Token],
     pos: &mut usize,
     open_token: &Token,
@@ -742,7 +609,7 @@ fn parse_list_resilient(
 ) -> Result<Ast> {
     let mut list = Vec::new();
     while *pos < tokens.len() && tokens[*pos].kind != TokenKind::CloseParen {
-        match parse_expr_resilient(tokens, pos, diags) {
+        match parse_expr(tokens, pos, diags) {
             Ok(ast) => list.push(ast),
             Err(e) => {
                 diags.push(e);

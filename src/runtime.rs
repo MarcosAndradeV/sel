@@ -113,7 +113,13 @@ impl VM {
         }
     }
 
-    pub fn run(&mut self, loc: Loc, chunk: Rc<Chunk>, env: Rc<RefCell<Env>>, locals: Vec<Value>) -> Result<Value> {
+    pub fn run(
+        &mut self,
+        loc: Loc,
+        chunk: Rc<Chunk>,
+        env: Rc<RefCell<Env>>,
+        locals: Vec<Value>,
+    ) -> Result<Value> {
         let mut frames = vec![CallFrame {
             loc,
             chunk,
@@ -125,14 +131,7 @@ impl VM {
             match self.run_internal(&mut frames) {
                 Err(e) => {
                     if self.catch_handlers.is_empty() {
-                        if let Some(last) = frames.last() {
-                            return Err(SelError::Trace(format!(
-                                "runtime error at {}:\n{e}",
-                                last.loc
-                            )));
-                        } else {
-                            return Err(e);
-                        }
+                        return Err(e);
                     } else {
                         self.handle_error(&mut frames, e)?;
                     }
@@ -225,11 +224,13 @@ impl VM {
             };
 
             match instruction_tag {
-                1 => { // Constant
+                1 => {
+                    // Constant
                     let idx = read_usize(frame);
                     self.stack.push(frame.chunk.constants[idx].clone());
                 }
-                2 => { // LoadVar
+                2 => {
+                    // LoadVar
                     let id = read_u32(frame);
                     if let Some(val) = frame.env.borrow().get(id) {
                         self.stack.push(val);
@@ -237,33 +238,39 @@ impl VM {
                         return Err(SelError::UndefinedVariable(loc, id));
                     }
                 }
-                3 => { // StoreVar
+                3 => {
+                    // StoreVar
                     let id = read_u32(frame);
                     let val = self.stack.last().unwrap().clone();
                     if !frame.env.borrow_mut().set(id, val) {
                         return Err(SelError::UnboundVariable(loc, id));
                     }
                 }
-                4 => { // DefVar
+                4 => {
+                    // DefVar
                     let id = read_u32(frame);
                     let val = self.stack.pop().unwrap();
                     frame.env.borrow_mut().insert(id, val);
                     self.stack.push(Value::Symbol(id));
                 }
-                5 => { // LoadLocal
+                5 => {
+                    // LoadLocal
                     let idx = read_u8(frame);
                     let val = frame.locals[idx as usize].clone();
                     self.stack.push(val);
                 }
-                6 => { // StoreLocal
+                6 => {
+                    // StoreLocal
                     let idx = read_u8(frame);
                     let val = self.stack.last().unwrap().clone();
                     frame.locals[idx as usize] = val;
                 }
-                7 => { // Pop
+                7 => {
+                    // Pop
                     self.stack.pop();
                 }
-                8 => { // JumpIfFalse
+                8 => {
+                    // JumpIfFalse
                     let offset = read_usize(frame);
                     let val = self.stack.last().unwrap();
                     let is_false = matches!(val, Value::Boolean(false));
@@ -271,11 +278,13 @@ impl VM {
                         frame.ip = offset;
                     }
                 }
-                9 => { // Jump
+                9 => {
+                    // Jump
                     let offset = read_usize(frame);
                     frame.ip = offset;
                 }
-                10 => { // Call
+                10 => {
+                    // Call
                     let arg_count = read_usize(frame);
                     let callee = self.stack[self.stack.len() - arg_count - 1].clone();
                     match callee {
@@ -298,9 +307,10 @@ impl VM {
                                     break;
                                 } else {
                                     let arg_idx = self.stack.len() - arg_count + i;
-                                    let arg_val = self.stack[arg_idx].clone();
-                                    call_env.insert(*id, arg_val.clone());
-                                    locals.push(arg_val);
+                                    if let Some(arg_val) = self.stack.get(arg_idx).cloned() {
+                                        call_env.insert(*id, arg_val.clone());
+                                        locals.push(arg_val);
+                                    }
                                 }
                             }
                             if !has_rest {
@@ -419,7 +429,8 @@ impl VM {
                         }
                     }
                 }
-                11 => { // TailCall
+                11 => {
+                    // TailCall
                     let arg_count = read_usize(frame);
                     let callee = self.stack[self.stack.len() - arg_count - 1].clone();
                     match callee {
@@ -587,7 +598,8 @@ impl VM {
                         }
                     }
                 }
-                12 => { // MakeClosure
+                12 => {
+                    // MakeClosure
                     let idx = read_usize(frame);
                     if let Value::Closure(c) = frame.chunk.constants[idx].clone() {
                         let closure = Value::Closure(Rc::new(Closure {
@@ -598,7 +610,8 @@ impl VM {
                         self.stack.push(closure);
                     }
                 }
-                13 => { // MakeMacro
+                13 => {
+                    // MakeMacro
                     let id = read_u32(frame);
                     let idx = read_usize(frame);
                     if let Value::Macro(m) = frame.chunk.constants[idx].clone() {
@@ -611,7 +624,8 @@ impl VM {
                         self.stack.push(Value::Symbol(id));
                     }
                 }
-                14 => { // Return
+                14 => {
+                    // Return
                     let result = self.stack.pop().unwrap_or(Value::Nil);
                     let frame_idx = frames.len() - 1;
                     self.catch_handlers.retain(|h| h.frame_index < frame_idx);
@@ -621,7 +635,8 @@ impl VM {
                         return Ok(self.stack.pop().unwrap());
                     }
                 }
-                15 => { // BuildEnv
+                15 => {
+                    // BuildEnv
                     let len = read_u32(frame) as usize;
                     let mut ids = Vec::with_capacity(len);
                     for _ in 0..len {
@@ -636,14 +651,16 @@ impl VM {
                     }
                     frame.env = Rc::new(RefCell::new(let_env));
                 }
-                16 => { // PopEnv
+                16 => {
+                    // PopEnv
                     let count = read_usize(frame);
                     let parent = frame.env.borrow().parent.clone().unwrap();
                     frame.env = parent;
                     let new_len = frame.locals.len().saturating_sub(count);
                     frame.locals.truncate(new_len);
                 }
-                17 => { // RegisterCatch
+                17 => {
+                    // RegisterCatch
                     let catch_ip = read_usize(frame);
                     self.catch_handlers.push(CatchHandler {
                         catch_ip,
@@ -652,14 +669,17 @@ impl VM {
                         env: frame.env.clone(),
                     });
                 }
-                18 => { // UnregisterCatch
+                18 => {
+                    // UnregisterCatch
                     self.catch_handlers.pop();
                 }
-                19 => { // Yield
+                19 => {
+                    // Yield
                     let yielded_val = self.stack.pop().unwrap_or(Value::Nil);
                     return Ok(yielded_val);
                 }
-                20 => { // CoResume
+                20 => {
+                    // CoResume
                     let arg = self.stack.pop().unwrap_or(Value::Nil);
                     let coroutine_val = self.stack.pop().ok_or_else(|| {
                         SelError::Runtime(frame.loc, "co-resume: missing coroutine on stack".into())
@@ -695,10 +715,7 @@ impl VM {
                                 if crate::types::lookup(first_param).starts_with('&') {
                                     let name = &crate::types::lookup(first_param)[1..];
                                     let rest_val = Value::List(Rc::new(vec![arg.clone()]));
-                                    call_env.insert(
-                                        crate::types::intern(name),
-                                        rest_val.clone(),
-                                    );
+                                    call_env.insert(crate::types::intern(name), rest_val.clone());
                                     locals.push(rest_val);
                                 } else {
                                     call_env.insert(first_param, arg.clone());
@@ -745,17 +762,22 @@ impl VM {
                         ));
                     }
                 }
-                21 => { // Import
+                21 => {
+                    // Import
                     let id = read_u32(frame);
                     let has_alias = read_u8(frame) != 0;
-                    let alias = if has_alias { Some(read_u32(frame)) } else { None };
+                    let alias = if has_alias {
+                        Some(read_u32(frame))
+                    } else {
+                        None
+                    };
                     let fp = PathBuf::from(lookup(loc.file_id));
                     let sym = lookup(id);
 
                     let (modname, fp) = if lookup(loc.file_id) != "<repl>"
                         && fp
                             .parent()
-                            .map_or(false, |p| p.is_dir() && p != std::path::Path::new(""))
+                            .is_some_and(|p| p.is_dir() && p != std::path::Path::new(""))
                     {
                         let parent = fp.parent().unwrap();
                         let pth = parent.join(format!("{}.scm", sym));
@@ -767,7 +789,9 @@ impl VM {
                     };
 
                     let src = read_script(&fp).map_err(|e| SelError::Internal(e.to_string()))?;
-                    let asts = parse_all(&src, intern(fp.to_string_lossy().as_ref()))?;
+                    let mut diags = Vec::new();
+                    let file_id = intern(fp.to_string_lossy().as_ref());
+                    let asts = parse_all(&src, file_id, &mut diags);
                     let m_env = Rc::new(RefCell::new(Env::default()));
                     m_env.borrow_mut().parent = Some(load_core_lib());
 
@@ -791,16 +815,19 @@ impl VM {
                         frame_env.insert(sym, val);
                     }
                 }
-                22 => { // SetVisibility
+                22 => {
+                    // SetVisibility
                     let is_public = read_bool(frame);
                     frame.env.borrow_mut().current_visibility_public = is_public;
                     self.stack.push(Value::Nil);
                 }
-                23 => { // MakeRecord
+                23 => {
+                    // MakeRecord
                     let v = Value::Record(Rc::new(Record::new()));
                     self.stack.push(v);
                 }
-                24 => { // AssocRecord
+                24 => {
+                    // AssocRecord
                     let sym = read_u32(frame);
                     let value = self.stack.pop().unwrap();
                     if let Value::Record(mut rec) = self.stack.pop().unwrap() {
@@ -810,14 +837,16 @@ impl VM {
                         unreachable!();
                     }
                 }
-                25 => { // MakeList
+                25 => {
+                    // MakeList
                     let count = read_usize(frame);
                     let mut items = Vec::with_capacity(count);
                     let start = self.stack.len() - count;
                     items.extend(self.stack.drain(start..));
                     self.stack.push(Value::List(Rc::new(items)));
                 }
-                26 => { // ConcatList
+                26 => {
+                    // ConcatList
                     let count = read_usize(frame);
                     let mut items = Vec::new();
                     let start = self.stack.len() - count;
@@ -835,31 +864,36 @@ impl VM {
                     }
                     self.stack.push(Value::List(Rc::new(items)));
                 }
-                27 => { // Sum
+                27 => {
+                    // Sum
                     let arity = read_u32(frame);
                     let start = self.stack.len() - arity as usize;
                     let args: Vec<Value> = self.stack.drain(start..).collect();
                     self.stack.push(internal::sum(loc, args)?);
                 }
-                28 => { // Sub
+                28 => {
+                    // Sub
                     let arity = read_u32(frame);
                     let start = self.stack.len() - arity as usize;
                     let args: Vec<Value> = self.stack.drain(start..).collect();
                     self.stack.push(internal::sub(loc, args)?);
                 }
-                29 => { // Mul
+                29 => {
+                    // Mul
                     let arity = read_u32(frame);
                     let start = self.stack.len() - arity as usize;
                     let args: Vec<Value> = self.stack.drain(start..).collect();
                     self.stack.push(internal::mul(loc, args)?);
                 }
-                30 => { // Div
+                30 => {
+                    // Div
                     let arity = read_u32(frame);
                     let start = self.stack.len() - arity as usize;
                     let args: Vec<Value> = self.stack.drain(start..).collect();
                     self.stack.push(internal::div(loc, args)?);
                 }
-                31 => { // Mod
+                31 => {
+                    // Mod
                     let b = match self.stack.pop().unwrap() {
                         Value::Integer(i) => i,
                         _ => {
@@ -875,49 +909,57 @@ impl VM {
 
                     self.stack.push(Value::Integer(a % b));
                 }
-                32 => { // Eq
+                32 => {
+                    // Eq
                     let arity = read_u32(frame);
                     let start = self.stack.len() - arity as usize;
                     let args: Vec<Value> = self.stack.drain(start..).collect();
                     self.stack.push(internal::is_equal(loc, args)?);
                 }
-                33 => { // NumEq
+                33 => {
+                    // NumEq
                     let arity = read_u32(frame);
                     let start = self.stack.len() - arity as usize;
                     let args: Vec<Value> = self.stack.drain(start..).collect();
                     self.stack.push(internal::num_eq(loc, args)?);
                 }
-                34 => { // NumNotEq
+                34 => {
+                    // NumNotEq
                     let arity = read_u32(frame);
                     let start = self.stack.len() - arity as usize;
                     let args: Vec<Value> = self.stack.drain(start..).collect();
                     self.stack.push(internal::num_noteq(loc, args)?);
                 }
-                35 => { // NumLt
+                35 => {
+                    // NumLt
                     let arity = read_u32(frame);
                     let start = self.stack.len() - arity as usize;
                     let args: Vec<Value> = self.stack.drain(start..).collect();
                     self.stack.push(internal::num_lt(loc, args)?);
                 }
-                36 => { // NumGt
+                36 => {
+                    // NumGt
                     let arity = read_u32(frame);
                     let start = self.stack.len() - arity as usize;
                     let args: Vec<Value> = self.stack.drain(start..).collect();
                     self.stack.push(internal::num_gt(loc, args)?);
                 }
-                37 => { // NumLte
+                37 => {
+                    // NumLte
                     let arity = read_u32(frame);
                     let start = self.stack.len() - arity as usize;
                     let args: Vec<Value> = self.stack.drain(start..).collect();
                     self.stack.push(internal::num_lte(loc, args)?);
                 }
-                38 => { // NumGte
+                38 => {
+                    // NumGte
                     let arity = read_u32(frame);
                     let start = self.stack.len() - arity as usize;
                     let args: Vec<Value> = self.stack.drain(start..).collect();
                     self.stack.push(internal::num_gte(loc, args)?);
                 }
-                39 => { // Cons
+                39 => {
+                    // Cons
                     let tail = self.stack.pop().unwrap();
                     let head = self.stack.pop().unwrap();
                     match tail {
@@ -930,7 +972,8 @@ impl VM {
                         _ => self.stack.push(Value::List(Rc::new(vec![head, tail]))),
                     }
                 }
-                40 => match self.stack.pop().unwrap() { // Car
+                40 => match self.stack.pop().unwrap() {
+                    // Car
                     Value::List(l) => {
                         if l.is_empty() {
                             return Err(SelError::Runtime(loc, "car on empty list".into()));
@@ -939,7 +982,8 @@ impl VM {
                     }
                     _ => return Err(SelError::Runtime(loc, "car requires a list".into())),
                 },
-                41 => match self.stack.pop().unwrap() { // Cdr
+                41 => match self.stack.pop().unwrap() {
+                    // Cdr
                     Value::List(l) => {
                         if l.is_empty() {
                             return Err(SelError::Runtime(loc, "car on empty list".into()));
@@ -954,7 +998,8 @@ impl VM {
                     }
                     _ => return Err(SelError::Runtime(loc, "cdr requires a list".into())),
                 },
-                42 => { // Nth
+                42 => {
+                    // Nth
                     let index = self.stack.pop().unwrap();
                     match self.stack.pop().unwrap() {
                         Value::List(l) => match index {
@@ -975,55 +1020,65 @@ impl VM {
                         _ => return Err(SelError::Runtime(loc, "nth requires a list".into())),
                     }
                 }
-                43 => match self.stack.pop().unwrap() { // Count
+                43 => match self.stack.pop().unwrap() {
+                    // Count
                     Value::List(l) => self.stack.push(Value::Integer(l.len() as _)),
                     Value::String(s) => self.stack.push(Value::Integer(s.len() as _)),
                     Value::Nil => self.stack.push(Value::Integer(0)),
                     _ => return Err(SelError::Runtime(loc, "count requires a list".into())),
                 },
-                44 => match self.stack.pop().unwrap() { // Empty
+                44 => match self.stack.pop().unwrap() {
+                    // Empty
                     Value::List(l) => self.stack.push(Value::Boolean(l.is_empty())),
                     Value::Nil => self.stack.push(Value::Boolean(true)),
                     Value::String(s) => self.stack.push(Value::Boolean(s.is_empty())),
                     _ => return Err(SelError::Runtime(loc, "empty requires a list".into())),
                 },
-                45 => match self.stack.pop().unwrap() { // IsNil
+                45 => match self.stack.pop().unwrap() {
+                    // IsNil
                     Value::Nil => self.stack.push(Value::Boolean(true)),
                     _ => self.stack.push(Value::Boolean(false)),
                 },
-                46 => match self.stack.pop().unwrap() { // IsList
+                46 => match self.stack.pop().unwrap() {
+                    // IsList
                     Value::List(l) if !l.is_empty() => self.stack.push(Value::Boolean(true)),
                     _ => self.stack.push(Value::Boolean(false)),
                 },
-                47 => { // IsNumber
+                47 => {
+                    // IsNumber
                     let value = self.stack.pop().unwrap();
                     self.stack.push(Value::Boolean(matches!(
                         value,
                         Value::Integer(_) | Value::Float(_)
                     )));
                 }
-                48 => { // IsString
+                48 => {
+                    // IsString
                     let value = self.stack.pop().unwrap();
                     self.stack
                         .push(Value::Boolean(matches!(value, Value::String(_))));
                 }
-                49 => { // IsSymbol
+                49 => {
+                    // IsSymbol
                     let value = self.stack.pop().unwrap();
                     self.stack
                         .push(Value::Boolean(matches!(value, Value::Symbol(_))));
                 }
-                50 => { // IsFunction
+                50 => {
+                    // IsFunction
                     let value = self.stack.pop().unwrap();
                     self.stack.push(Value::Boolean(matches!(
                         value,
                         Value::NativeFunction(_) | Value::Closure { .. }
                     )));
                 }
-                51 => { // TypeOf
+                51 => {
+                    // TypeOf
                     let v = self.stack.pop().unwrap();
                     self.stack.push(Value::Symbol(intern(value_type_name(&v))));
                 }
-                52 => { // Not
+                52 => {
+                    // Not
                     let arity = read_u32(frame);
                     let start = self.stack.len() - arity as usize;
                     let args: Vec<Value> = self.stack.drain(start..).collect();
@@ -1178,13 +1233,13 @@ pub fn macro_expand_quasiquote(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
 
 pub fn execute_asts(asts: Vec<Ast>, env: Rc<RefCell<Env>>) -> Result<Value> {
     let mut last_val = Value::Nil;
+    let mut vm = VM::new();
     for ast in asts {
         let loc = ast.loc();
         let expanded = macro_expand(ast, env.clone())?;
         let mut chunk = Chunk::new();
         let mut compiler = Compiler::new(&mut chunk);
         compiler.compile(expanded)?;
-        let mut vm = VM::new();
         last_val = vm.run(loc, Rc::new(chunk), env.clone(), Vec::new())?;
     }
     Ok(last_val)
@@ -1196,15 +1251,7 @@ pub fn import_module(
     env: Rc<RefCell<Env>>,
 ) -> Result<Record<Value>> {
     let mut file_record = Record::new();
-    for ast in asts {
-        let loc = ast.loc();
-        let expanded = macro_expand(ast, env.clone())?;
-        let mut chunk = Chunk::new();
-        let mut compiler = Compiler::new(&mut chunk);
-        compiler.compile(expanded)?;
-        let mut vm = VM::new();
-        vm.run(loc, Rc::new(chunk), env.clone(), Vec::new())?;
-    }
+    execute_asts(asts, env.clone())?;
     for (sym, value) in env.borrow().bindings.iter() {
         if env.borrow().private_bindings.contains(sym) {
             continue;
