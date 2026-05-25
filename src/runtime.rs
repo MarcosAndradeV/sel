@@ -300,7 +300,7 @@ impl VM {
                                     let rest_args =
                                         self.stack.split_off(self.stack.len() - (arg_count - i));
                                     let name = &lookup(*id)[1..];
-                                    let rest_val = Value::List(Rc::new(rest_args));
+                                    let rest_val = Value::List(rest_args.into_boxed_slice().into());
                                     call_env.insert(intern(name), rest_val.clone());
                                     locals.push(rest_val);
                                     has_rest = true;
@@ -446,7 +446,7 @@ impl VM {
                                     let rest_args =
                                         self.stack.split_off(self.stack.len() - (arg_count - i));
                                     let name = &lookup(*id)[1..];
-                                    let rest_val = Value::List(Rc::new(rest_args));
+                                    let rest_val = Value::List(rest_args.into_boxed_slice().into());
                                     call_env.insert(intern(name), rest_val.clone());
                                     locals.push(rest_val);
                                     has_rest = true;
@@ -712,10 +712,10 @@ impl VM {
                             let mut locals = Vec::new();
                             if !params.is_empty() {
                                 let first_param = params[0];
-                                if crate::types::lookup(first_param).starts_with('&') {
-                                    let name = &crate::types::lookup(first_param)[1..];
-                                    let rest_val = Value::List(Rc::new(vec![arg.clone()]));
-                                    call_env.insert(crate::types::intern(name), rest_val.clone());
+                                if lookup(first_param).starts_with('&') {
+                                    let name = &lookup(first_param)[1..];
+                                    let rest_val = Value::List(Rc::new([arg.clone()]));
+                                    call_env.insert(intern(name), rest_val.clone());
                                     locals.push(rest_val);
                                 } else {
                                     call_env.insert(first_param, arg.clone());
@@ -843,7 +843,8 @@ impl VM {
                     let mut items = Vec::with_capacity(count);
                     let start = self.stack.len() - count;
                     items.extend(self.stack.drain(start..));
-                    self.stack.push(Value::List(Rc::new(items)));
+                    self.stack
+                        .push(Value::List(items.into_boxed_slice().into()));
                 }
                 26 => {
                     // ConcatList
@@ -862,7 +863,8 @@ impl VM {
                             }
                         }
                     }
-                    self.stack.push(Value::List(Rc::new(items)));
+                    self.stack
+                        .push(Value::List(items.into_boxed_slice().into()));
                 }
                 27 => {
                     // Sum
@@ -966,10 +968,11 @@ impl VM {
                         Value::List(l) => {
                             let mut new_l = vec![head];
                             new_l.extend(l.iter().cloned());
-                            self.stack.push(Value::List(Rc::new(new_l)));
+                            self.stack
+                                .push(Value::List(new_l.into_boxed_slice().into()));
                         }
-                        Value::Nil => self.stack.push(Value::List(Rc::new(vec![head]))),
-                        _ => self.stack.push(Value::List(Rc::new(vec![head, tail]))),
+                        Value::Nil => self.stack.push(Value::List(Rc::new([head]))),
+                        _ => self.stack.push(Value::List(Rc::new([head, tail]))),
                     }
                 }
                 40 => match self.stack.pop().unwrap() {
@@ -993,7 +996,8 @@ impl VM {
                         } else {
                             let mut new_l = Vec::with_capacity(l.len() - 1);
                             new_l.extend_from_slice(&l[1..]);
-                            self.stack.push(Value::List(Rc::new(new_l)));
+                            self.stack
+                                .push(Value::List(new_l.into_boxed_slice().into()));
                         }
                     }
                     _ => return Err(SelError::Runtime(loc, "cdr requires a list".into())),
@@ -1120,7 +1124,7 @@ pub fn macro_expand(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
                         if lookup(*pid).starts_with('&') {
                             let rest_args = args.split_off(i);
                             let name = &lookup(*pid)[1..];
-                            let rest_val = Value::List(Rc::new(rest_args));
+                            let rest_val = Value::List(rest_args.into_boxed_slice().into());
                             call_env.insert(intern(name), rest_val.clone());
                             locals.push(rest_val);
                             break;

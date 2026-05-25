@@ -61,7 +61,7 @@ pub enum Value {
     String(Rc<String>),
     Boolean(bool),
     Symbol(u32),
-    List(Rc<Vec<Value>>),
+    List(Rc<[Value]>),
     Record(Rc<Record<Self>>),
     Closure(Rc<Closure>),
     NativeFunction(fn(loc: Loc, args: Vec<Value>) -> Result<Value>),

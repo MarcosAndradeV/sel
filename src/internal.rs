@@ -776,12 +776,13 @@ fn serialize_value(
         FfiType::Struct(fields) => {
             let list = match val {
                 Value::List(l) => l.clone(),
-                Value::Record(r) => Rc::new(
-                    r.fields()
-                        .iter()
-                        .map(|(_, v)| v.clone())
-                        .collect::<Vec<_>>(),
-                ),
+                Value::Record(r) => r
+                    .fields()
+                    .iter()
+                    .map(|(_, v)| v.clone())
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice()
+                    .into(),
                 _ => {
                     return Err(SelError::Runtime(
                         loc,
@@ -890,7 +891,7 @@ unsafe fn deserialize_value(ty: &FfiType, ptr: *const u8) -> Value {
                     list.push(deserialize_value(f_type, field_ptr));
                     current_offset = target_offset + f_size;
                 }
-                Value::List(Rc::new(list))
+                Value::List(list.into_boxed_slice().into())
             }
         }
     }
@@ -914,7 +915,7 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
 
     let arg_types_list = match &args[2] {
         Value::List(l) => l.clone(),
-        Value::Nil => Rc::new(Vec::new()),
+        Value::Nil => Rc::new([]),
         _ => return Err(SelError::Runtime(loc, "arg_types must be a list".into())),
     };
     let mut arg_types = Vec::with_capacity(arg_types_list.len());
@@ -924,7 +925,7 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
 
     let arg_vals = match &args[3] {
         Value::List(l) => l.clone(),
-        Value::Nil => Rc::new(Vec::new()),
+        Value::Nil => Rc::new([]),
         _ => return Err(SelError::Runtime(loc, "arg_vals must be a list".into())),
     };
     if arg_vals.len() != arg_types.len() {
@@ -1046,10 +1047,10 @@ pub fn cons(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         Value::List(l) => {
             let mut new_l = vec![head];
             new_l.extend(l.iter().cloned());
-            Ok(Value::List(Rc::new(new_l)))
+            Ok(Value::List(new_l.into_boxed_slice().into()))
         }
-        Value::Nil => Ok(Value::List(Rc::new(vec![head]))),
-        _ => Ok(Value::List(Rc::new(vec![head, tail]))),
+        Value::Nil => Ok(Value::List(Rc::new([head]))),
+        _ => Ok(Value::List(Rc::new([head, tail]))),
     }
 }
 
@@ -1088,7 +1089,7 @@ pub fn cdr(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
             }
             let mut new_l = Vec::with_capacity(l.len() - 1);
             new_l.extend_from_slice(&l[1..]);
-            Ok(Value::List(Rc::new(new_l)))
+            Ok(Value::List(new_l.into_boxed_slice().into()))
         }
         _ => Err(SelError::Runtime(loc, "cdr requires a list".into())),
     }
@@ -1131,7 +1132,7 @@ pub fn count(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 }
 
 pub fn list(_loc: Loc, args: Vec<Value>) -> Result<Value> {
-    Ok(Value::List(Rc::new(args)))
+    Ok(Value::List(args.into_boxed_slice().into()))
 }
 
 pub fn empty(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
@@ -1226,7 +1227,7 @@ pub fn rkeys(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     match args.pop().unwrap() {
         Value::Record(r) => {
             let keys_vec: Vec<Value> = r.fields().keys().map(|&k| Value::Symbol(k)).collect();
-            Ok(Value::List(Rc::new(keys_vec)))
+            Ok(Value::List(keys_vec.into_boxed_slice().into()))
         }
         _ => Err(SelError::Runtime(loc, "rkeys requires a record".into())),
     }
@@ -1242,7 +1243,7 @@ pub fn rvals(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     match args.pop().unwrap() {
         Value::Record(r) => {
             let vals_vec: Vec<Value> = r.fields().values().cloned().collect();
-            Ok(Value::List(Rc::new(vals_vec)))
+            Ok(Value::List(vals_vec.into_boxed_slice().into()))
         }
         _ => Err(SelError::Runtime(loc, "rvals requires a record".into())),
     }
@@ -1532,8 +1533,10 @@ pub fn system(loc: Loc, mut system_args: Vec<Value>) -> Result<Value> {
                 let args_vec = std::env::args()
                     .skip(1)
                     .map(|s| Value::String(Rc::new(s)))
-                    .collect::<Vec<_>>();
-                Ok(Value::List(Rc::new(args_vec)))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice()
+                    .into();
+                Ok(Value::List(args_vec))
             }
             "getenv" => {
                 if args.len() != 1 {
