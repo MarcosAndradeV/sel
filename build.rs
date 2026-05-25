@@ -2,6 +2,7 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=tests/ffi_test_structs.c");
+    println!("cargo:rerun-if-changed=tests/ffi_test_structs.so");
     let status = Command::new("gcc")
         .args([
             "-shared",
