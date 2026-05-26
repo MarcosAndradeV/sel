@@ -1458,25 +1458,24 @@ pub fn file_system(loc: Loc, mut call_args: Vec<Value>) -> Result<Value> {
                         "Expected exactly 1 arguments for file-exists?".into(),
                     ));
                 }
-                if let Value::String(path) = &args[0] {
+                return if let Value::String(path) = &args[0] {
                     Ok(Value::Boolean(std::path::Path::new(path.as_str()).exists()))
                 } else {
                     Err(SelError::Runtime(
                         loc,
                         "file-exists? requires a string argument".into(),
                     ))
-                }
+                };
             }
-            "write" => fs_write(loc, &args),
-            "read" => fs_read(loc, &args),
-            _ => todo!(),
+            "write" => return fs_write(loc, &args),
+            "read" => return fs_read(loc, &args),
+            _ => {}
         }
-    } else {
-        Err(SelError::SyntaxError(
-            loc,
-            "Expected symbol for system".into(),
-        ))
     }
+    Err(SelError::SyntaxError(
+        loc,
+        "Expected symbol for system".into(),
+    ))
 }
 
 fn fs_write(loc: Loc, args: &[Value]) -> Result<Value> {
@@ -1536,7 +1535,7 @@ pub fn system(loc: Loc, mut system_args: Vec<Value>) -> Result<Value> {
                     .collect::<Vec<_>>()
                     .into_boxed_slice()
                     .into();
-                Ok(Value::List(args_vec))
+                return Ok(Value::List(args_vec));
             }
             "getenv" => {
                 if args.len() != 1 {
@@ -1545,7 +1544,7 @@ pub fn system(loc: Loc, mut system_args: Vec<Value>) -> Result<Value> {
                         "Expected exactly 1 arguments for getenv".into(),
                     ));
                 }
-                if let Value::String(key) = &args[0] {
+                return if let Value::String(key) = &args[0] {
                     match std::env::var(key.as_str()) {
                         Ok(val) => Ok(Value::String(Rc::new(val))),
                         Err(_) => Ok(Value::Nil),
@@ -1555,7 +1554,7 @@ pub fn system(loc: Loc, mut system_args: Vec<Value>) -> Result<Value> {
                         loc,
                         "getenv requires a string argument".into(),
                     ))
-                }
+                };
             }
             "exit" => {
                 if args.len() > 1 {
@@ -1577,7 +1576,7 @@ pub fn system(loc: Loc, mut system_args: Vec<Value>) -> Result<Value> {
                         "Expected exactly 1 arguments for sleep".into(),
                     ));
                 }
-                if let Value::Integer(d) = &args[0] {
+                return if let Value::Integer(d) = &args[0] {
                     std::thread::sleep(std::time::Duration::from_secs(*d as _));
                     Ok(Value::Nil)
                 } else {
@@ -1585,16 +1584,15 @@ pub fn system(loc: Loc, mut system_args: Vec<Value>) -> Result<Value> {
                         loc,
                         "getenv requires a string argument".into(),
                     ))
-                }
+                };
             }
-            _ => todo!(),
+            _ => {}
         }
-    } else {
-        Err(SelError::SyntaxError(
-            loc,
-            "Expected symbol for system".into(),
-        ))
     }
+    Err(SelError::SyntaxError(
+        loc,
+        "Expected symbol for system".into(),
+    ))
 }
 
 pub fn co_create(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
