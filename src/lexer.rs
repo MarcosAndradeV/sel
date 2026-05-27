@@ -89,6 +89,8 @@ pub enum TokenKind {
     Ampersand,
     BackSlash,
     Char(char),
+    Do,
+    Bind,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -333,7 +335,7 @@ impl<'a> Lexer<'a> {
             _ => {
                 let mut ident = String::new();
                 while let Some(&ch) = self.peek() {
-                    if ch.is_whitespace() || "\\{}()\"'`,;".contains(ch) {
+                    if ch.is_whitespace() || "\\{}()\"'`;".contains(ch) {
                         break;
                     }
                     ident.push(self.advance().unwrap());
@@ -368,17 +370,28 @@ impl<'a> Lexer<'a> {
                 };
 
                 if is_num {
-                    Ok(Some(Token {
+                    return Ok(Some(Token {
                         kind: TokenKind::Number(base),
                         source: ident,
                         loc: start_loc,
-                    }))
-                } else {
-                    Ok(Some(Token {
+                    }));
+                }
+                match ident.as_str() {
+                    ":do" => Ok(Some(Token {
+                        kind: TokenKind::Do,
+                        source: ident,
+                        loc: start_loc,
+                    })),
+                    ":=" => Ok(Some(Token {
+                        kind: TokenKind::Bind,
+                        source: ident,
+                        loc: start_loc,
+                    })),
+                    _ => Ok(Some(Token {
                         kind: TokenKind::Identifier,
                         source: ident,
                         loc: start_loc,
-                    }))
+                    })),
                 }
             }
         }

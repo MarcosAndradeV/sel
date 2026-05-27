@@ -344,59 +344,41 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_all_folders() {
-        fn test_all_folders_impl() -> Result<(), ()> {
-            let tests_dir = read_dir("tests")
+    fn test_folder_impl(dir: &str) -> Result<(), ()> {
+        let tests_dir = read_dir(dir)
+            .map_err(|e| eprintln!("Error: cannot read directory tests because {e}"))?;
+        for res_entry in tests_dir {
+            let entry = res_entry
                 .map_err(|e| eprintln!("Error: cannot read directory tests because {e}"))?;
-            for res_entry in tests_dir {
-                let entry = res_entry
-                    .map_err(|e| eprintln!("Error: cannot read directory tests because {e}"))?;
-                if entry
-                    .file_type()
-                    .map_err(|e| eprintln!("Error: cannot get type of file because {e}"))?
-                    .is_file()
-                    && entry.path().extension().is_some_and(|ext| ext == "scm")
-                {
-                    let env = Rc::new(RefCell::new(Env::default()));
-                    env.borrow_mut().parent = Some(load_core_lib());
-                    println!("TEST: {}", entry.path().display());
-                    let epath = entry.path();
-                    run_file(&epath.to_string_lossy().to_string(), env)
-                        .map_err(|e| eprintln!("{e}"))?;
-                }
+            if entry
+                .file_type()
+                .map_err(|e| eprintln!("Error: cannot get type of file because {e}"))?
+                .is_file()
+                && entry.path().extension().is_some_and(|ext| ext == "scm")
+            {
+                let env = Rc::new(RefCell::new(Env::default()));
+                env.borrow_mut().parent = Some(load_core_lib());
+                println!("TEST: {}", entry.path().display());
+                let epath = entry.path();
+                run_file(&epath.to_string_lossy().to_string(), env)
+                    .map_err(|e| eprintln!("{e}"))?;
             }
-            Ok(())
         }
+        Ok(())
+    }
 
-        assert!(test_all_folders_impl().is_ok())
+    #[test]
+    fn test_example_folder() {
+        assert!(test_folder_impl("examples").is_ok());
+    }
+
+    #[test]
+    fn test_tests_folder() {
+        assert!(test_folder_impl("tests").is_ok());
     }
 
     #[test]
     fn test_errors_folder() {
-        fn test_all_folders_impl() -> Result<(), ()> {
-            let tests_dir = read_dir("tests/errors")
-                .map_err(|e| eprintln!("Error: cannot read directory tests because {e}"))?;
-            for res_entry in tests_dir {
-                let entry = res_entry
-                    .map_err(|e| eprintln!("Error: cannot read directory tests because {e}"))?;
-                if entry
-                    .file_type()
-                    .map_err(|e| eprintln!("Error: cannot get type of file because {e}"))?
-                    .is_file()
-                    && entry.path().extension().is_some_and(|ext| ext == "scm")
-                {
-                    let env = Rc::new(RefCell::new(Env::default()));
-                    env.borrow_mut().parent = Some(load_core_lib());
-                    println!("TEST: {}", entry.path().display());
-                    let epath = entry.path();
-                    run_file(&epath.to_string_lossy().to_string(), env)
-                        .map_err(|e| eprintln!("{e}"))?;
-                }
-            }
-            Ok(())
-        }
-
-        assert!(test_all_folders_impl().is_err())
+        assert!(test_folder_impl("tests/errors").is_err());
     }
 }

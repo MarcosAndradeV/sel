@@ -89,6 +89,78 @@ impl<'a> Compiler<'a> {
                     self.chunk.write((loc, OpCode::StoreVar(id)));
                 }
             }
+            Ast::Cond(loc, branches) => {
+                let mut patches = Vec::new();
+                for (c, e) in branches {
+                    self.compile(c)?;
+                    let jump_if_false_idx = self.chunk.code.len();
+                    self.chunk.write((loc, OpCode::JumpIfFalse(0)));
+
+                    self.chunk.write((loc, OpCode::Pop));
+                    self.compile_expr(e, is_tail)?;
+
+                    patches.push(self.chunk.code.len());
+                    self.chunk.write((loc, OpCode::Jump(0)));
+
+                    let jump_end_idx = self.chunk.code.len();
+                    self.chunk.write((loc, OpCode::Jump(0)));
+
+                    self.chunk
+                        .patch_jump(jump_if_false_idx, self.chunk.code.len());
+                    self.chunk.write((loc, OpCode::Pop));
+
+                    self.chunk.patch_jump(jump_end_idx, self.chunk.code.len());
+                }
+                for patch in patches {
+                    self.chunk.patch_jump(patch, self.chunk.code.len());
+                }
+            }
+            Ast::While(loc, cond, body) => {
+                let cond_idx = self.chunk.code.len();
+                self.compile(*cond)?;
+                let jump_if_false_idx = self.chunk.code.len();
+                self.chunk.write((loc, OpCode::JumpIfFalse(0)));
+
+                if let Ast::List(_, list) = *body {
+                    for expr in list {
+                        self.compile_expr(expr, is_tail)?;
+                    }
+                } else {
+                    unreachable!("While body should be always a list.")
+                }
+
+                self.chunk.write((loc, OpCode::Jump(cond_idx)));
+
+                self.chunk
+                    .patch_jump(jump_if_false_idx, self.chunk.code.len());
+                self.chunk.write((loc, OpCode::Pop));
+            }
+            Ast::Until(loc, cond, body) => {
+                let cond_idx = self.chunk.code.len();
+                self.compile(*cond)?;
+                let jump_if_false_idx = self.chunk.code.len();
+                self.chunk.write((loc, OpCode::JumpIfFalse(0)));
+
+                let jump_idx = self.chunk.code.len();
+                self.chunk.write((loc, OpCode::Jump(0)));
+
+                self.chunk
+                    .patch_jump(jump_if_false_idx, self.chunk.code.len());
+                self.chunk.write((loc, OpCode::Pop));
+
+                if let Ast::List(_, list) = *body {
+                    for expr in list {
+                        self.compile_expr(expr, is_tail)?;
+                    }
+                } else {
+                    unreachable!("Until body should be always a list.")
+                }
+
+                self.chunk.write((loc, OpCode::Jump(cond_idx)));
+
+                self.chunk.patch_jump(jump_idx, self.chunk.code.len());
+                self.chunk.write((loc, OpCode::Pop));
+            }
             Ast::If(loc, cond, true_branch, false_branch) => {
                 self.compile(*cond)?;
                 let jump_if_false_idx = self.chunk.code.len();
@@ -110,6 +182,58 @@ impl<'a> Compiler<'a> {
                     let idx = self.chunk.add_constant(Value::Nil);
                     self.chunk.write((loc, OpCode::Constant(idx)));
                 }
+
+                self.chunk.patch_jump(jump_end_idx, self.chunk.code.len());
+            }
+            Ast::Unless(loc, cond, false_branch, true_branch) => {
+                self.compile(*cond)?;
+                let jump_if_false_idx = self.chunk.code.len();
+                self.chunk.write((loc, OpCode::JumpIfFalse(0)));
+
+                self.chunk.write((loc, OpCode::Pop));
+                if let Some(fb) = true_branch {
+                    self.compile_expr(*fb, is_tail)?;
+                } else {
+                    let idx = self.chunk.add_constant(Value::Nil);
+                    self.chunk.write((loc, OpCode::Constant(idx)));
+                }
+
+                let jump_end_idx = self.chunk.code.len();
+                self.chunk.write((loc, OpCode::Jump(0)));
+
+                self.chunk
+                    .patch_jump(jump_if_false_idx, self.chunk.code.len());
+                self.chunk.write((loc, OpCode::Pop));
+
+                self.compile_expr(*false_branch, is_tail)?;
+
+                self.chunk.patch_jump(jump_end_idx, self.chunk.code.len());
+            }
+            Ast::When(loc, cond, mut body) => {
+                self.compile(*cond)?;
+                let jump_if_false_idx = self.chunk.code.len();
+                self.chunk.write((loc, OpCode::JumpIfFalse(0)));
+
+                self.chunk.write((loc, OpCode::Pop));
+
+                if body.is_empty() {
+                    let idx = self.chunk.add_constant(Value::Nil);
+                    self.chunk.write((loc, OpCode::Constant(idx)));
+                } else {
+                    let last = body.pop().unwrap();
+                    for expr in body {
+                        self.compile(expr)?;
+                        self.chunk.write((loc, OpCode::Pop));
+                    }
+                    self.compile_expr(last, is_tail)?;
+                }
+
+                let jump_end_idx = self.chunk.code.len();
+                self.chunk.write((loc, OpCode::Jump(0)));
+
+                self.chunk
+                    .patch_jump(jump_if_false_idx, self.chunk.code.len());
+                self.chunk.write((loc, OpCode::Pop));
 
                 self.chunk.patch_jump(jump_end_idx, self.chunk.code.len());
             }

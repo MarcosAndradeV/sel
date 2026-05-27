@@ -17,6 +17,11 @@ pub enum Ast {
     Let(Loc, Vec<(u32, Ast)>, Vec<Ast>),
     Set(Loc, u32, Box<Ast>),
     If(Loc, Box<Ast>, Box<Ast>, Option<Box<Ast>>),
+    Unless(Loc, Box<Ast>, Box<Ast>, Option<Box<Ast>>),
+    When(Loc, Box<Ast>, Vec<Ast>),
+    Cond(Loc, Vec<(Ast, Ast)>),
+    While(Loc, Box<Ast>, Box<Ast>),
+    Until(Loc, Box<Ast>, Box<Ast>),
     Lambda(Loc, Vec<u32>, Vec<Ast>),
     Begin(Loc, Vec<Ast>),
     Quote(Loc, Box<Ast>),
@@ -50,6 +55,11 @@ impl Ast {
             Ast::Let(loc, ..) => *loc,
             Ast::Set(loc, ..) => *loc,
             Ast::If(loc, ..) => *loc,
+            Ast::Unless(loc, ..) => *loc,
+            Ast::When(loc, ..) => *loc,
+            Ast::Cond(loc, ..) => *loc,
+            Ast::While(loc, ..) => *loc,
+            Ast::Until(loc, ..) => *loc,
             Ast::Lambda(loc, ..) => *loc,
             Ast::Begin(loc, ..) => *loc,
             Ast::Quote(loc, ..) => *loc,
@@ -85,6 +95,11 @@ impl std::fmt::Display for Ast {
             Ast::Let(..) => write!(f, "let"),
             Ast::Set(..) => write!(f, "set"),
             Ast::If(..) => write!(f, "if"),
+            Ast::Cond(..) => write!(f, "cond"),
+            Ast::When(..) => write!(f, "when"),
+            Ast::Unless(..) => write!(f, "unless"),
+            Ast::While(..) => write!(f, "while"),
+            Ast::Until(..) => write!(f, "while"),
             Ast::Lambda(..) => write!(f, "lambda"),
             Ast::Begin(..) => write!(f, "begin"),
             Ast::Quote(..) => write!(f, "quote"),
@@ -178,6 +193,49 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
             if let Some(f) = f {
                 list.push(ast_to_value(*f).1);
             }
+            (loc, Value::List(list.into_boxed_slice().into()))
+        }
+        Ast::Cond(loc, branches) => {
+            let mut list = vec![Value::Symbol(intern("cond"))];
+            for (c, e) in branches {
+                list.push(ast_to_value(c).1);
+                list.push(ast_to_value(e).1);
+            }
+            (loc, Value::List(list.into_boxed_slice().into()))
+        }
+        Ast::When(loc, cond, body) => {
+            let mut list = vec![
+                Value::Symbol(intern("when")),
+                ast_to_value(*cond).1,
+            ];
+            list.extend(body.into_iter().map(|a| ast_to_value(a).1));
+            (loc, Value::List(list.into_boxed_slice().into()))
+        }
+        Ast::Unless(loc, cond, f, t) => {
+            let mut list = vec![
+                Value::Symbol(intern("unless")),
+                ast_to_value(*cond).1,
+                ast_to_value(*f).1,
+            ];
+            if let Some(t) = t {
+                list.push(ast_to_value(*t).1);
+            }
+            (loc, Value::List(list.into_boxed_slice().into()))
+        }
+        Ast::While(loc, cond, body) => {
+            let list = vec![
+                Value::Symbol(intern("while")),
+                ast_to_value(*cond).1,
+                ast_to_value(*body).1,
+            ];
+            (loc, Value::List(list.into_boxed_slice().into()))
+        }
+        Ast::Until(loc, cond, body) => {
+            let list = vec![
+                Value::Symbol(intern("until")),
+                ast_to_value(*cond).1,
+                ast_to_value(*body).1,
+            ];
             (loc, Value::List(list.into_boxed_slice().into()))
         }
         Ast::Lambda(loc, params, body) => {

@@ -1,40 +1,5 @@
 ;; Sel Core Library
 
-(defmacro when (test &body)
-  (list 'if test (cons 'begin body)))
-
-(defmacro unless (test &body)
-  (list 'if test 'nil (cons 'begin body)))
-
-(defmacro while (test &body)
-  (list (list 'lambda '(_while_loop_fn_)
-              (list '_while_loop_fn_ '_while_loop_fn_))
-        (list 'lambda '(_while_loop_fn_)
-              (list 'when test
-                    (cons 'begin body)
-                    (list '_while_loop_fn_ '_while_loop_fn_)))))
-
-(defmacro until (test &body)
-  (list (list 'lambda '(_until_loop_fn_)
-              (list '_until_loop_fn_ '_until_loop_fn_))
-        (list 'lambda '(_until_loop_fn_)
-              (list 'unless test
-                    (cons 'begin body)
-                    (list '_until_loop_fn_ '_until_loop_fn_)))))
-
-(defmacro defun (name args &body)
-    (list 'define `(~name ~@args) (cons 'begin body)))
-
-(defmacro cond (& xs)
-    (if (> (count xs) 0)
-    (list 'if (car xs)
-    (if (> (count xs) 1)
-    (nth xs 1)
-    (error "odd number of forms to cond")) (cons 'cond (cdr (cdr xs))))))
-
-(defmacro ffi-func (sym ret arg-types)
-    (list 'lambda '(&args) `(ffi-call ~sym ~ret ~arg-types args)))
-
 (define (assert test &args)
     (if (empty? args)
         (when (not test)

@@ -186,6 +186,22 @@ pub fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                     )),
                 }
             }
+            "while" => {
+                let mut iter = list.into_iter().skip(1);
+                let cond = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Missing condition in while".into())
+                })?;
+                let body = optimize_ast(iter.collect(), loc)?;
+                Ok(Ast::While(s_loc, Box::new(cond), Box::new(body)))
+            }
+            "until" => {
+                let mut iter = list.into_iter().skip(1);
+                let cond = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Missing condition in until".into())
+                })?;
+                let body = optimize_ast(iter.collect(), loc)?;
+                Ok(Ast::Until(s_loc, Box::new(cond), Box::new(body)))
+            }
             "if" => {
                 let mut iter = list.into_iter().skip(1);
                 let cond = iter.next().ok_or_else(|| {
@@ -201,6 +217,66 @@ pub fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                     Box::new(true_branch),
                     false_branch.map(Box::new),
                 ))
+            }
+            "cond" => {
+                let mut iter = list.into_iter().skip(1);
+                let mut branches = Vec::new();
+                loop {
+                    let Some(cond) = iter.next() else {
+                        break;
+                    };
+                    let expr = iter.next().ok_or_else(|| {
+                        SelError::SyntaxError(s_loc, "Missing expr in cond".into())
+                    })?;
+                    branches.push((cond, expr));
+                }
+                Ok(Ast::Cond(s_loc, branches))
+            }
+            "ffi-func" => {
+                // (define puts (ffi-func 'i32 '('*u8)))
+                let mut iter = list.into_iter().skip(1);
+                let sym = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Missing ffi-sym in ffi-func".into())
+                })?;
+                let ret = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Missing return type in ffi-func".into())
+                })?;
+                let arg_types = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Missing argument types in ffi-func".into())
+                })?;
+                // ffi-call ~sym ~ret ~arg-types args
+                Ok(Ast::Lambda(
+                    s_loc,
+                    vec![intern("&args")],
+                    vec![Ast::List(
+                        s_loc,
+                        vec![Ast::Symbol(s_loc, intern("ffi-call")), sym, ret, arg_types, Ast::Symbol(s_loc, intern("args"))],
+                    )],
+                ))
+            }
+            "unless" => {
+                let mut iter = list.into_iter().skip(1);
+                let cond = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Missing condition in unless".into())
+                })?;
+                let false_branch = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Missing false branch in unless".into())
+                })?;
+                let true_branch = iter.next();
+                Ok(Ast::Unless(
+                    s_loc,
+                    Box::new(cond),
+                    Box::new(false_branch),
+                    true_branch.map(Box::new),
+                ))
+            }
+            "when" => {
+                let mut iter = list.into_iter().skip(1);
+                let cond = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Missing condition in when".into())
+                })?;
+                let body = iter.collect();
+                Ok(Ast::When(s_loc, Box::new(cond), body))
             }
             "lambda" => {
                 let mut iter = list.into_iter().skip(1);
@@ -469,6 +545,12 @@ pub fn parse_expr(tokens: &[Token], pos: &mut usize, diags: &mut Vec<SelError>) 
     *pos += 1;
 
     match t.kind {
+        TokenKind::Bind => Err(SelError::SyntaxError(t.loc, "Unexpected `:=`".to_string())),
+        TokenKind::Do => {
+            *pos += 1;
+            let expr = parse_list_expr(tokens, pos, t, diags)?;
+            Ok(Ast::Begin(t.loc, expr))
+        }
         TokenKind::BackSlash => parse_lambda_shorthand(tokens, pos, t, diags),
         TokenKind::OpenCurly => parse_record(tokens, pos, t, diags),
         TokenKind::OpenParen => parse_list(tokens, pos, t, diags),
@@ -504,7 +586,17 @@ pub fn parse_expr(tokens: &[Token], pos: &mut usize, diags: &mut Vec<SelError>) 
             "nil" => Ok(Ast::Nil(t.loc)),
             ":private" => Ok(Ast::VisibilityDirective(t.loc, false)),
             ":public" => Ok(Ast::VisibilityDirective(t.loc, true)),
-            _ => Ok(Ast::Symbol(t.loc, intern(&t.source))),
+            _ => {
+                if let Some(tb) = tokens.get(*pos)
+                    && tb.kind == TokenKind::Bind
+                {
+                    *pos += 1;
+                    let expr = parse_expr(tokens, pos, diags)?;
+                    Ok(Ast::Define(t.loc, intern(&t.source), Box::new(expr)))
+                } else {
+                    Ok(Ast::Symbol(t.loc, intern(&t.source)))
+                }
+            }
         },
         TokenKind::Number(base) => {
             let s = match base {
@@ -607,6 +699,16 @@ fn parse_list(
     open_token: &Token,
     diags: &mut Vec<SelError>,
 ) -> Result<Ast> {
+    let list = parse_list_expr(tokens, pos, open_token, diags)?;
+    optimize_ast(list, open_token.loc)
+}
+
+fn parse_list_expr(
+    tokens: &[Token],
+    pos: &mut usize,
+    open_token: &Token,
+    diags: &mut Vec<SelError>,
+) -> Result<Vec<Ast>> {
     let mut list = Vec::new();
     while *pos < tokens.len() && tokens[*pos].kind != TokenKind::CloseParen {
         match parse_expr(tokens, pos, diags) {
@@ -623,8 +725,8 @@ fn parse_list(
             "Missing closing parenthesis".into(),
         ));
     }
-    *pos += 1; // consume ')'
-    optimize_ast(list, open_token.loc)
+    *pos += 1;
+    Ok(list)
 }
 
 fn recover_parser_state(tokens: &[Token], pos: &mut usize) {

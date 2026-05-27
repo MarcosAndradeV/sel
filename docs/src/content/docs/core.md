@@ -157,18 +157,18 @@ These routines and macros are defined in the standard library file `core.scm` an
 
 ### Logical Control & Assertions
 
-- `(when test &body)`: *Macro*. If `test` is truthy, executes `body` expressions sequentially inside a `begin` block.
+- `(when test &body)`: If `test` is truthy, executes `body` expressions sequentially inside a `begin` block.
   ```lisp
   (when (= 1 1)
     (println "Math holds")
     (println "True!"))
   ```
-- `(unless test &body)`: *Macro*. If `test` is falsy, executes `body` expressions sequentially.
+- `(unless test &body)`: If `test` is falsy, executes `body` expressions sequentially.
   ```lisp
   (unless (= 1 2)
     (println "Inequal"))
   ```
-- `(cond &xs)`: *Macro*. Multi-branch conditional selection. Takes pairs of test/consequent expressions. Runs the first matching condition. If the final test is `#t`, it acts as a default block.
+- `(cond &xs)`: Multi-branch conditional selection. Takes pairs of test/consequent expressions. Runs the first matching condition. If the final test is `#t`, it acts as a default block.
   ```lisp
   (cond
     (= x 1) "One"
@@ -184,14 +184,14 @@ These routines and macros are defined in the standard library file `core.scm` an
 
 These macros allow sequential looping constructs natively using TCO recursions.
 
-- `(while test &body)`: *Macro*. Loops and executes `body` continuously as long as `test` evaluates to truthy.
+- `(while test &body)`: Loops and executes `body` continuously as long as `test` evaluates to truthy.
   ```lisp
   (define i 0)
   (while (< i 5)
     (println i)
     (set! i (+ i 1)))
   ```
-- `(until test &body)`: *Macro*. Loops and executes `body` continuously until `test` evaluates to truthy.
+- `(until test &body)`: Loops and executes `body` continuously until `test` evaluates to truthy.
   ```lisp
   (define i 0)
   (until (= i 5)
@@ -269,13 +269,7 @@ Allows functional error-handling patterns without stack-unwinding `try/catch` cl
 
 ### Syntactic Helpers
 
-- `(defun name args &body)`: *Macro*. Defines a standard function named `name`. Automatically wraps the `body` inside a `begin` block, allowing clean multi-line function declarations.
-  ```lisp
-  (defun welcome (name)
-    (println "Initializing...")
-    (println "Hello, " name))
-  ```
-- `(ffi-func symbol return-type argument-types)`: *Macro*. Conveniently maps a raw FFI symbol pointer to an anonymous Scheme lambda, allowing the library symbol to be called like any standard Scheme function.
+- `(ffi-func symbol return-type argument-types)`: Conveniently maps a raw FFI symbol pointer to an anonymous Scheme lambda, allowing the library symbol to be called like any standard Scheme function.
   ```lisp
   (define puts-fn (ffi-func (ffi-dlsym libc "puts") 'i32 '(*u8)))
   (puts-fn "Called easily via Scheme wrapper!")

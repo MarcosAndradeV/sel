@@ -1,9 +1,9 @@
-(defun is-even? (n)
+(define (is-even? n)
   (if (= n 0)
       #t
       (is-odd? (- n 1))))
 
-(defun is-odd? (n)
+(define (is-odd? n)
   (if (= n 0)
       #f
       (is-even? (- n 1))))
@@ -13,7 +13,7 @@
 (assert (eq? (is-odd? 10000) #f))
 
 ;; TCO inside let and begin
-(defun sum-let-begin (n acc)
+(define (sum-let-begin n acc)
   (if (= n 0)
       (begin
         acc)
