@@ -111,6 +111,8 @@ impl<'a> Compiler<'a> {
 
                     self.chunk.patch_jump(jump_end_idx, self.chunk.code.len());
                 }
+                let idx = self.chunk.add_constant(Value::Nil);
+                self.chunk.write((loc, OpCode::Constant(idx)));
                 for patch in patches {
                     self.chunk.patch_jump(patch, self.chunk.code.len());
                 }
