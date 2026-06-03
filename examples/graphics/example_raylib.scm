@@ -6,7 +6,7 @@
 raylib := (ffi-dlopen "libraylib.so")
 
 init-window-sym := (ffi-dlsym raylib "InitWindow")
-init-window := (ffi-func init-window-sym 'void '(i32 i32 *u8))
+init-window := (ffi-func init-window-sym 'void '(i32 i32 string))
 
 close-window-sym := (ffi-dlsym raylib "CloseWindow")
 close-window := (ffi-func close-window-sym 'void '())

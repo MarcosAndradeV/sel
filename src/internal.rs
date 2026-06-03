@@ -420,6 +420,7 @@ enum FfiType {
     F64,
     Bool,
     Char,
+    CStr,
     Pointer,
     Struct(Vec<FfiType>),
 }
@@ -431,7 +432,7 @@ impl FfiType {
             FfiType::I8 | FfiType::U8 | FfiType::Bool | FfiType::Char => (1, 1),
             FfiType::I16 | FfiType::U16 => (2, 2),
             FfiType::I32 | FfiType::U32 | FfiType::F32 => (4, 4),
-            FfiType::I64 | FfiType::U64 | FfiType::F64 | FfiType::Pointer => (8, 8),
+            FfiType::I64 | FfiType::U64 | FfiType::F64 | FfiType::Pointer | FfiType::CStr => (8, 8),
             FfiType::Struct(fields) => {
                 let mut current_offset = 0;
                 let mut max_align = 1;
@@ -464,7 +465,7 @@ impl FfiType {
             FfiType::F64 => libffi::middle::Type::f64(),
             FfiType::Bool => libffi::middle::Type::u8(),
             FfiType::Char => libffi::middle::Type::i8(),
-            FfiType::Pointer => libffi::middle::Type::pointer(),
+            FfiType::Pointer | FfiType::CStr => libffi::middle::Type::pointer(),
             FfiType::Struct(fields) => {
                 let ffi_fields: Vec<_> = fields.iter().map(|f| f.to_libffi_type()).collect();
                 libffi::middle::Type::structure(ffi_fields)
@@ -491,7 +492,8 @@ fn parse_ffi_type(loc: Loc, val: &Value) -> Result<FfiType> {
                 "f32" => Ok(FfiType::F32),
                 "f64" => Ok(FfiType::F64),
                 "bool" => Ok(FfiType::Bool),
-                "*u8" => Ok(FfiType::Pointer),
+                "*void" => Ok(FfiType::Pointer),
+                "string" => Ok(FfiType::CStr),
                 _ => Err(SelError::Runtime(
                     loc,
                     format!("Unsupported FFI primitive type: {sym}"),
@@ -750,7 +752,7 @@ fn serialize_value(
             buf.extend_from_slice(&n.to_ne_bytes());
             Ok(())
         }
-        FfiType::Pointer => {
+        FfiType::Pointer | FfiType::CStr => {
             let ptr = match val {
                 Value::String(s) => {
                     let cstr = std::ffi::CString::new(s.as_str()).unwrap();
@@ -873,7 +875,7 @@ unsafe fn deserialize_value(ty: &FfiType, ptr: *const u8) -> Value {
                 let val = std::ptr::read(ptr);
                 Value::Char(val as char)
             }
-            FfiType::Pointer => {
+            FfiType::Pointer | FfiType::CStr => {
                 let val = std::ptr::read_unaligned(ptr as *const usize);
                 if val == 0 {
                     Value::Nil
@@ -1008,13 +1010,21 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
                 let res: f64 = cif.call(code_ptr, &call_args);
                 Ok(Value::Float(res))
             }
-            FfiType::Pointer => {
+            FfiType::CStr => {
                 let res: *const std::ffi::c_char = cif.call(code_ptr, &call_args);
                 if res.is_null() {
                     Ok(Value::Nil)
                 } else {
                     let c_str = std::ffi::CStr::from_ptr(res);
                     Ok(Value::String(Rc::new(c_str.to_string_lossy().into_owned())))
+                }
+            }
+            FfiType::Pointer => {
+                let res: *const std::ffi::c_void = cif.call(code_ptr, &call_args);
+                if res.is_null() {
+                    Ok(Value::Nil)
+                } else {
+                    Ok(Value::Pointer(res as usize))
                 }
             }
             FfiType::U8 => {
