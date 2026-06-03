@@ -250,7 +250,13 @@ pub fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                     vec![intern("&args")],
                     vec![Ast::List(
                         s_loc,
-                        vec![Ast::Symbol(s_loc, intern("ffi-call")), sym, ret, arg_types, Ast::Symbol(s_loc, intern("args"))],
+                        vec![
+                            Ast::Symbol(s_loc, intern("ffi-call")),
+                            sym,
+                            ret,
+                            arg_types,
+                            Ast::Symbol(s_loc, intern("args")),
+                        ],
                     )],
                 ))
             }
@@ -546,11 +552,6 @@ pub fn parse_expr(tokens: &[Token], pos: &mut usize, diags: &mut Vec<SelError>) 
 
     match t.kind {
         TokenKind::Bind => Err(SelError::SyntaxError(t.loc, "Unexpected `:=`".to_string())),
-        TokenKind::Do => {
-            *pos += 1;
-            let expr = parse_list_expr(tokens, pos, t, diags)?;
-            Ok(Ast::Begin(t.loc, expr))
-        }
         TokenKind::BackSlash => parse_lambda_shorthand(tokens, pos, t, diags),
         TokenKind::OpenCurly => parse_record(tokens, pos, t, diags),
         TokenKind::OpenParen => parse_list(tokens, pos, t, diags),
@@ -586,6 +587,11 @@ pub fn parse_expr(tokens: &[Token], pos: &mut usize, diags: &mut Vec<SelError>) 
             "nil" => Ok(Ast::Nil(t.loc)),
             ":private" => Ok(Ast::VisibilityDirective(t.loc, false)),
             ":public" => Ok(Ast::VisibilityDirective(t.loc, true)),
+            ":do" => {
+                *pos += 1;
+                let expr = parse_list_expr(tokens, pos, t, diags)?;
+                Ok(Ast::Begin(t.loc, expr))
+            }
             _ => {
                 if let Some(tb) = tokens.get(*pos)
                     && tb.kind == TokenKind::Bind

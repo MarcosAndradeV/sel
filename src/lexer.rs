@@ -89,7 +89,6 @@ pub enum TokenKind {
     Ampersand,
     BackSlash,
     Char(char),
-    Do,
     Bind,
 }
 
@@ -377,11 +376,6 @@ impl<'a> Lexer<'a> {
                     }));
                 }
                 match ident.as_str() {
-                    ":do" => Ok(Some(Token {
-                        kind: TokenKind::Do,
-                        source: ident,
-                        loc: start_loc,
-                    })),
                     ":=" => Ok(Some(Token {
                         kind: TokenKind::Bind,
                         source: ident,
