@@ -1,0 +1,5 @@
+config = {
+    scripts = {
+        test = "cargo test"
+    }
+}
