@@ -204,10 +204,7 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
             (loc, Value::List(list.into_boxed_slice().into()))
         }
         Ast::When(loc, cond, body) => {
-            let mut list = vec![
-                Value::Symbol(intern("when")),
-                ast_to_value(*cond).1,
-            ];
+            let mut list = vec![Value::Symbol(intern("when")), ast_to_value(*cond).1];
             list.extend(body.into_iter().map(|a| ast_to_value(a).1));
             (loc, Value::List(list.into_boxed_slice().into()))
         }

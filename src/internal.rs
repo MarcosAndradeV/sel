@@ -1458,6 +1458,12 @@ pub fn newline(loc: Loc, args: Vec<Value>) -> Result<Value> {
 }
 
 pub fn file_system(loc: Loc, mut call_args: Vec<Value>) -> Result<Value> {
+    if call_args.is_empty() {
+        return Err(SelError::SyntaxError(
+            loc,
+            "Expected symbol for system".into(),
+        ));
+    }
     let args = call_args.split_off(1);
     if let Some(Value::Symbol(sym)) = call_args.pop() {
         match lookup(sym).as_str() {
@@ -1529,6 +1535,12 @@ fn fs_read(loc: Loc, args: &[Value]) -> Result<Value> {
 }
 
 pub fn system(loc: Loc, mut system_args: Vec<Value>) -> Result<Value> {
+    if system_args.is_empty() {
+        return Err(SelError::SyntaxError(
+            loc,
+            "Expected symbol for system".into(),
+        ));
+    }
     let mut args = system_args.split_off(1);
     if let Some(Value::Symbol(sym)) = system_args.pop() {
         match lookup(sym).as_str() {
