@@ -133,6 +133,24 @@ Structured error handling framework. If the expression inside the `try` block tr
     (println "Caught error:" err)))
 ```
 
+### load
+Loads and evaluates external Scheme files dynamically in the current lexical environment.
+
+Unlike `import`, which loads code inside a prefixed namespace (e.g. `point/new-point`), `(load <path-expr>)` evaluates the target file directly in the caller's active environment. Any bindings or macros defined inside the loaded script will reside directly in the caller's environment.
+
+`load` returns the value of the last evaluated expression in the loaded file.
+
+```lisp
+;; Load variables and functions from a helper file
+(define res (load "helpers/math_utils.scm"))
+
+;; Use a loaded function directly (no prefix namespace needed)
+(println (square 10))
+
+;; Check the return value of load (value of last expression in file)
+(println "Loaded helpers returned:" res)
+```
+
 ### import
 Loads external Scheme library files into the current runtime environment.
 

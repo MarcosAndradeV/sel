@@ -43,6 +43,10 @@ impl<'a> Compiler<'a> {
             Ast::Import(loc, id, alias) => {
                 self.chunk.write((loc, OpCode::Import(id, alias)));
             }
+            Ast::Load(loc, path) => {
+                self.compile_expr(*path, false)?;
+                self.chunk.write((loc, OpCode::Load));
+            }
             Ast::VisibilityDirective(loc, is_public) => {
                 self.chunk.write((loc, OpCode::SetVisibility(is_public)));
             }
@@ -994,6 +998,7 @@ pub enum OpCode {
     IsFunction,
     TypeOf,
     Not(u32),
+    Load,
 }
 
 #[derive(Debug, Clone)]
@@ -1219,6 +1224,9 @@ impl Chunk {
             OpCode::Not(arity) => {
                 self.code.push(52);
                 self.code.extend_from_slice(&arity.to_le_bytes());
+            }
+            OpCode::Load => {
+                self.code.push(53);
             }
         }
     }

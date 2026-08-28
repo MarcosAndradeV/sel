@@ -186,6 +186,19 @@ pub fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                     )),
                 }
             }
+            "load" => {
+                let mut iter = list.into_iter().skip(1);
+                let path = iter
+                    .next()
+                    .ok_or_else(|| SelError::SyntaxError(s_loc, "Missing path in load".into()))?;
+                if iter.next().is_some() {
+                    return Err(SelError::SyntaxError(
+                        s_loc,
+                        "Expected exactly 1 argument for load".into(),
+                    ));
+                }
+                Ok(Ast::Load(s_loc, Box::new(path)))
+            }
             "while" => {
                 let mut iter = list.into_iter().skip(1);
                 let cond = iter.next().ok_or_else(|| {
@@ -874,6 +887,7 @@ pub fn resolve_ast(ast: Ast) -> Result<Ast> {
             Box::new(resolve_ast(*co)?),
             Box::new(resolve_ast(*arg)?),
         )),
+        Ast::Load(loc, path) => Ok(Ast::Load(loc, Box::new(resolve_ast(*path)?))),
         other => Ok(other),
     }
 }
@@ -898,6 +912,7 @@ pub fn resolve_quasiquote(ast: Ast) -> Result<Ast> {
             }
             Ok(Ast::Record(loc, resolved))
         }
+        Ast::Load(loc, path) => Ok(Ast::Load(loc, Box::new(resolve_quasiquote(*path)?))),
         other => Ok(other),
     }
 }

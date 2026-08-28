@@ -1088,6 +1088,43 @@ impl VM {
                     let args: Vec<Value> = self.stack.drain(start..).collect();
                     self.stack.push(internal::not(loc, args)?);
                 }
+                53 => {
+                    // Load
+                    let path_val = self.stack.pop().ok_or_else(|| {
+                        SelError::Runtime(frame.loc, "load: missing path on stack".into())
+                    })?;
+                    if let Value::String(path_str) = path_val {
+                        let fp = PathBuf::from(lookup(loc.file_id));
+                        let target_path = if lookup(loc.file_id) != "<repl>"
+                            && fp
+                                .parent()
+                                .is_some_and(|p| p.is_dir() && p != std::path::Path::new(""))
+                        {
+                            fp.parent().unwrap().join(path_str.as_ref())
+                        } else {
+                            std::env::current_dir()
+                                .unwrap_or_default()
+                                .join(path_str.as_ref())
+                        };
+
+                        let src = read_script(&target_path)
+                            .map_err(|e| SelError::Internal(e.to_string()))?;
+                        let mut diags = Vec::new();
+                        let file_id = intern(target_path.to_string_lossy().as_ref());
+                        let asts = parse_all(&src, file_id, &mut diags);
+                        if !diags.is_empty() {
+                            return Err(diags.remove(0));
+                        }
+
+                        let result_val = execute_asts(asts, frame.env.clone())?;
+                        self.stack.push(result_val);
+                    } else {
+                        return Err(SelError::Runtime(
+                            frame.loc,
+                            format!("load: expected string path, got {:?}", path_val),
+                        ));
+                    }
+                }
                 _ => unreachable!(),
             }
         }
@@ -1206,6 +1243,7 @@ pub fn macro_expand(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
             }
             Ok(Ast::Record(loc, exp_fields))
         }
+        Ast::Load(loc, path) => Ok(Ast::Load(loc, Box::new(macro_expand(*path, env)?))),
         _ => Ok(ast),
     }
 }
@@ -1231,6 +1269,10 @@ pub fn macro_expand_quasiquote(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
             }
             Ok(Ast::Record(loc, exp_fields))
         }
+        Ast::Load(loc, path) => Ok(Ast::Load(
+            loc,
+            Box::new(macro_expand_quasiquote(*path, env)?),
+        )),
         _ => Ok(ast),
     }
 }

@@ -43,6 +43,7 @@ pub enum Ast {
     CoResume(Loc, Box<Ast>, Box<Ast>),
     Char(Loc, char),
     VisibilityDirective(Loc, bool),
+    Load(Loc, Box<Ast>),
 }
 
 impl Ast {
@@ -81,6 +82,7 @@ impl Ast {
             Ast::CoResume(loc, ..) => *loc,
             Ast::Char(loc, ..) => *loc,
             Ast::VisibilityDirective(loc, ..) => *loc,
+            Ast::Load(loc, ..) => *loc,
         }
     }
 }
@@ -129,12 +131,20 @@ impl std::fmt::Display for Ast {
             Ast::VisibilityDirective(_, is_public) => {
                 write!(f, "{}", if *is_public { ":public" } else { ":private" })
             }
+            Ast::Load(..) => write!(f, "load"),
         }
     }
 }
 
 pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
     match ast {
+        Ast::Load(loc, path) => (
+            loc,
+            Value::List(Rc::new([
+                Value::Symbol(intern("load")),
+                ast_to_value(*path).1,
+            ])),
+        ),
         Ast::Symbol(loc, id) => (loc, Value::Symbol(id)),
         Ast::Integer(loc, i) => (loc, Value::Integer(i)),
         Ast::Float(loc, f) => (loc, Value::Float(f)),
