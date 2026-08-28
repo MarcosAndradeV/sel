@@ -11,6 +11,14 @@ homepage = "https://github.com/MarcosAndradeV/sel"
 keywords = ["lisp", "scheme", "interpreter", "embeddable", "ffi"]
 categories = ["development-tools", "compilers"]
 
+[lib]
+name = "sel"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sel"
+path = "src/main.rs"
+
 [dependencies]
 rustyline = "18.0.0"
 libloading = "0.8.3"

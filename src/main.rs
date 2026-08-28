@@ -4,27 +4,18 @@ use std::env;
 use std::rc::Rc;
 
 use crate::cli::Cli;
-use crate::diagnostics::SelError;
-use crate::internal::load_core_lib;
-use crate::internal::read_script;
-use crate::internal::value_type_name;
-use crate::parser::parse_all;
-use crate::runtime::Env;
-use crate::runtime::execute_asts;
-use crate::types::intern;
-use crate::types::lookup;
-use crate::value::Value;
+use sel::diagnostics::SelError;
+use sel::internal::load_core_lib;
+use sel::internal::read_script;
+use sel::internal::value_type_name;
+use sel::parser::parse_all;
+use sel::runtime::Env;
+use sel::runtime::execute_asts;
+use sel::types::intern;
+use sel::types::lookup;
+use sel::value::Value;
 
-mod ast;
 mod cli;
-mod compiler;
-mod diagnostics;
-mod internal;
-mod lexer;
-mod parser;
-mod runtime;
-mod types;
-mod value;
 
 fn main() {
     match entry() {

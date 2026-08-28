@@ -192,7 +192,11 @@ pub fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                     SelError::SyntaxError(s_loc, "Missing condition in while".into())
                 })?;
                 let body: Vec<Ast> = iter.collect();
-                Ok(Ast::While(s_loc, Box::new(cond), Box::new(Ast::List(loc, body))))
+                Ok(Ast::While(
+                    s_loc,
+                    Box::new(cond),
+                    Box::new(Ast::List(loc, body)),
+                ))
             }
             "until" => {
                 let mut iter = list.into_iter().skip(1);
@@ -200,7 +204,11 @@ pub fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                     SelError::SyntaxError(s_loc, "Missing condition in until".into())
                 })?;
                 let body: Vec<Ast> = iter.collect();
-                Ok(Ast::Until(s_loc, Box::new(cond), Box::new(Ast::List(loc, body))))
+                Ok(Ast::Until(
+                    s_loc,
+                    Box::new(cond),
+                    Box::new(Ast::List(loc, body)),
+                ))
             }
             "if" => {
                 let mut iter = list.into_iter().skip(1);
@@ -765,9 +773,7 @@ pub fn resolve_ast(ast: Ast) -> Result<Ast> {
         Ast::Quasiquote(loc, expr) => {
             Ok(Ast::Quasiquote(loc, Box::new(resolve_quasiquote(*expr)?)))
         }
-        Ast::Unquote(loc, expr) => {
-            Ok(Ast::Unquote(loc, Box::new(resolve_ast(*expr)?)))
-        }
+        Ast::Unquote(loc, expr) => Ok(Ast::Unquote(loc, Box::new(resolve_ast(*expr)?))),
         Ast::UnquoteSplicing(loc, expr) => {
             Ok(Ast::UnquoteSplicing(loc, Box::new(resolve_ast(*expr)?)))
         }
@@ -806,7 +812,12 @@ pub fn resolve_ast(ast: Ast) -> Result<Ast> {
                 Some(b) => Some(Box::new(resolve_ast(*b)?)),
                 None => None,
             };
-            Ok(Ast::Unless(loc, Box::new(resolved_cond), Box::new(resolved_false), resolved_true))
+            Ok(Ast::Unless(
+                loc,
+                Box::new(resolved_cond),
+                Box::new(resolved_false),
+                resolved_true,
+            ))
         }
         Ast::If(loc, cond, true_branch, false_branch) => {
             let resolved_cond = resolve_ast(*cond)?;
@@ -815,7 +826,12 @@ pub fn resolve_ast(ast: Ast) -> Result<Ast> {
                 Some(b) => Some(Box::new(resolve_ast(*b)?)),
                 None => None,
             };
-            Ok(Ast::If(loc, Box::new(resolved_cond), Box::new(resolved_true), resolved_false))
+            Ok(Ast::If(
+                loc,
+                Box::new(resolved_cond),
+                Box::new(resolved_true),
+                resolved_false,
+            ))
         }
         Ast::Try(loc, body, err_var, catch_body) => {
             let resolved_body = resolve_ast(*body)?;
@@ -823,7 +839,12 @@ pub fn resolve_ast(ast: Ast) -> Result<Ast> {
             for expr in catch_body {
                 resolved_catch.push(resolve_ast(expr)?);
             }
-            Ok(Ast::Try(loc, Box::new(resolved_body), err_var, resolved_catch))
+            Ok(Ast::Try(
+                loc,
+                Box::new(resolved_body),
+                err_var,
+                resolved_catch,
+            ))
         }
         Ast::Lambda(loc, params, body) => {
             let mut resolved_body = Vec::with_capacity(body.len());
@@ -832,9 +853,7 @@ pub fn resolve_ast(ast: Ast) -> Result<Ast> {
             }
             Ok(Ast::Lambda(loc, params, resolved_body))
         }
-        Ast::DefMacro(loc, id, expr) => {
-            Ok(Ast::DefMacro(loc, id, Box::new(resolve_ast(*expr)?)))
-        }
+        Ast::DefMacro(loc, id, expr) => Ok(Ast::DefMacro(loc, id, Box::new(resolve_ast(*expr)?))),
         Ast::Begin(loc, body) => {
             let mut resolved_body = Vec::with_capacity(body.len());
             for expr in body {
@@ -849,21 +868,19 @@ pub fn resolve_ast(ast: Ast) -> Result<Ast> {
             }
             Ok(Ast::Cond(loc, resolved_branches))
         }
-        Ast::Yield(loc, expr) => {
-            Ok(Ast::Yield(loc, Box::new(resolve_ast(*expr)?)))
-        }
-        Ast::CoResume(loc, co, arg) => {
-            Ok(Ast::CoResume(loc, Box::new(resolve_ast(*co)?), Box::new(resolve_ast(*arg)?)))
-        }
+        Ast::Yield(loc, expr) => Ok(Ast::Yield(loc, Box::new(resolve_ast(*expr)?))),
+        Ast::CoResume(loc, co, arg) => Ok(Ast::CoResume(
+            loc,
+            Box::new(resolve_ast(*co)?),
+            Box::new(resolve_ast(*arg)?),
+        )),
         other => Ok(other),
     }
 }
 
 pub fn resolve_quasiquote(ast: Ast) -> Result<Ast> {
     match ast {
-        Ast::Unquote(loc, expr) => {
-            Ok(Ast::Unquote(loc, Box::new(resolve_ast(*expr)?)))
-        }
+        Ast::Unquote(loc, expr) => Ok(Ast::Unquote(loc, Box::new(resolve_ast(*expr)?))),
         Ast::UnquoteSplicing(loc, expr) => {
             Ok(Ast::UnquoteSplicing(loc, Box::new(resolve_ast(*expr)?)))
         }
