@@ -1241,9 +1241,10 @@ pub fn execute_asts(asts: Vec<Ast>, env: Rc<RefCell<Env>>) -> Result<Value> {
     for ast in asts {
         let loc = ast.loc();
         let expanded = macro_expand(ast, env.clone())?;
+        let resolved = crate::parser::resolve_ast(expanded)?;
         let mut chunk = Chunk::new();
         let mut compiler = Compiler::new(&mut chunk);
-        compiler.compile(expanded)?;
+        compiler.compile(resolved)?;
         last_val = vm.run(loc, Rc::new(chunk), env.clone(), Vec::new())?;
     }
     Ok(last_val)

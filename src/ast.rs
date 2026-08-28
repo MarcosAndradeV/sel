@@ -1,6 +1,5 @@
 use crate::diagnostics::*;
 use crate::lexer::*;
-use crate::parser::optimize_ast;
 use crate::types::Record;
 use crate::types::intern;
 use crate::types::lookup;
@@ -363,14 +362,10 @@ pub fn value_to_ast(val: Value, loc: Loc) -> Result<Ast> {
             for v in l.iter() {
                 ast_list.push(value_to_ast(v.clone(), loc)?);
             }
-            // Need to re-run parse_list logic to get optimized AST
-            // Or we could just return Ast::List and let eval handle it
-            // but we want optimized AST.
-            // Let's use a helper that simulates the parser's logic.
             if ast_list.is_empty() {
                 return Ok(Ast::Nil(loc));
             }
-            optimize_ast(ast_list, loc)
+            Ok(Ast::List(loc, ast_list))
         }
         Value::Record(r) => {
             let mut fields = Vec::new();

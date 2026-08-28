@@ -191,16 +191,16 @@ pub fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                 let cond = iter.next().ok_or_else(|| {
                     SelError::SyntaxError(s_loc, "Missing condition in while".into())
                 })?;
-                let body = optimize_ast(iter.collect(), loc)?;
-                Ok(Ast::While(s_loc, Box::new(cond), Box::new(body)))
+                let body: Vec<Ast> = iter.collect();
+                Ok(Ast::While(s_loc, Box::new(cond), Box::new(Ast::List(loc, body))))
             }
             "until" => {
                 let mut iter = list.into_iter().skip(1);
                 let cond = iter.next().ok_or_else(|| {
                     SelError::SyntaxError(s_loc, "Missing condition in until".into())
                 })?;
-                let body = optimize_ast(iter.collect(), loc)?;
-                Ok(Ast::Until(s_loc, Box::new(cond), Box::new(body)))
+                let body: Vec<Ast> = iter.collect();
+                Ok(Ast::Until(s_loc, Box::new(cond), Box::new(Ast::List(loc, body))))
             }
             "if" => {
                 let mut iter = list.into_iter().skip(1);
@@ -635,10 +635,10 @@ fn parse_lambda_shorthand(
 ) -> Result<Ast> {
     let args = parse_expr(tokens, pos, diags)?;
     let body = parse_expr(tokens, pos, diags)?;
-    optimize_ast(
-        vec![Ast::Symbol(open_token.loc, intern("lambda")), args, body],
+    Ok(Ast::List(
         open_token.loc,
-    )
+        vec![Ast::Symbol(open_token.loc, intern("lambda")), args, body],
+    ))
 }
 
 fn parse_record(
@@ -676,18 +676,7 @@ fn parse_record(
                 continue;
             }
         };
-        let v = match v_expr {
-            Ast::List(loc, list) => match optimize_ast(list, loc) {
-                Ok(ast) => ast,
-                Err(e) => {
-                    diags.push(e);
-                    recover_parser_state(tokens, pos);
-                    continue;
-                }
-            },
-            ast => ast,
-        };
-        record.push((sym, v));
+        record.push((sym, v_expr));
     }
     if *pos >= tokens.len() {
         return Err(SelError::SyntaxError(
@@ -706,7 +695,7 @@ fn parse_list(
     diags: &mut Vec<SelError>,
 ) -> Result<Ast> {
     let list = parse_list_expr(tokens, pos, open_token, diags)?;
-    optimize_ast(list, open_token.loc)
+    Ok(Ast::List(open_token.loc, list))
 }
 
 fn parse_list_expr(
@@ -758,5 +747,140 @@ fn recover_parser_state(tokens: &[Token], pos: &mut usize) {
                 *pos += 1;
             }
         }
+    }
+}
+
+pub fn resolve_ast(ast: Ast) -> Result<Ast> {
+    match ast {
+        Ast::List(loc, list) => {
+            if list.is_empty() {
+                return Ok(Ast::Nil(loc));
+            }
+            let mut resolved_list = Vec::with_capacity(list.len());
+            for item in list {
+                resolved_list.push(resolve_ast(item)?);
+            }
+            optimize_ast(resolved_list, loc)
+        }
+        Ast::Quasiquote(loc, expr) => {
+            Ok(Ast::Quasiquote(loc, Box::new(resolve_quasiquote(*expr)?)))
+        }
+        Ast::Unquote(loc, expr) => {
+            Ok(Ast::Unquote(loc, Box::new(resolve_ast(*expr)?)))
+        }
+        Ast::UnquoteSplicing(loc, expr) => {
+            Ok(Ast::UnquoteSplicing(loc, Box::new(resolve_ast(*expr)?)))
+        }
+        Ast::Record(loc, fields) => {
+            let mut resolved_fields = Vec::with_capacity(fields.len());
+            for (k, v) in fields {
+                resolved_fields.push((k, resolve_ast(v)?));
+            }
+            Ok(Ast::Record(loc, resolved_fields))
+        }
+        Ast::Define(loc, id, expr) => Ok(Ast::Define(loc, id, Box::new(resolve_ast(*expr)?))),
+        Ast::Set(loc, id, expr) => Ok(Ast::Set(loc, id, Box::new(resolve_ast(*expr)?))),
+        Ast::Let(loc, bindings, body) => {
+            let mut resolved_bindings = Vec::with_capacity(bindings.len());
+            for (id, val) in bindings {
+                resolved_bindings.push((id, resolve_ast(val)?));
+            }
+            let mut resolved_body = Vec::with_capacity(body.len());
+            for expr in body {
+                resolved_body.push(resolve_ast(expr)?);
+            }
+            Ok(Ast::Let(loc, resolved_bindings, resolved_body))
+        }
+        Ast::When(loc, cond, body) => {
+            let resolved_cond = resolve_ast(*cond)?;
+            let mut resolved_body = Vec::with_capacity(body.len());
+            for expr in body {
+                resolved_body.push(resolve_ast(expr)?);
+            }
+            Ok(Ast::When(loc, Box::new(resolved_cond), resolved_body))
+        }
+        Ast::Unless(loc, cond, false_branch, true_branch) => {
+            let resolved_cond = resolve_ast(*cond)?;
+            let resolved_false = resolve_ast(*false_branch)?;
+            let resolved_true = match true_branch {
+                Some(b) => Some(Box::new(resolve_ast(*b)?)),
+                None => None,
+            };
+            Ok(Ast::Unless(loc, Box::new(resolved_cond), Box::new(resolved_false), resolved_true))
+        }
+        Ast::If(loc, cond, true_branch, false_branch) => {
+            let resolved_cond = resolve_ast(*cond)?;
+            let resolved_true = resolve_ast(*true_branch)?;
+            let resolved_false = match false_branch {
+                Some(b) => Some(Box::new(resolve_ast(*b)?)),
+                None => None,
+            };
+            Ok(Ast::If(loc, Box::new(resolved_cond), Box::new(resolved_true), resolved_false))
+        }
+        Ast::Try(loc, body, err_var, catch_body) => {
+            let resolved_body = resolve_ast(*body)?;
+            let mut resolved_catch = Vec::with_capacity(catch_body.len());
+            for expr in catch_body {
+                resolved_catch.push(resolve_ast(expr)?);
+            }
+            Ok(Ast::Try(loc, Box::new(resolved_body), err_var, resolved_catch))
+        }
+        Ast::Lambda(loc, params, body) => {
+            let mut resolved_body = Vec::with_capacity(body.len());
+            for expr in body {
+                resolved_body.push(resolve_ast(expr)?);
+            }
+            Ok(Ast::Lambda(loc, params, resolved_body))
+        }
+        Ast::DefMacro(loc, id, expr) => {
+            Ok(Ast::DefMacro(loc, id, Box::new(resolve_ast(*expr)?)))
+        }
+        Ast::Begin(loc, body) => {
+            let mut resolved_body = Vec::with_capacity(body.len());
+            for expr in body {
+                resolved_body.push(resolve_ast(expr)?);
+            }
+            Ok(Ast::Begin(loc, resolved_body))
+        }
+        Ast::Cond(loc, branches) => {
+            let mut resolved_branches = Vec::with_capacity(branches.len());
+            for (c, e) in branches {
+                resolved_branches.push((resolve_ast(c)?, resolve_ast(e)?));
+            }
+            Ok(Ast::Cond(loc, resolved_branches))
+        }
+        Ast::Yield(loc, expr) => {
+            Ok(Ast::Yield(loc, Box::new(resolve_ast(*expr)?)))
+        }
+        Ast::CoResume(loc, co, arg) => {
+            Ok(Ast::CoResume(loc, Box::new(resolve_ast(*co)?), Box::new(resolve_ast(*arg)?)))
+        }
+        other => Ok(other),
+    }
+}
+
+pub fn resolve_quasiquote(ast: Ast) -> Result<Ast> {
+    match ast {
+        Ast::Unquote(loc, expr) => {
+            Ok(Ast::Unquote(loc, Box::new(resolve_ast(*expr)?)))
+        }
+        Ast::UnquoteSplicing(loc, expr) => {
+            Ok(Ast::UnquoteSplicing(loc, Box::new(resolve_ast(*expr)?)))
+        }
+        Ast::List(loc, list) => {
+            let mut resolved = Vec::with_capacity(list.len());
+            for item in list {
+                resolved.push(resolve_quasiquote(item)?);
+            }
+            Ok(Ast::List(loc, resolved))
+        }
+        Ast::Record(loc, fields) => {
+            let mut resolved = Vec::with_capacity(fields.len());
+            for (k, v) in fields {
+                resolved.push((k, resolve_quasiquote(v)?));
+            }
+            Ok(Ast::Record(loc, resolved))
+        }
+        other => Ok(other),
     }
 }
