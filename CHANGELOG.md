@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configured a Rust library target in `Cargo.toml` (`src/lib.rs`) allowing `sel` to be embedded inside host applications (e.g. game or graphic engines). Exposes `eval`, `Env`, `Value`, and core bindings.
 - Added `(load "script.scm")` built-in form to dynamically evaluate S-expression files inside the caller's active lexical environment.
 - Implemented robust integration tests (`tests/test_load.scm` and `tests/helper_load.scm`) for file-system loading, binding visibility, TCO, and error handling.
+- Introduced a dedicated `SelError::SandboxViolation` variant to the diagnostic error system.
+- Added directory traversal security checks mapping file load and import calls within a configurable sandbox root. Exposes `eval_sandboxed` and `load_file_sandboxed`.
+- Added a `ffi` Cargo feature flag (enabled by default) to compile out dynamic loading dependencies (`libloading`, `libffi`) and their associated built-ins for sandboxed host environments.
 
 ### Changed
 - Redesigned macro compiler logic to use a postponed AST resolution pass (`resolve_ast`), allowing special forms (like `let`, `when`, `unless`, `if`) to be constructed seamlessly inside quasiquoted macro bodies (e.g. using `~` and `~@`) without triggering parse-time syntax verification.
