@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Introduced a dedicated `SelError::SandboxViolation` variant to the diagnostic error system.
 - Added directory traversal security checks mapping file load and import calls within a configurable sandbox root. Exposes `eval_sandboxed` and `load_file_sandboxed`.
 - Added a `ffi` Cargo feature flag (enabled by default) to compile out dynamic loading dependencies (`libloading`, `libffi`) and their associated built-ins for sandboxed host environments.
+- Added programmatic accessors to `SelError` for embedders: `.kind()` returning a new `SelErrorKind` categorization, `.loc()` extracting the error span, and `.message()` returning location-free causal messages.
 
 ### Changed
 - Redesigned macro compiler logic to use a postponed AST resolution pass (`resolve_ast`), allowing special forms (like `let`, `when`, `unless`, `if`) to be constructed seamlessly inside quasiquoted macro bodies (e.g. using `~` and `~@`) without triggering parse-time syntax verification.
