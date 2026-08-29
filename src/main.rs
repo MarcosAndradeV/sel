@@ -350,8 +350,7 @@ mod tests {
                 let env = Rc::new(RefCell::new(Env::default()));
                 env.borrow_mut().parent = Some(load_core_lib());
                 println!("TEST: {}", entry.path().display());
-                let epath = entry.path();
-                run_file(&epath.to_string_lossy().to_string(), env)
+                run_file(entry.path().to_string_lossy().as_ref(), env)
                     .map_err(|e| eprintln!("{e}"))?;
             }
         }

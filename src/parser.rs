@@ -242,10 +242,7 @@ pub fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
             "cond" => {
                 let mut iter = list.into_iter().skip(1);
                 let mut branches = Vec::new();
-                loop {
-                    let Some(cond) = iter.next() else {
-                        break;
-                    };
+                while let Some(cond) = iter.next() {
                     let expr = iter.next().ok_or_else(|| {
                         SelError::SyntaxError(s_loc, "Missing expr in cond".into())
                     })?;

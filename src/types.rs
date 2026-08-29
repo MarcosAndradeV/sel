@@ -48,6 +48,12 @@ pub struct Record<T> {
     fields: RecordMap<T>,
 }
 
+impl<T> Default for Record<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> Record<T> {
     pub fn new() -> Self {
         Self {

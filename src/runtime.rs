@@ -100,6 +100,7 @@ pub struct CatchHandler {
     pub env: Rc<RefCell<Env>>,
 }
 
+#[derive(Default)]
 pub struct VM {
     pub stack: Vec<Value>,
     pub catch_handlers: Vec<CatchHandler>,

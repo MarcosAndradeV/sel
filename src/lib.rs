@@ -30,6 +30,21 @@ pub fn eval(source: &str, env: Rc<RefCell<Env>>) -> std::result::Result<Value, S
     runtime::execute_asts(asts, env)
 }
 
+/// Evaluate a Scheme file in the given environment and return the result.
+pub fn load_file(script_path: &str, env: Rc<RefCell<Env>>) -> Result<Value, SelError> {
+    let src = internal::read_script(script_path)?;
+    let mut diags = Vec::new();
+    let file_id = intern(script_path);
+    let asts = parser::parse_all(&src, file_id, &mut diags);
+    if !diags.is_empty() {
+        for diag in diags {
+            eprintln!("{}", diag);
+        }
+        return Err(SelError::Trace("invalid syntax".into()));
+    }
+    runtime::execute_asts(asts, env.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
