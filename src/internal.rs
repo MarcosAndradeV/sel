@@ -311,6 +311,7 @@ pub fn value_type_name(v: &Value) -> &str {
         Value::NativeClosure(_) | Value::Closure(_) | Value::NativeFunction(_) => "function",
         Value::Macro { .. } => "macro",
         Value::Pointer(_) => "pointer",
+        #[cfg(feature = "ffi")]
         Value::Library(_) => "library",
         Value::Record(_) => "record",
         Value::Coroutine(_) => "coroutine",
@@ -343,6 +344,7 @@ pub fn display(_loc: Loc, args: Vec<Value>) -> Result<Value> {
     Ok(Value::Nil)
 }
 
+#[cfg(feature = "ffi")]
 pub fn ffi_dlopen(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::Runtime(
@@ -365,6 +367,7 @@ pub fn ffi_dlopen(loc: Loc, args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[cfg(feature = "ffi")]
 pub fn ffi_dlsym(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
         return Err(SelError::Runtime(
@@ -405,6 +408,7 @@ pub fn ffi_dlsym(loc: Loc, args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[cfg(feature = "ffi")]
 #[derive(Debug, Clone)]
 enum FfiType {
     Void,
@@ -425,6 +429,7 @@ enum FfiType {
     Struct(Vec<FfiType>),
 }
 
+#[cfg(feature = "ffi")]
 impl FfiType {
     fn size_and_alignment(&self) -> (usize, usize) {
         match self {
@@ -474,6 +479,7 @@ impl FfiType {
     }
 }
 
+#[cfg(feature = "ffi")]
 fn parse_ffi_type(loc: Loc, val: &Value) -> Result<FfiType> {
     match val {
         Value::Symbol(s) => {
@@ -542,6 +548,7 @@ fn parse_ffi_type(loc: Loc, val: &Value) -> Result<FfiType> {
     }
 }
 
+#[cfg(feature = "ffi")]
 fn serialize_value(
     loc: Loc,
     val: &Value,
@@ -823,6 +830,7 @@ fn serialize_value(
     }
 }
 
+#[cfg(feature = "ffi")]
 unsafe fn deserialize_value(ty: &FfiType, ptr: *const u8) -> Value {
     unsafe {
         match ty {
@@ -899,6 +907,7 @@ unsafe fn deserialize_value(ty: &FfiType, ptr: *const u8) -> Value {
     }
 }
 
+#[cfg(feature = "ffi")]
 pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() != 4 {
         return Err(SelError::Runtime(
@@ -1736,9 +1745,12 @@ pub fn load(env: Rc<RefCell<Env>>) {
     e.insert(intern("println"), Value::NativeFunction(display_newline));
     e.insert(intern("newline"), Value::NativeFunction(newline));
 
-    e.insert(intern("ffi-dlopen"), Value::NativeFunction(ffi_dlopen));
-    e.insert(intern("ffi-dlsym"), Value::NativeFunction(ffi_dlsym));
-    e.insert(intern("ffi-call"), Value::NativeFunction(ffi_call));
+    #[cfg(feature = "ffi")]
+    {
+        e.insert(intern("ffi-dlopen"), Value::NativeFunction(ffi_dlopen));
+        e.insert(intern("ffi-dlsym"), Value::NativeFunction(ffi_dlsym));
+        e.insert(intern("ffi-call"), Value::NativeFunction(ffi_call));
+    }
 
     e.insert(intern("system"), Value::NativeFunction(system));
     e.insert(intern("file-system"), Value::NativeFunction(file_system));

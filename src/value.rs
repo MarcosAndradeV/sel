@@ -69,6 +69,7 @@ pub enum Value {
     NativeClosure(NativeClosureFn),
     Macro(Rc<Macro>),
     Pointer(usize),
+    #[cfg(feature = "ffi")]
     Library(Rc<libloading::Library>),
     Coroutine(Rc<Coroutine>),
     Char(char),
@@ -124,6 +125,7 @@ fn format_value(val: &Value) -> String {
         Value::NativeFunction { .. } => "<function>".to_string(),
         Value::Macro(_) => "<macro>".to_string(),
         Value::Pointer(p) => format!("<pointer: {:#x}>", p),
+        #[cfg(feature = "ffi")]
         Value::Library(_) => "<library>".to_string(),
         Value::Coroutine(_) => "<coroutine>".to_string(),
     }

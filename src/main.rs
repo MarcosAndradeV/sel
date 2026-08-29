@@ -347,6 +347,13 @@ mod tests {
                 .is_file()
                 && entry.path().extension().is_some_and(|ext| ext == "scm")
             {
+                #[cfg(not(feature = "ffi"))]
+                let path_str = entry.path().to_string_lossy().to_string();
+                #[cfg(not(feature = "ffi"))]
+                if path_str.contains("ffi") {
+                    println!("Skipping FFI test (feature 'ffi' is disabled): {}", path_str);
+                    continue;
+                }
                 let env = Rc::new(RefCell::new(Env::default()));
                 env.borrow_mut().parent = Some(load_core_lib());
                 println!("TEST: {}", entry.path().display());

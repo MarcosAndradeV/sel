@@ -19,9 +19,13 @@ path = "src/lib.rs"
 name = "sel"
 path = "src/main.rs"
 
+[features]
+default = ["ffi"]
+ffi = ["dep:libloading", "dep:libffi"]
+
 [dependencies]
 rustyline = "18.0.0"
-libloading = "0.8.3"
-libffi = "5.1.0"
+libloading = { version = "0.8.3", optional = true }
+libffi = { version = "5.1.0", optional = true }
 rustc-hash = "2.1.2"
 indexmap = "2.14.0"

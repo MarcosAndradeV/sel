@@ -19,6 +19,7 @@ pub enum SelError {
     Runtime(Loc, String),
     TypeError(Loc, String),
     Trace(String),
+    SandboxViolation(Loc, String),
 }
 
 impl std::fmt::Display for SelError {
@@ -81,6 +82,9 @@ impl std::fmt::Display for SelError {
                 write!(f, "runtime error at {}:\n\nCaused by:\n    {}", loc, s)
             }
             Self::TypeError(loc, s) => write!(f, "type error at {}:\n\nCaused by:\n    {}", loc, s),
+            Self::SandboxViolation(loc, s) => {
+                write!(f, "sandbox error at {}:\n\nCaused by:\n    {}", loc, s)
+            }
             Self::Internal(s) => write!(f, "internal error caused by:\n    {}", s),
             SelError::Trace(errs) => {
                 write!(f, "{errs}")

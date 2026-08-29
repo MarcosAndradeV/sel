@@ -104,6 +104,27 @@ pub struct CatchHandler {
 pub struct VM {
     pub stack: Vec<Value>,
     pub catch_handlers: Vec<CatchHandler>,
+    pub sandbox_root: Option<PathBuf>,
+}
+
+fn check_sandbox(path: &std::path::Path, sandbox_root: &std::path::Path, loc: Loc) -> Result<()> {
+    let canonical_path = path.canonicalize().map_err(|e| {
+        SelError::SandboxViolation(loc, format!("Failed to resolve path {}: {}", path.display(), e))
+    })?;
+    let canonical_root = sandbox_root.canonicalize().map_err(|e| {
+        SelError::SandboxViolation(loc, format!("Failed to resolve sandbox root {}: {}", sandbox_root.display(), e))
+    })?;
+    if !canonical_path.starts_with(&canonical_root) {
+        return Err(SelError::SandboxViolation(
+            loc,
+            format!(
+                "Sandbox violation: path {} is outside root {}",
+                canonical_path.display(),
+                canonical_root.display()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 impl VM {
@@ -111,6 +132,7 @@ impl VM {
         Self {
             stack: Vec::new(),
             catch_handlers: Vec::new(),
+            sandbox_root: None,
         }
     }
 
@@ -789,6 +811,10 @@ impl VM {
                         (sym.clone(), pth)
                     };
 
+                    if let Some(ref root) = self.sandbox_root {
+                        check_sandbox(&fp, root, loc)?;
+                    }
+
                     let src = read_script(&fp).map_err(|e| SelError::Internal(e.to_string()))?;
                     let mut diags = Vec::new();
                     let file_id = intern(fp.to_string_lossy().as_ref());
@@ -810,7 +836,7 @@ impl VM {
                         base_name
                     };
 
-                    let rec = import_module(&prefix, asts, m_env)?;
+                    let rec = import_module_sandboxed(&prefix, asts, m_env, self.sandbox_root.clone())?;
                     let mut frame_env = frame.env.borrow_mut();
                     for (sym, val) in rec.into_fields() {
                         frame_env.insert(sym, val);
@@ -1108,6 +1134,10 @@ impl VM {
                                 .join(path_str.as_ref())
                         };
 
+                        if let Some(ref root) = self.sandbox_root {
+                            check_sandbox(&target_path, root, loc)?;
+                        }
+
                         let src = read_script(&target_path)
                             .map_err(|e| SelError::Internal(e.to_string()))?;
                         let mut diags = Vec::new();
@@ -1117,7 +1147,7 @@ impl VM {
                             return Err(diags.remove(0));
                         }
 
-                        let result_val = execute_asts(asts, frame.env.clone())?;
+                        let result_val = execute_asts_sandboxed(asts, frame.env.clone(), self.sandbox_root.clone())?;
                         self.stack.push(result_val);
                     } else {
                         return Err(SelError::Runtime(
@@ -1278,9 +1308,14 @@ pub fn macro_expand_quasiquote(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
     }
 }
 
-pub fn execute_asts(asts: Vec<Ast>, env: Rc<RefCell<Env>>) -> Result<Value> {
+pub fn execute_asts_sandboxed(
+    asts: Vec<Ast>,
+    env: Rc<RefCell<Env>>,
+    sandbox_root: Option<PathBuf>,
+) -> Result<Value> {
     let mut last_val = Value::Nil;
     let mut vm = VM::new();
+    vm.sandbox_root = sandbox_root;
     for ast in asts {
         let loc = ast.loc();
         let expanded = macro_expand(ast, env.clone())?;
@@ -1293,13 +1328,18 @@ pub fn execute_asts(asts: Vec<Ast>, env: Rc<RefCell<Env>>) -> Result<Value> {
     Ok(last_val)
 }
 
-pub fn import_module(
+pub fn execute_asts(asts: Vec<Ast>, env: Rc<RefCell<Env>>) -> Result<Value> {
+    execute_asts_sandboxed(asts, env, None)
+}
+
+pub fn import_module_sandboxed(
     module_name: &str,
     asts: Vec<Ast>,
     env: Rc<RefCell<Env>>,
+    sandbox_root: Option<PathBuf>,
 ) -> Result<Record<Value>> {
     let mut file_record = Record::new();
-    execute_asts(asts, env.clone())?;
+    execute_asts_sandboxed(asts, env.clone(), sandbox_root)?;
     for (sym, value) in env.borrow().bindings.iter() {
         if env.borrow().private_bindings.contains(sym) {
             continue;
@@ -1310,4 +1350,12 @@ pub fn import_module(
         );
     }
     Ok(file_record)
+}
+
+pub fn import_module(
+    module_name: &str,
+    asts: Vec<Ast>,
+    env: Rc<RefCell<Env>>,
+) -> Result<Record<Value>> {
+    import_module_sandboxed(module_name, asts, env, None)
 }
