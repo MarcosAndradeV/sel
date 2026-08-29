@@ -10,6 +10,7 @@ pub mod value;
 
 // Re-exports
 pub use diagnostics::SelError;
+pub use diagnostics::SelErrorKind;
 pub use internal::load_core_lib;
 pub use lexer::Loc;
 pub use runtime::Env;
@@ -146,5 +147,27 @@ mod tests {
         );
         assert!(res_denied.is_err());
         assert!(matches!(res_denied.unwrap_err(), SelError::SandboxViolation(_, _)));
+    }
+
+    #[test]
+    fn test_error_improvements() {
+        let env = Rc::new(RefCell::new(Env::default()));
+        env.borrow_mut().parent = Some(load_core_lib());
+
+        // TypeError
+        let res_type = eval("(+ \"hello\" 1)", env.clone());
+        assert!(res_type.is_err());
+        let err_type = res_type.unwrap_err();
+        assert_eq!(err_type.kind(), SelErrorKind::Type);
+        assert!(err_type.loc().is_some());
+        assert!(err_type.message().contains("Invalid argument to +: expected number"));
+
+        // Undefined NameError
+        let res_name = eval("(non-existent-variable)", env);
+        assert!(res_name.is_err());
+        let err_name = res_name.unwrap_err();
+        assert_eq!(err_name.kind(), SelErrorKind::Name);
+        assert!(err_name.loc().is_some());
+        assert_eq!(err_name.message(), "Undefined variable `non-existent-variable`");
     }
 }

@@ -94,3 +94,70 @@ impl std::fmt::Display for SelError {
 }
 
 impl std::error::Error for SelError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SelErrorKind {
+    Syntax,
+    Name,
+    Arity,
+    Type,
+    Sandbox,
+    Internal,
+    Runtime,
+}
+
+impl SelError {
+    pub fn kind(&self) -> SelErrorKind {
+        match self {
+            Self::UnexpectedEOF(_)
+            | Self::UnexpectedToken(_, _)
+            | Self::SyntaxError(_, _)
+            | Self::InvalidNumber(_)
+            | Self::UnterminatedString(_)
+            | Self::Trace(_) => SelErrorKind::Syntax,
+            Self::UndefinedVariable(_, _) | Self::UnboundVariable(_, _) => SelErrorKind::Name,
+            Self::ArityMismatch { .. } => SelErrorKind::Arity,
+            Self::TypeError(_, _) => SelErrorKind::Type,
+            Self::SandboxViolation(_, _) => SelErrorKind::Sandbox,
+            Self::Internal(_) => SelErrorKind::Internal,
+            Self::Runtime(_, _) => SelErrorKind::Runtime,
+        }
+    }
+
+    pub fn loc(&self) -> Option<Loc> {
+        match self {
+            Self::UnexpectedEOF(loc)
+            | Self::UnexpectedToken(loc, _)
+            | Self::SyntaxError(loc, _)
+            | Self::UndefinedVariable(loc, _)
+            | Self::UnboundVariable(loc, _)
+            | Self::UnterminatedString(loc)
+            | Self::Runtime(loc, _)
+            | Self::TypeError(loc, _)
+            | Self::SandboxViolation(loc, _) => Some(*loc),
+            Self::ArityMismatch { loc, .. } => Some(*loc),
+            Self::InvalidNumber(token) => Some(token.loc),
+            Self::Internal(_) | Self::Trace(_) => None,
+        }
+    }
+
+    pub fn message(&self) -> String {
+        match self {
+            Self::UnexpectedEOF(_) => "Unexpected EOF".to_string(),
+            Self::UnexpectedToken(_, s) => format!("Unexpected token `{}`", s),
+            Self::SyntaxError(_, msg) => msg.clone(),
+            Self::UndefinedVariable(_, id) => format!("Undefined variable `{}`", lookup(*id)),
+            Self::UnboundVariable(_, id) => format!("Unbound variable in set!: {}", lookup(*id)),
+            Self::ArityMismatch { expected, actual, .. } => {
+                format!("Arity mismatch: expected {}, got {}", expected, actual)
+            }
+            Self::InvalidNumber(token) => format!("Invalid number format `{}`", token.source),
+            Self::UnterminatedString(_) => "Unterminated string".to_string(),
+            Self::Runtime(_, msg) => msg.clone(),
+            Self::TypeError(_, msg) => msg.clone(),
+            Self::SandboxViolation(_, msg) => msg.clone(),
+            Self::Internal(msg) => msg.clone(),
+            Self::Trace(msg) => msg.clone(),
+        }
+    }
+}
