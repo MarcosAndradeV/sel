@@ -90,6 +90,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_co_yield_colosures() {
+        let env = Rc::new(RefCell::new(Env::default()));
+        env.borrow_mut().parent = Some(load_core_lib());
+
+        // Basic calculation
+        let res = eval("(define f \\() (co-yield)) (f)", env.clone()).unwrap();
+        assert!(matches!(res, Value::Nil));
+    }
+
+    #[test]
     fn test_library_eval() {
         let env = Rc::new(RefCell::new(Env::default()));
         env.borrow_mut().parent = Some(load_core_lib());

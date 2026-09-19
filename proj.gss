@@ -2,5 +2,7 @@ config = {
     scripts = {
         test = "cargo test"
         install = "cargo install --path ."
+        build_docs = "cd docs && npm install"
+        docs = "cd docs && npm run dev"
     }
 }
