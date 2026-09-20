@@ -379,6 +379,11 @@ impl<'a> Compiler<'a> {
                 self.chunk.patch_jump(catch_idx, catch_start_ip);
 
                 // We build an environment for the error variable (which the VM will have pushed onto the stack)
+                self.scope_depth += 1;
+                self.locals.push(Local {
+                    name: err_var,
+                    depth: self.scope_depth,
+                });
                 self.chunk.write((loc, OpCode::BuildEnv(vec![err_var])));
 
                 if catch_body.is_empty() {
@@ -391,10 +396,12 @@ impl<'a> Compiler<'a> {
                         self.compile(expr)?;
                         self.chunk.write((loc, OpCode::Pop));
                     }
-                    self.compile_expr(last, is_tail)?;
+                    self.compile_expr(last, false)?;
                 }
 
                 self.chunk.write((loc, OpCode::PopEnv(1)));
+                self.locals.retain(|local| local.depth < self.scope_depth);
+                self.scope_depth -= 1;
 
                 let end_ip = self.chunk.code.len();
                 self.chunk.patch_jump(jump_end_idx, end_ip);

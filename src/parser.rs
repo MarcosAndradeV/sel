@@ -25,57 +25,7 @@ pub fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                 let arg = iter.next().unwrap_or(Ast::Nil(s_loc));
                 Ok(Ast::CoResume(s_loc, Box::new(co), Box::new(arg)))
             }
-            "try" => {
-                let mut iter = list.into_iter().skip(1);
-                let body = iter
-                    .next()
-                    .ok_or_else(|| SelError::SyntaxError(s_loc, "Missing body in try".into()))?;
-                let catch_clause = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Missing catch clause in try".into())
-                })?;
-
-                match catch_clause {
-                    Ast::List(c_loc, c_list) => {
-                        let mut c_iter = c_list.into_iter();
-                        let first = c_iter.next().ok_or_else(|| {
-                            SelError::SyntaxError(
-                                c_loc,
-                                "Expected (catch err-var ...) clause".into(),
-                            )
-                        })?;
-
-                        match first {
-                            Ast::Symbol(_, catch_sym_id) if lookup(catch_sym_id) == "catch" => {
-                                let err_var = c_iter.next().ok_or_else(|| {
-                                    SelError::SyntaxError(
-                                        c_loc,
-                                        "Expected error variable in catch clause".into(),
-                                    )
-                                })?;
-                                let err_var_id = match err_var {
-                                    Ast::Symbol(_, id) => id,
-                                    _ => {
-                                        return Err(SelError::SyntaxError(
-                                            c_loc,
-                                            "Expected symbol for error variable".into(),
-                                        ));
-                                    }
-                                };
-                                let catch_body: Vec<Ast> = c_iter.collect();
-                                Ok(Ast::Try(s_loc, Box::new(body), err_var_id, catch_body))
-                            }
-                            _ => Err(SelError::SyntaxError(
-                                c_loc,
-                                "Expected catch keyword as first element of catch clause".into(),
-                            )),
-                        }
-                    }
-                    _ => Err(SelError::SyntaxError(
-                        s_loc,
-                        "Expected catch clause to be a list".into(),
-                    )),
-                }
-            }
+            "try" => parse_try(list, s_loc),
             "->" => {
                 let mut iter = list.into_iter().skip(1);
                 let mut first_v = iter.next().ok_or_else(|| {
@@ -239,17 +189,17 @@ pub fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                     false_branch.map(Box::new),
                 ))
             }
-            "cond" => {
-                let mut iter = list.into_iter().skip(1);
-                let mut branches = Vec::new();
-                while let Some(cond) = iter.next() {
-                    let expr = iter.next().ok_or_else(|| {
-                        SelError::SyntaxError(s_loc, "Missing expr in cond".into())
-                    })?;
-                    branches.push((cond, expr));
-                }
-                Ok(Ast::Cond(s_loc, branches))
-            }
+            // "cond" => {
+            //     let mut iter = list.into_iter().skip(1);
+            //     let mut branches = Vec::new();
+            //     while let Some(cond) = iter.next() {
+            //         let expr = iter.next().ok_or_else(|| {
+            //             SelError::SyntaxError(s_loc, "Missing expr in cond".into())
+            //         })?;
+            //         branches.push((cond, expr));
+            //     }
+            //     Ok(Ast::Cond(s_loc, branches))
+            // }
             "ffi-func" => {
                 // (define puts (ffi-func 'i32 '('*u8)))
                 let mut iter = list.into_iter().skip(1);
@@ -622,11 +572,6 @@ pub fn parse_expr(tokens: &[Token], pos: &mut usize, diags: &mut Vec<SelError>) 
             "nil" => Ok(Ast::Nil(t.loc)),
             ":private" => Ok(Ast::VisibilityDirective(t.loc, false)),
             ":public" => Ok(Ast::VisibilityDirective(t.loc, true)),
-            ":do" => {
-                *pos += 1;
-                let expr = parse_list_expr(tokens, pos, t, diags)?;
-                Ok(Ast::Begin(t.loc, expr))
-            }
             _ => {
                 if let Some(tb) = tokens.get(*pos)
                     && tb.kind == TokenKind::Bind
@@ -792,9 +737,10 @@ pub fn resolve_ast(ast: Ast) -> Result<Ast> {
                 return Ok(Ast::Nil(loc));
             }
             if let Some(Ast::Symbol(_, sym_id)) = list.first() {
-                if lookup(*sym_id) == "match" {
-                    let matched_ast = optimize_ast(list, loc)?;
-                    return resolve_ast(matched_ast);
+                let s = lookup(*sym_id);
+                if s == "match" || s == "try" {
+                    let opt_ast = optimize_ast(list, loc)?;
+                    return resolve_ast(opt_ast);
                 }
             }
             let mut resolved_list = Vec::with_capacity(list.len());
@@ -981,9 +927,15 @@ pub fn parse_pattern(ast: Ast) -> Result<Pattern> {
                     "quote" => {
                         let mut iter = items.into_iter().skip(1);
                         let expr = iter.next().ok_or_else(|| {
-                            SelError::SyntaxError(s_loc, "Expected expression in quote pattern".into())
+                            SelError::SyntaxError(
+                                s_loc,
+                                "Expected expression in quote pattern".into(),
+                            )
                         })?;
-                        return Ok(Pattern::Literal(loc, Box::new(Ast::Quote(loc, Box::new(expr)))));
+                        return Ok(Pattern::Literal(
+                            loc,
+                            Box::new(Ast::Quote(loc, Box::new(expr))),
+                        ));
                     }
                     "cons" => {
                         if items.len() != 3 {
@@ -1076,10 +1028,7 @@ pub fn parse_match_clause(ast: Ast) -> Result<MatchClause> {
         ));
     };
     if items.is_empty() {
-        return Err(SelError::SyntaxError(
-            c_loc,
-            "Empty clause in match".into(),
-        ));
+        return Err(SelError::SyntaxError(c_loc, "Empty clause in match".into()));
     }
     let pat_ast = items.remove(0);
     let pattern = parse_pattern(pat_ast)?;
@@ -1122,6 +1071,14 @@ pub fn parse_match_clause(ast: Ast) -> Result<MatchClause> {
         }
     }
 
+    if !items.is_empty() {
+        if let Ast::Symbol(_, sym_id) = &items[0] {
+            if lookup(*sym_id) == ":do" {
+                items.remove(0);
+            }
+        }
+    }
+
     let body = if items.is_empty() {
         vec![Ast::Nil(c_loc)]
     } else {
@@ -1157,5 +1114,66 @@ pub fn resolve_quasiquote(ast: Ast) -> Result<Ast> {
         }
         Ast::Load(loc, path) => Ok(Ast::Load(loc, Box::new(resolve_quasiquote(*path)?))),
         other => Ok(other),
+    }
+}
+
+fn parse_try(list: Vec<Ast>, s_loc: Loc) -> Result<Ast> {
+    let all_items: Vec<Ast> = list.into_iter().skip(1).collect();
+
+    let mut iter = all_items.into_iter();
+    let mut first = iter
+        .next()
+        .ok_or_else(|| SelError::SyntaxError(s_loc, "Missing body in try".into()))?;
+    if let Ast::Symbol(_, s) = &first {
+        if lookup(*s) == ":do" {
+            first = iter.next().ok_or_else(|| {
+                SelError::SyntaxError(s_loc, "Missing body after :do in try".into())
+            })?;
+        }
+    }
+    let catch_clause = iter
+        .next()
+        .ok_or_else(|| SelError::SyntaxError(s_loc, "Missing catch clause in try".into()))?;
+
+    match catch_clause {
+        Ast::List(c_loc, c_list) => {
+            let mut c_iter = c_list.into_iter();
+            let c_first = c_iter.next().ok_or_else(|| {
+                SelError::SyntaxError(c_loc, "Expected (catch err-var ...) clause".into())
+            })?;
+            match c_first {
+                Ast::Symbol(_, catch_sym_id) if lookup(catch_sym_id) == "catch" => {
+                    let err_var = c_iter.next().ok_or_else(|| {
+                        SelError::SyntaxError(
+                            c_loc,
+                            "Expected error variable in catch clause".into(),
+                        )
+                    })?;
+                    let err_var_id = match err_var {
+                        Ast::Symbol(_, id) => id,
+                        _ => {
+                            return Err(SelError::SyntaxError(
+                                c_loc,
+                                "Expected symbol for error variable".into(),
+                            ));
+                        }
+                    };
+                    let catch_body: Vec<Ast> = c_iter.collect();
+                    return Ok(Ast::Try(s_loc, Box::new(first), err_var_id, catch_body));
+                }
+                _ => {
+                    return Err(SelError::SyntaxError(
+                        c_loc,
+                        "Expected catch keyword as first element of catch clause".into(),
+                    ));
+                }
+            }
+        }
+        _ => {
+            return Err(SelError::SyntaxError(
+                s_loc,
+                "Expected catch clause to be a list".into(),
+            ));
+        }
     }
 }

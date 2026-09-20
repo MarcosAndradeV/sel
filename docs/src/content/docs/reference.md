@@ -180,6 +180,67 @@ If no clause matches the value, a descriptive runtime error is raised: `(error "
     ((cons h t) (sum-list t (+ acc h)))))
 ```
 
+### defn
+Defines a named function using multi-clause structural pattern matching, inspired by Elixir and Erlang. Each clause specifies a pattern to match against the arguments, with optional `:where` or `:when` guards and an optional `:do` marker.
+
+```lisp
+;; Single-argument function with shorthand name:
+(defn fib
+  (0 :do 0)
+  (1 :do 1)
+  (n :do (+ (fib (- n 1)) (fib (- n 2)))))
+
+;; Multi-argument function with guards:
+(defn (discount tier amount)
+  (('vip amt) :where (>= amt 1000) :do 0.25)
+  (('vip _) :do 0.15)
+  (('member amt) :where (>= amt 500) :do 0.10)
+  ((_ _) :do 0.0))
+
+;; Destructuring record arguments:
+(defn (handle-event evt)
+  ({type 'login user u} :where (eq? u "admin") :do "admin-session")
+  ({type 'login user u} :do "user-session")
+  (_ :do "ignored"))
+```
+
+### with
+Railway-oriented validation and execution construct inspired by Elixir's `with`. Each step matches an evaluated expression against a pattern. If all steps match, the `:do` block executes. If any step fails to match, execution short-circuits immediately. When an `:else` block is provided, the mismatched value is dispatched to the matching `:else` pattern; without `:else`, the non-matching value is returned directly:
+
+```lisp
+(with (((list 'ok user) (fetch-user id))
+       ((list 'ok perms) (fetch-permissions (rget user 'role))))
+  :do
+  (render-dashboard user perms)
+  :else
+  ((list 'error 'user-not-found) :do "User missing from system")
+  ((list 'error 'invalid-role) :do "Assigned role is invalid")
+  (other :do "Unexpected error occurred"))
+```
+
+### for
+List comprehensions over one or more collection generators, supporting intermediate `:let` bindings, conditional filtering with `:when` or `:where`, and structural pattern matching on generator items:
+
+```lisp
+;; Filtered transformation:
+(for (x (range 10))
+  :when (= (mod x 2) 0)
+  :do (* x x))
+;; => (0 4 16 36 64)
+
+;; Multi-generator cartesian product with local bindings:
+(for (x '(1 2 3))
+     (y '(10 20))
+  :let ((sum (+ x y)))
+  :when (> sum 15)
+  :do sum)
+;; => (21 22 23)
+
+;; Pattern matching on records (automatically filters non-matching items):
+(for ({name n role 'admin} users)
+  :do n)
+```
+
 ### load
 Loads and evaluates external Scheme files dynamically in the current lexical environment.
 
@@ -307,18 +368,36 @@ Macros rely extensively on quoting structures to manipulate syntax safely:
 
 ---
 
-## 5. Pipelines & Thread-First (`->`)
+## 5. Pipelines (`|>` and `->`)
 
-`sel` includes a native thread-first operator (`->`) which rewrites subsequent expressions to inject the previous result as the **last** argument. This allows deeply nested function calls to be read as sequential processing steps.
+`sel` provides two complementary pipeline operators to chain transformations sequentially without deep nesting:
+
+### Pipeline Operator (`|>`) - Thread-Last (Collections)
+`|>` rewrites subsequent expressions to inject the previous result as the **last** argument of each step. This is ideal for collection transformations (`map`, `filter`, `foldl`, etc.):
 
 ```lisp
-;; Without thread-first:
-(reverse (filter even? (range 10)))
+;; Without pipelines:
+(reverse (filter even? (map (lambda (x) (* x 2)) (range 5))))
 
-;; With thread-first:
-(-> (range 10)
+;; With |> (thread-last):
+(|> (range 5)
+    (map (lambda (x) (* x 2)))
     (filter even?)
     (reverse))
+;; => (8 6 4 2 0)
+```
+
+### Thread-First Operator (`->`) - Thread-First (Records & Objects)
+`->` rewrites subsequent expressions to inject the previous result as the **first** argument of each step (immediately following the function name). This is ideal for records and dictionaries:
+
+```lisp
+;; Threading record transformations:
+(-> %{}
+    (assoc 'name "Alice")
+    (assoc 'age 30)
+    (assoc 'role "Engineer")
+    (dissoc 'role))
+;; => %{age: 30, name: "Alice"}
 ```
 
 ---

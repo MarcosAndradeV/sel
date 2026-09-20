@@ -1382,6 +1382,19 @@ pub fn is_string(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+pub fn string_contains(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 2 arguments for string-contains?".into(),
+        ));
+    }
+    match (&args[0], &args[1]) {
+        (Value::String(s), Value::String(sub)) => Ok(Value::Boolean(s.contains(sub.as_str()))),
+        _ => Ok(Value::Boolean(false)),
+    }
+}
+
 pub fn is_symbol(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::Runtime(
@@ -1791,6 +1804,7 @@ pub fn load(env: Rc<RefCell<Env>>) {
     e.insert(intern("list?"), Value::NativeFunction(is_list));
     e.insert(intern("number?"), Value::NativeFunction(is_number));
     e.insert(intern("string?"), Value::NativeFunction(is_string));
+    e.insert(intern("string-contains?"), Value::NativeFunction(string_contains));
     e.insert(intern("symbol?"), Value::NativeFunction(is_symbol));
     e.insert(intern("gensym"), Value::NativeFunction(gensym));
     e.insert(intern("function?"), Value::NativeFunction(is_function));

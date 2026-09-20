@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Comprehensive pattern matching system (`match`, `match-lambda`) supporting:
+  - Literals (numbers, strings, booleans, nil, symbols)
+  - Wildcards (`_`) and variable bindings
+  - List destructuring with rest patterns (`(h . t)` or `(h & t)`)
+  - Vector destructuring (`[x y z]`)
+  - Record destructuring with field binding and punning (`%{name, role: r}`)
+  - Guard expressions via `:when` or `:where`
+  - Deep nested pattern composition and exhaustiveness verification
+- Elixir, Erlang, and OCaml-inspired functional UX syntax and control-flow macros:
+  - Pipeline operators: `|>` (thread-last for collection pipelines) and `->` (thread-first for records and dictionaries).
+  - Multi-clause function definitions (`defn`) with pattern matching, guard expressions (`:when`/`:where`), and `:do` syntax.
+  - Railway-oriented `with` macro for chaining monadic/fallible operations with `:do` bodies and `:else` failure dispatch.
+  - Comprehensive list comprehensions (`for`) supporting multiple generators, intermediate `:let` bindings, `:when`/`:where` filter guards, and `:do` collection expressions.
+  - Core helper `string-contains?` for substring inspection.
 - Configured a Rust library target in `Cargo.toml` (`src/lib.rs`) allowing `sel` to be embedded inside host applications (e.g. game or graphic engines). Exposes `eval`, `Env`, `Value`, and core bindings.
 - Added `(load "script.scm")` built-in form to dynamically evaluate S-expression files inside the caller's active lexical environment.
 - Implemented robust integration tests (`tests/test_load.scm` and `tests/helper_load.scm`) for file-system loading, binding visibility, TCO, and error handling.
@@ -19,3 +33,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Redesigned macro compiler logic to use a postponed AST resolution pass (`resolve_ast`), allowing special forms (like `let`, `when`, `unless`, `if`) to be constructed seamlessly inside quasiquoted macro bodies (e.g. using `~` and `~@`) without triggering parse-time syntax verification.
 - Explicitly wrapped `while` and `until` bodies in an `Ast::List` rather than compiling raw statements directly, preventing compiler panics when the first statement in the body matches a special form keyword.
+- Fixed `Ast::Try` compiler locals registration and scope depth tracking in catch blocks, ensuring accurate local variable resolution in nested closures.

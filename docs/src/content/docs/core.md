@@ -42,6 +42,7 @@ These predicates allow runtime type introspection. They all take **1 argument** 
 - `(list? x)`: Returns `#t` if `x` is a sequence list.
 - `(number? x)`: Returns `#t` if `x` is an integer or floating-point number.
 - `(string? x)`: Returns `#t` if `x` is a string.
+- `(string-contains? str substr)`: Returns `#t` if `str` contains substring `substr`, else `#f`.
 - `(symbol? x)`: Returns `#t` if `x` is an interned symbol.
 - `(function? x)`: Returns `#t` if `x` is a native function or compiled Scheme closure.
 - `(record? x)`: Returns `#t` if `x` is a record mapping.
@@ -297,3 +298,66 @@ Allows functional error-handling patterns without stack-unwinding `try/catch` cl
   (describe-num 0) ; "zero"
   (describe-num 5) ; 105
   ```
+
+- `(defn head &clauses)`: *Macro*. Defines a named function using multi-clause pattern matching (Elixir/Erlang style). Supports `:where` / `:when` guards and `:do` markers:
+  ```lisp
+  (defn fib
+    (0 :do 0)
+    (1 :do 1)
+    (n :do (+ (fib (- n 1)) (fib (- n 2)))))
+
+  (defn (classify-age age)
+    (n :where (< n 0) :do "invalid")
+    (n :when (< n 18) :do "minor")
+    (_ :do "adult"))
+  ```
+
+### Pipelines
+
+- `(|> val &forms)`: *Macro*. Elixir/OCaml-style thread-last pipeline operator. Pipes `val` into subsequent function calls as the **last** argument (or as the sole argument if given a bare function identifier). Ideal for collection workflows with `map`, `filter`, and `foldr`:
+  ```lisp
+  (|> (range 10)
+      (filter even?)
+      (map \(x) (* x x))
+      reverse)
+  ```
+
+- `(-> val &forms)`: *Macro*. Thread-first pipeline operator. Injects `val` as the **first** argument after the function name in each subsequent form. Ideal for record transformations:
+  ```lisp
+  (-> user
+      (assoc 'balance 500)
+      (dissoc 'temporary-token))
+  ```
+
+### Railway-Oriented Programming
+
+- `(with [clauses] :do body ... [:else (err-pat err-body ...) ...])`: *Macro*. Chains pattern matching operations where each step must match its pattern to proceed. If any step fails to match, execution short-circuits immediately. If `:else` clauses are provided, the mismatched value is dispatched to the matching `:else` clause; if no `:else` is given, the non-matching value is returned directly:
+  ```lisp
+  (with (((list 'ok user) (fetch-user id))
+         ((list 'ok perms) (fetch-perms user)))
+    :do
+    (list user perms)
+    :else
+    ((list 'error 'not-found) "User not found")
+    ((list 'error 'no-perms) "Permissions missing"))
+  ```
+
+### List Comprehensions
+
+- `(for (var seq) ... [:let (bindings)] [:when cond] :do body ...)`: *Macro*. Expressive list comprehension over one or more generators. Supports nested cartesian product traversals, intermediate `:let` bindings, conditional filtering with `:when` or `:where`, and structural pattern matching on generator items:
+  ```lisp
+  ;; Filtered square calculation
+  (for (x (range 10))
+    :when (= (mod x 2) 0)
+    :do (* x x))
+  ;; => (0 4 16 36 64)
+
+  ;; Cartesian product with local bindings
+  (for (x '(1 2 3))
+       (y '(10 20))
+    :let ((sum (+ x y)))
+    :when (> sum 15)
+    :do sum)
+  ;; => (21 22 23)
+  ```
+
