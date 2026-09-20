@@ -5,7 +5,7 @@ use crate::ast::*;
 use crate::diagnostics::*;
 use crate::lexer::Loc;
 use crate::runtime::*;
-use crate::types::lookup;
+use crate::types::{intern, lookup};
 
 use crate::value::Closure;
 use crate::value::Macro;
@@ -46,6 +46,10 @@ impl<'a> Compiler<'a> {
             Ast::Load(loc, path) => {
                 self.compile_expr(*path, false)?;
                 self.chunk.write((loc, OpCode::Load));
+            }
+            Ast::Match(loc, target, clauses) => {
+                let lowered = lower_match(loc, *target, clauses)?;
+                self.compile_expr(lowered, is_tail)?;
             }
             Ast::VisibilityDirective(loc, is_public) => {
                 self.chunk.write((loc, OpCode::SetVisibility(is_public)));
@@ -240,6 +244,8 @@ impl<'a> Compiler<'a> {
                 self.chunk
                     .patch_jump(jump_if_false_idx, self.chunk.code.len());
                 self.chunk.write((loc, OpCode::Pop));
+                let idx = self.chunk.add_constant(Value::Nil);
+                self.chunk.write((loc, OpCode::Constant(idx)));
 
                 self.chunk.patch_jump(jump_end_idx, self.chunk.code.len());
             }
@@ -1256,4 +1262,291 @@ impl Chunk {
             }
         }
     }
+}
+
+static MATCH_GEN_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn gen_match_id(prefix: &str) -> u32 {
+    let id = MATCH_GEN_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    intern(&format!("{}_{}", prefix, id))
+}
+
+fn compile_pattern(
+    pat: &Pattern,
+    curr_expr: Ast,
+    conditions: &mut Vec<Ast>,
+    bindings: &mut Vec<(u32, Ast)>,
+) -> Result<()> {
+    match pat {
+        Pattern::Wildcard(_) => Ok(()),
+        Pattern::Variable(_, id) => {
+            bindings.push((*id, curr_expr));
+            Ok(())
+        }
+        Pattern::Literal(loc, ast) => {
+            conditions.push(Ast::List(
+                *loc,
+                vec![
+                    Ast::Symbol(*loc, intern("eq?")),
+                    curr_expr,
+                    (**ast).clone(),
+                ],
+            ));
+            Ok(())
+        }
+        Pattern::Cons(loc, head_pat, tail_pat) => {
+            conditions.push(Ast::List(
+                *loc,
+                vec![Ast::Symbol(*loc, intern("list?")), curr_expr.clone()],
+            ));
+            let empty_expr = Ast::List(
+                *loc,
+                vec![Ast::Symbol(*loc, intern("empty?")), curr_expr.clone()],
+            );
+            conditions.push(Ast::List(
+                *loc,
+                vec![Ast::Symbol(*loc, intern("not")), empty_expr],
+            ));
+
+            let head_expr = Ast::List(
+                *loc,
+                vec![Ast::Symbol(*loc, intern("car")), curr_expr.clone()],
+            );
+            let tail_expr = Ast::List(
+                *loc,
+                vec![Ast::Symbol(*loc, intern("cdr")), curr_expr],
+            );
+            compile_pattern(head_pat, head_expr, conditions, bindings)?;
+            compile_pattern(tail_pat, tail_expr, conditions, bindings)
+        }
+        Pattern::List(loc, sub_pats) => {
+            conditions.push(Ast::List(
+                *loc,
+                vec![Ast::Symbol(*loc, intern("list?")), curr_expr.clone()],
+            ));
+            if sub_pats.is_empty() {
+                conditions.push(Ast::List(
+                    *loc,
+                    vec![Ast::Symbol(*loc, intern("empty?")), curr_expr],
+                ));
+            } else {
+                let count_expr = Ast::List(
+                    *loc,
+                    vec![Ast::Symbol(*loc, intern("count")), curr_expr.clone()],
+                );
+                let len_ast = Ast::Integer(*loc, sub_pats.len() as i64);
+                conditions.push(Ast::List(
+                    *loc,
+                    vec![Ast::Symbol(*loc, intern("=")), count_expr, len_ast],
+                ));
+                for (i, p) in sub_pats.iter().enumerate() {
+                    let elem_expr = Ast::List(
+                        *loc,
+                        vec![
+                            Ast::Symbol(*loc, intern("nth")),
+                            curr_expr.clone(),
+                            Ast::Integer(*loc, i as i64),
+                        ],
+                    );
+                    compile_pattern(p, elem_expr, conditions, bindings)?;
+                }
+            }
+            Ok(())
+        }
+        Pattern::Rest(loc, prefix_pats, rest_pat) => {
+            conditions.push(Ast::List(
+                *loc,
+                vec![Ast::Symbol(*loc, intern("list?")), curr_expr.clone()],
+            ));
+            let count_expr = Ast::List(
+                *loc,
+                vec![Ast::Symbol(*loc, intern("count")), curr_expr.clone()],
+            );
+            let len_ast = Ast::Integer(*loc, prefix_pats.len() as i64);
+            conditions.push(Ast::List(
+                *loc,
+                vec![Ast::Symbol(*loc, intern(">=")), count_expr, len_ast],
+            ));
+            for (i, p) in prefix_pats.iter().enumerate() {
+                let elem_expr = Ast::List(
+                    *loc,
+                    vec![
+                        Ast::Symbol(*loc, intern("nth")),
+                        curr_expr.clone(),
+                        Ast::Integer(*loc, i as i64),
+                    ],
+                );
+                compile_pattern(p, elem_expr, conditions, bindings)?;
+            }
+            let drop_expr = Ast::List(
+                *loc,
+                vec![
+                    Ast::Symbol(*loc, intern("drop")),
+                    Ast::Integer(*loc, prefix_pats.len() as i64),
+                    curr_expr,
+                ],
+            );
+            compile_pattern(rest_pat, drop_expr, conditions, bindings)
+        }
+        Pattern::Record(loc, fields) => {
+            conditions.push(Ast::List(
+                *loc,
+                vec![Ast::Symbol(*loc, intern("record?")), curr_expr.clone()],
+            ));
+            for (key_sym, p) in fields {
+                let quote_key = Ast::Quote(*loc, Box::new(Ast::Symbol(*loc, *key_sym)));
+                conditions.push(Ast::List(
+                    *loc,
+                    vec![
+                        Ast::Symbol(*loc, intern("rcontains?")),
+                        curr_expr.clone(),
+                        quote_key.clone(),
+                    ],
+                ));
+                let field_expr = Ast::List(
+                    *loc,
+                    vec![
+                        Ast::Symbol(*loc, intern("rget")),
+                        curr_expr.clone(),
+                        quote_key,
+                    ],
+                );
+                compile_pattern(p, field_expr, conditions, bindings)?;
+            }
+            Ok(())
+        }
+        Pattern::Or(loc, sub_pats) => {
+            let mut or_conds = Vec::new();
+            for sub_pat in sub_pats {
+                let mut sub_c = Vec::new();
+                let mut sub_b = Vec::new();
+                compile_pattern(sub_pat, curr_expr.clone(), &mut sub_c, &mut sub_b)?;
+                if !sub_b.is_empty() {
+                    return Err(SelError::SyntaxError(
+                        sub_pat.loc(),
+                        "Variable bindings inside `or` patterns are not supported".into(),
+                    ));
+                }
+                let branch_cond = match sub_c.len() {
+                    0 => Ast::Boolean(*loc, true),
+                    1 => sub_c.pop().unwrap(),
+                    _ => Ast::And(*loc, sub_c),
+                };
+                or_conds.push(branch_cond);
+            }
+            conditions.push(Ast::Or(*loc, or_conds));
+            Ok(())
+        }
+    }
+}
+
+pub fn lower_match(loc: Loc, target: Ast, clauses: Vec<MatchClause>) -> Result<Ast> {
+    let target_sym = gen_match_id("_match_target");
+    let target_ast = Ast::Symbol(loc, target_sym);
+
+    let mut current_chain = Ast::List(
+        loc,
+        vec![
+            Ast::Symbol(loc, intern("error")),
+            Ast::String(loc, "No matching pattern for value:".to_string()),
+            target_ast.clone(),
+        ],
+    );
+
+    for clause in clauses.into_iter().rev() {
+        let mut conditions = Vec::new();
+        let mut bindings = Vec::new();
+        compile_pattern(
+            &clause.pattern,
+            target_ast.clone(),
+            &mut conditions,
+            &mut bindings,
+        )?;
+
+        let pattern_cond = match conditions.len() {
+            0 => Ast::Boolean(clause.loc, true),
+            1 => conditions.pop().unwrap(),
+            _ => Ast::And(clause.loc, conditions),
+        };
+
+        let is_unconditional = matches!(&pattern_cond, Ast::Boolean(_, true));
+
+        match clause.guard {
+            None => {
+                let action = if bindings.is_empty() {
+                    if clause.body.is_empty() {
+                        Ast::Nil(clause.loc)
+                    } else if clause.body.len() == 1 {
+                        clause.body[0].clone()
+                    } else {
+                        Ast::Begin(clause.loc, clause.body)
+                    }
+                } else {
+                    Ast::Let(clause.loc, bindings, clause.body)
+                };
+
+                if is_unconditional {
+                    current_chain = action;
+                } else {
+                    current_chain = Ast::If(
+                        clause.loc,
+                        Box::new(pattern_cond),
+                        Box::new(action),
+                        Some(Box::new(current_chain)),
+                    );
+                }
+            }
+            Some(guard_expr) => {
+                let fail_sym = gen_match_id("_fail");
+                let fail_call = Ast::List(clause.loc, vec![Ast::Symbol(clause.loc, fail_sym)]);
+
+                let body_ast = if clause.body.is_empty() {
+                    Ast::Nil(clause.loc)
+                } else if clause.body.len() == 1 {
+                    clause.body[0].clone()
+                } else {
+                    Ast::Begin(clause.loc, clause.body)
+                };
+
+                let guarded_body = Ast::If(
+                    clause.loc,
+                    Box::new(guard_expr),
+                    Box::new(body_ast),
+                    Some(Box::new(fail_call.clone())),
+                );
+
+                let action = if bindings.is_empty() {
+                    guarded_body
+                } else {
+                    Ast::Let(clause.loc, bindings, vec![guarded_body])
+                };
+
+                let test_and_run = if is_unconditional {
+                    action
+                } else {
+                    Ast::If(
+                        clause.loc,
+                        Box::new(pattern_cond),
+                        Box::new(action),
+                        Some(Box::new(fail_call)),
+                    )
+                };
+
+                current_chain = Ast::Let(
+                    clause.loc,
+                    vec![(
+                        fail_sym,
+                        Ast::Lambda(clause.loc, vec![], vec![current_chain]),
+                    )],
+                    vec![test_and_run],
+                );
+            }
+        }
+    }
+
+    Ok(Ast::Let(
+        loc,
+        vec![(target_sym, target)],
+        vec![current_chain],
+    ))
 }

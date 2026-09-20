@@ -133,6 +133,53 @@ Structured error handling framework. If the expression inside the `try` block tr
     (println "Caught error:" err)))
 ```
 
+### match
+High-performance structural pattern matching with zero allocation overhead for destructuring. Matches a target expression against a sequence of pattern clauses.
+
+```lisp
+(match target-expr
+  (pattern [guard] body ...)
+  ...)
+```
+
+#### Supported Pattern Types
+
+| Pattern | Description | Example |
+| :--- | :--- | :--- |
+| **Literal** | Matches exact values (numbers, strings, booleans, characters, nil, quoted symbols) | `42`, `"hello"`, `#\a`, `'admin`, `nil`, `'()` |
+| **Wildcard** | Matches any value without binding | `_` |
+| **Variable** | Binds the matched value to a local variable | `x`, `user_id` |
+| **List** | Matches fixed sequences | `(1 2 3)`, `(list a b c)`, `('() "empty")` |
+| **Cons** | Deconstructs head and tail of a list | `(cons head tail)` |
+| **Rest** | Prefix patterns with remaining elements captured | `(first second & rest)`, `(list a & rest)` |
+| **Record** | Matches curly-brace records by keys (supports partial matching) | `{name n age 30}`, `{user {id uid}}` |
+| **Or-pattern** | Matches if any alternative matches (alternatives cannot bind vars) | `(or 1 2 3)`, `(or "yes" "y" #t)` |
+
+#### Guard Clauses
+Clauses can specify an additional boolean condition using `(where cond)`, `(when cond)`, `:where cond`, or `:when cond`. Guard expressions can reference variables bound by the pattern:
+
+```lisp
+(define (classify-number n)
+  (match n
+    (0 "zero")
+    (n (where (< n 0)) "negative")
+    (n :where (< n 100) "small-positive")
+    (_ "large-positive")))
+```
+
+If a guard evaluates to `#f` or `nil`, pattern matching falls through to subsequent clauses.
+
+#### Exhaustiveness & TCO
+If no clause matches the value, a descriptive runtime error is raised: `(error "No matching pattern for value:" val)`. Clause bodies are executed sequentially with implicit `begin`, and the final expression in each clause preserves full Tail Call Optimization (TCO).
+
+```lisp
+;; Recursive list traversal with TCO
+(define (sum-list l acc)
+  (match l
+    ('() acc)
+    ((cons h t) (sum-list t (+ acc h)))))
+```
+
 ### load
 Loads and evaluates external Scheme files dynamically in the current lexical environment.
 

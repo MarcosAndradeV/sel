@@ -1215,6 +1215,34 @@ pub fn macro_expand(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
                     let expanded_ast = value_to_ast(result_val, loc)?;
                     return macro_expand(expanded_ast, env);
                 }
+                if lookup(id) == "match" {
+                    let mut iter = list.into_iter().skip(1);
+                    let target = iter.next().ok_or_else(|| {
+                        SelError::SyntaxError(loc, "Expected target expression in match".into())
+                    })?;
+                    let exp_target = macro_expand(target, env.clone())?;
+                    let mut exp_list = vec![Ast::Symbol(loc, id), exp_target];
+                    for clause in iter {
+                        match clause {
+                            Ast::List(c_loc, c_items) => {
+                                if c_items.is_empty() {
+                                    exp_list.push(Ast::List(c_loc, c_items));
+                                } else {
+                                    let mut exp_clause = Vec::new();
+                                    let mut c_iter = c_items.into_iter();
+                                    // Pattern is preserved unexpanded
+                                    exp_clause.push(c_iter.next().unwrap());
+                                    for item in c_iter {
+                                        exp_clause.push(macro_expand(item, env.clone())?);
+                                    }
+                                    exp_list.push(Ast::List(c_loc, exp_clause));
+                                }
+                            }
+                            other => exp_list.push(macro_expand(other, env.clone())?),
+                        }
+                    }
+                    return Ok(Ast::List(loc, exp_list));
+                }
             }
 
             let mut expanded_list = Vec::new();
@@ -1275,6 +1303,27 @@ pub fn macro_expand(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
             Ok(Ast::Record(loc, exp_fields))
         }
         Ast::Load(loc, path) => Ok(Ast::Load(loc, Box::new(macro_expand(*path, env)?))),
+        Ast::Match(loc, target, clauses) => {
+            let exp_target = macro_expand(*target, env.clone())?;
+            let mut exp_clauses = Vec::with_capacity(clauses.len());
+            for c in clauses {
+                let exp_guard = match c.guard {
+                    Some(g) => Some(macro_expand(g, env.clone())?),
+                    None => None,
+                };
+                let mut exp_body = Vec::with_capacity(c.body.len());
+                for b in c.body {
+                    exp_body.push(macro_expand(b, env.clone())?);
+                }
+                exp_clauses.push(crate::ast::MatchClause {
+                    loc: c.loc,
+                    pattern: c.pattern,
+                    guard: exp_guard,
+                    body: exp_body,
+                });
+            }
+            Ok(Ast::Match(loc, Box::new(exp_target), exp_clauses))
+        }
         _ => Ok(ast),
     }
 }

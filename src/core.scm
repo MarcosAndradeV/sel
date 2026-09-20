@@ -112,3 +112,10 @@
 ;; Record helpers
 (define (assoc rec k v) (rset rec k v))
 (define (dissoc rec k) (rdel rec k))
+
+;; Pattern Matching Helpers
+(defmacro match-lambda (&clauses)
+  (let ((arg (gensym "arg")))
+    (cons 'lambda (cons (list arg)
+                        (list (cons 'match (cons arg clauses)))))))
+

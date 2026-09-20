@@ -1,4 +1,4 @@
-use crate::ast::Ast;
+use crate::ast::{Ast, MatchClause, Pattern};
 use crate::diagnostics::SelError;
 use crate::lexer::{Lexer, Loc, NumberBase, Token, TokenKind};
 use crate::types::{intern, lookup};
@@ -526,6 +526,23 @@ pub fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
                 let iter = list.into_iter().skip(1);
                 Ok(Ast::Or(s_loc, iter.collect()))
             }
+            "match" => {
+                let mut iter = list.into_iter().skip(1);
+                let target = iter.next().ok_or_else(|| {
+                    SelError::SyntaxError(s_loc, "Expected target expression in match".into())
+                })?;
+                let mut clauses = Vec::new();
+                for clause_ast in iter {
+                    clauses.push(parse_match_clause(clause_ast)?);
+                }
+                if clauses.is_empty() {
+                    return Err(SelError::SyntaxError(
+                        s_loc,
+                        "Expected at least one clause in match".into(),
+                    ));
+                }
+                Ok(Ast::Match(s_loc, Box::new(target), clauses))
+            }
             _ => Ok(Ast::List(loc, list)),
         }
     } else {
@@ -774,6 +791,12 @@ pub fn resolve_ast(ast: Ast) -> Result<Ast> {
             if list.is_empty() {
                 return Ok(Ast::Nil(loc));
             }
+            if let Some(Ast::Symbol(_, sym_id)) = list.first() {
+                if lookup(*sym_id) == "match" {
+                    let matched_ast = optimize_ast(list, loc)?;
+                    return resolve_ast(matched_ast);
+                }
+            }
             let mut resolved_list = Vec::with_capacity(list.len());
             for item in list {
                 resolved_list.push(resolve_ast(item)?);
@@ -885,8 +908,231 @@ pub fn resolve_ast(ast: Ast) -> Result<Ast> {
             Box::new(resolve_ast(*arg)?),
         )),
         Ast::Load(loc, path) => Ok(Ast::Load(loc, Box::new(resolve_ast(*path)?))),
+        Ast::Match(loc, target, clauses) => {
+            let resolved_target = resolve_ast(*target)?;
+            let mut resolved_clauses = Vec::with_capacity(clauses.len());
+            for c in clauses {
+                let resolved_guard = match c.guard {
+                    Some(g) => Some(resolve_ast(g)?),
+                    None => None,
+                };
+                let mut resolved_body = Vec::with_capacity(c.body.len());
+                for b in c.body {
+                    resolved_body.push(resolve_ast(b)?);
+                }
+                resolved_clauses.push(MatchClause {
+                    loc: c.loc,
+                    pattern: c.pattern,
+                    guard: resolved_guard,
+                    body: resolved_body,
+                });
+            }
+            Ok(Ast::Match(loc, Box::new(resolved_target), resolved_clauses))
+        }
         other => Ok(other),
     }
+}
+
+pub fn parse_pattern(ast: Ast) -> Result<Pattern> {
+    match ast {
+        Ast::Symbol(loc, id) => {
+            let name = lookup(id);
+            if name == "_" {
+                Ok(Pattern::Wildcard(loc))
+            } else if name == "nil" {
+                Ok(Pattern::Literal(loc, Box::new(Ast::Nil(loc))))
+            } else {
+                Ok(Pattern::Variable(loc, id))
+            }
+        }
+        Ast::Bind(loc, id) => {
+            let name = lookup(id);
+            if name == "_" {
+                Ok(Pattern::Wildcard(loc))
+            } else {
+                Ok(Pattern::Variable(loc, id))
+            }
+        }
+        Ast::Nil(loc) => Ok(Pattern::Literal(loc, Box::new(Ast::Nil(loc)))),
+        Ast::Integer(loc, i) => Ok(Pattern::Literal(loc, Box::new(Ast::Integer(loc, i)))),
+        Ast::Float(loc, f) => Ok(Pattern::Literal(loc, Box::new(Ast::Float(loc, f)))),
+        Ast::String(loc, s) => Ok(Pattern::Literal(loc, Box::new(Ast::String(loc, s)))),
+        Ast::Boolean(loc, b) => Ok(Pattern::Literal(loc, Box::new(Ast::Boolean(loc, b)))),
+        Ast::Char(loc, c) => Ok(Pattern::Literal(loc, Box::new(Ast::Char(loc, c)))),
+        Ast::Quote(loc, val) => Ok(Pattern::Literal(loc, Box::new(Ast::Quote(loc, val)))),
+        Ast::Record(loc, fields) => {
+            let mut parsed_fields = Vec::with_capacity(fields.len());
+            for (k, v_ast) in fields {
+                parsed_fields.push((k, parse_pattern(v_ast)?));
+            }
+            Ok(Pattern::Record(loc, parsed_fields))
+        }
+        Ast::List(loc, items) => {
+            if items.is_empty() {
+                return Ok(Pattern::Literal(loc, Box::new(Ast::Nil(loc))));
+            }
+            let head_sym = if let Ast::Symbol(s_loc, id) = items[0] {
+                Some((s_loc, id))
+            } else {
+                None
+            };
+            if let Some((s_loc, id)) = head_sym {
+                match lookup(id).as_str() {
+                    "quote" => {
+                        let mut iter = items.into_iter().skip(1);
+                        let expr = iter.next().ok_or_else(|| {
+                            SelError::SyntaxError(s_loc, "Expected expression in quote pattern".into())
+                        })?;
+                        return Ok(Pattern::Literal(loc, Box::new(Ast::Quote(loc, Box::new(expr)))));
+                    }
+                    "cons" => {
+                        if items.len() != 3 {
+                            return Err(SelError::SyntaxError(
+                                s_loc,
+                                "Expected 2 arguments for cons pattern: (cons head tail)".into(),
+                            ));
+                        }
+                        let mut iter = items.into_iter().skip(1);
+                        let h = parse_pattern(iter.next().unwrap())?;
+                        let t = parse_pattern(iter.next().unwrap())?;
+                        return Ok(Pattern::Cons(loc, Box::new(h), Box::new(t)));
+                    }
+                    "or" => {
+                        let sub_pats = items
+                            .into_iter()
+                            .skip(1)
+                            .map(parse_pattern)
+                            .collect::<Result<Vec<_>>>()?;
+                        if sub_pats.is_empty() {
+                            return Err(SelError::SyntaxError(
+                                s_loc,
+                                "Expected at least 1 pattern in or pattern".into(),
+                            ));
+                        }
+                        return Ok(Pattern::Or(loc, sub_pats));
+                    }
+                    "list" => {
+                        let inner_items: Vec<Ast> = items.into_iter().skip(1).collect();
+                        return parse_list_or_rest_pattern(loc, inner_items);
+                    }
+                    _ => {}
+                }
+            }
+            parse_list_or_rest_pattern(loc, items)
+        }
+        other => Err(SelError::SyntaxError(
+            other.loc(),
+            format!("Invalid pattern: {}", other),
+        )),
+    }
+}
+
+fn parse_list_or_rest_pattern(loc: Loc, items: Vec<Ast>) -> Result<Pattern> {
+    if items.is_empty() {
+        return Ok(Pattern::List(loc, Vec::new()));
+    }
+    // Check if the last item is Ast::Bind (which is &identifier from lexer)
+    if let Some(Ast::Bind(b_loc, id)) = items.last() {
+        let b_loc = *b_loc;
+        let id = *id;
+        let prefix_items = &items[..items.len() - 1];
+        let mut prefix = Vec::with_capacity(prefix_items.len());
+        for item in prefix_items {
+            prefix.push(parse_pattern(item.clone())?);
+        }
+        let rest = if lookup(id) == "_" {
+            Pattern::Wildcard(b_loc)
+        } else {
+            Pattern::Variable(b_loc, id)
+        };
+        return Ok(Pattern::Rest(loc, prefix, Box::new(rest)));
+    }
+    // Check if second-to-last item is symbol "&"
+    if items.len() >= 2 {
+        if let Ast::Symbol(_, id) = &items[items.len() - 2] {
+            if lookup(*id) == "&" {
+                let prefix_items = &items[..items.len() - 2];
+                let mut prefix = Vec::with_capacity(prefix_items.len());
+                for item in prefix_items {
+                    prefix.push(parse_pattern(item.clone())?);
+                }
+                let rest = parse_pattern(items.last().unwrap().clone())?;
+                return Ok(Pattern::Rest(loc, prefix, Box::new(rest)));
+            }
+        }
+    }
+    let mut pats = Vec::with_capacity(items.len());
+    for item in items {
+        pats.push(parse_pattern(item)?);
+    }
+    Ok(Pattern::List(loc, pats))
+}
+
+pub fn parse_match_clause(ast: Ast) -> Result<MatchClause> {
+    let Ast::List(c_loc, mut items) = ast else {
+        return Err(SelError::SyntaxError(
+            ast.loc(),
+            "Expected clause to be a list in match".into(),
+        ));
+    };
+    if items.is_empty() {
+        return Err(SelError::SyntaxError(
+            c_loc,
+            "Empty clause in match".into(),
+        ));
+    }
+    let pat_ast = items.remove(0);
+    let pattern = parse_pattern(pat_ast)?;
+
+    let mut guard = None;
+    if !items.is_empty() {
+        if let Ast::Symbol(_, sym_id) = &items[0] {
+            let sym_name = lookup(*sym_id);
+            if sym_name == ":where" || sym_name == ":when" {
+                items.remove(0);
+                if items.is_empty() {
+                    return Err(SelError::SyntaxError(
+                        c_loc,
+                        "Expected guard condition after guard keyword".into(),
+                    ));
+                }
+                guard = Some(items.remove(0));
+            }
+        } else if let Ast::When(_, cond, b) = &items[0] {
+            if b.is_empty() {
+                guard = Some((**cond).clone());
+                items.remove(0);
+            }
+        } else if let Ast::List(g_loc, g_items) = &items[0] {
+            if !g_items.is_empty() {
+                if let Ast::Symbol(_, sym_id) = &g_items[0] {
+                    let sym_name = lookup(*sym_id);
+                    if sym_name == "where" || sym_name == "when" {
+                        if g_items.len() != 2 {
+                            return Err(SelError::SyntaxError(
+                                *g_loc,
+                                "Expected (where condition) or (when condition)".into(),
+                            ));
+                        }
+                        guard = Some(g_items[1].clone());
+                        items.remove(0);
+                    }
+                }
+            }
+        }
+    }
+
+    let body = if items.is_empty() {
+        vec![Ast::Nil(c_loc)]
+    } else {
+        items
+    };
+    Ok(MatchClause {
+        loc: c_loc,
+        pattern,
+        guard,
+        body,
+    })
 }
 
 pub fn resolve_quasiquote(ast: Ast) -> Result<Ast> {

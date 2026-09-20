@@ -9,6 +9,41 @@ use std::rc::Rc;
 type Result<T> = std::result::Result<T, SelError>;
 
 #[derive(Debug, Clone)]
+pub enum Pattern {
+    Wildcard(Loc),
+    Variable(Loc, u32),
+    Literal(Loc, Box<Ast>),
+    List(Loc, Vec<Pattern>),
+    Cons(Loc, Box<Pattern>, Box<Pattern>),
+    Rest(Loc, Vec<Pattern>, Box<Pattern>),
+    Record(Loc, Vec<(u32, Pattern)>),
+    Or(Loc, Vec<Pattern>),
+}
+
+impl Pattern {
+    pub fn loc(&self) -> Loc {
+        match self {
+            Pattern::Wildcard(loc)
+            | Pattern::Variable(loc, _)
+            | Pattern::Literal(loc, _)
+            | Pattern::List(loc, _)
+            | Pattern::Cons(loc, _, _)
+            | Pattern::Rest(loc, _, _)
+            | Pattern::Record(loc, _)
+            | Pattern::Or(loc, _) => *loc,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MatchClause {
+    pub loc: Loc,
+    pub pattern: Pattern,
+    pub guard: Option<Ast>,
+    pub body: Vec<Ast>,
+}
+
+#[derive(Debug, Clone)]
 pub enum Ast {
     Define(Loc, u32, Box<Ast>),
     DefMacro(Loc, u32, Box<Ast>),
@@ -44,6 +79,7 @@ pub enum Ast {
     Char(Loc, char),
     VisibilityDirective(Loc, bool),
     Load(Loc, Box<Ast>),
+    Match(Loc, Box<Ast>, Vec<MatchClause>),
 }
 
 impl Ast {
@@ -83,6 +119,7 @@ impl Ast {
             Ast::Char(loc, ..) => *loc,
             Ast::VisibilityDirective(loc, ..) => *loc,
             Ast::Load(loc, ..) => *loc,
+            Ast::Match(loc, ..) => *loc,
         }
     }
 }
@@ -132,6 +169,7 @@ impl std::fmt::Display for Ast {
                 write!(f, "{}", if *is_public { ":public" } else { ":private" })
             }
             Ast::Load(..) => write!(f, "load"),
+            Ast::Match(..) => write!(f, "match"),
         }
     }
 }
@@ -355,6 +393,59 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
                 record.into_iter().map(|(k, ast)| (k, ast_to_value(ast).1)),
             ))),
         ),
+        Ast::Match(loc, target, clauses) => {
+            let mut list = vec![Value::Symbol(intern("match")), ast_to_value(*target).1];
+            for c in clauses {
+                let mut c_items = vec![pattern_to_value(c.pattern)];
+                if let Some(guard) = c.guard {
+                    c_items.push(Value::List(Rc::new([
+                        Value::Symbol(intern("where")),
+                        ast_to_value(guard).1,
+                    ])));
+                }
+                c_items.extend(c.body.into_iter().map(|b| ast_to_value(b).1));
+                list.push(Value::List(c_items.into_boxed_slice().into()));
+            }
+            (loc, Value::List(list.into_boxed_slice().into()))
+        }
+    }
+}
+
+pub fn pattern_to_value(pat: Pattern) -> Value {
+    match pat {
+        Pattern::Wildcard(_) => Value::Symbol(intern("_")),
+        Pattern::Variable(_, id) => Value::Symbol(id),
+        Pattern::Literal(_, ast) => ast_to_value(*ast).1,
+        Pattern::List(_, pats) => Value::List(
+            pats.into_iter()
+                .map(pattern_to_value)
+                .collect::<Vec<_>>()
+                .into_boxed_slice()
+                .into(),
+        ),
+        Pattern::Cons(_, h, t) => Value::List(Rc::new([
+            Value::Symbol(intern("cons")),
+            pattern_to_value(*h),
+            pattern_to_value(*t),
+        ])),
+        Pattern::Rest(_, pfx, rest) => {
+            let mut list: Vec<Value> = pfx.into_iter().map(pattern_to_value).collect();
+            list.push(Value::Symbol(intern("&")));
+            list.push(pattern_to_value(*rest));
+            Value::List(list.into_boxed_slice().into())
+        }
+        Pattern::Record(_, fields) => {
+            let mut rec = Record::new();
+            for (k, pat) in fields {
+                rec.fields_mut().insert(k, pattern_to_value(pat));
+            }
+            Value::Record(Rc::new(rec))
+        }
+        Pattern::Or(_, pats) => {
+            let mut list = vec![Value::Symbol(intern("or"))];
+            list.extend(pats.into_iter().map(pattern_to_value));
+            Value::List(list.into_boxed_slice().into())
+        }
     }
 }
 

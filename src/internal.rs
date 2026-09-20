@@ -252,6 +252,8 @@ pub fn is_equal(_loc: Loc, args: Vec<Value>) -> Result<Value> {
 fn is_value_equal(first: &Value, arg: &Value) -> bool {
     match (first, arg) {
         (Value::Nil, Value::Nil) => true,
+        (Value::Nil, Value::List(b)) if b.is_empty() => true,
+        (Value::List(a), Value::Nil) if a.is_empty() => true,
         (Value::Boolean(a), Value::Boolean(b)) => a == b,
         (Value::Integer(a), Value::Integer(b)) => a == b,
         (Value::Float(a), Value::Float(b)) => a == b,
@@ -259,13 +261,15 @@ fn is_value_equal(first: &Value, arg: &Value) -> bool {
         (Value::Symbol(a), Value::Symbol(b)) => a == b,
         (Value::Pointer(a), Value::Pointer(b)) => a == b,
         (Value::List(a), Value::List(b)) => {
-            a.iter().zip(b.iter()).all(|(a, b)| is_value_equal(a, b))
+            a.len() == b.len() && a.iter().zip(b.iter()).all(|(a, b)| is_value_equal(a, b))
         }
-        (Value::Record(a), Value::Record(b)) => a
-            .fields()
-            .iter()
-            .zip(b.fields())
-            .all(|((ka, va), (kb, vb))| *ka == *kb && is_value_equal(va, vb)),
+        (Value::Record(a), Value::Record(b)) => {
+            a.fields().len() == b.fields().len()
+                && a.fields()
+                    .iter()
+                    .zip(b.fields())
+                    .all(|((ka, va), (kb, vb))| *ka == *kb && is_value_equal(va, vb))
+        }
         (Value::Char(a), Value::Char(b)) => a == b,
         _ => false,
     }
@@ -1135,6 +1139,40 @@ pub fn nth(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+pub fn drop(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 2 arguments for drop".into(),
+        ));
+    }
+    let list_val = args.pop().unwrap();
+    let n_val = args.pop().unwrap();
+    let n = match n_val {
+        Value::Integer(i) => {
+            if i < 0 {
+                0
+            } else {
+                i as usize
+            }
+        }
+        _ => return Err(SelError::Runtime(loc, "drop requires an integer count".into())),
+    };
+    match list_val {
+        Value::List(l) => {
+            if n >= l.len() {
+                Ok(Value::Nil)
+            } else {
+                let mut new_l = Vec::with_capacity(l.len() - n);
+                new_l.extend_from_slice(&l[n..]);
+                Ok(Value::List(new_l.into_boxed_slice().into()))
+            }
+        }
+        Value::Nil => Ok(Value::Nil),
+        _ => Err(SelError::Runtime(loc, "drop requires a list".into())),
+    }
+}
+
 pub fn count(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::Runtime(
@@ -1355,6 +1393,33 @@ pub fn is_symbol(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         Value::Symbol(_) => Ok(Value::Boolean(true)),
         _ => Ok(Value::Boolean(false)),
     }
+}
+
+static GENSYM_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub fn gensym(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() > 1 {
+        return Err(SelError::Runtime(
+            loc,
+            "gensym takes 0 or 1 arguments".into(),
+        ));
+    }
+    let prefix = if args.is_empty() {
+        "g".to_string()
+    } else {
+        match args.pop().unwrap() {
+            Value::String(s) => (*s).clone(),
+            Value::Symbol(id) => lookup(id),
+            v => {
+                return Err(SelError::Runtime(
+                    loc,
+                    format!("gensym: expected string or symbol prefix, got {v}"),
+                ));
+            }
+        }
+    };
+    let count = GENSYM_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    Ok(Value::Symbol(intern(&format!("{}_{}", prefix, count))))
 }
 
 pub fn is_record(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
@@ -1710,6 +1775,7 @@ pub fn load(env: Rc<RefCell<Env>>) {
     e.insert(intern("car"), Value::NativeFunction(car));
     e.insert(intern("cdr"), Value::NativeFunction(cdr));
     e.insert(intern("nth"), Value::NativeFunction(nth));
+    e.insert(intern("drop"), Value::NativeFunction(drop));
     e.insert(intern("count"), Value::NativeFunction(count));
     e.insert(intern("list"), Value::NativeFunction(list));
     e.insert(intern("empty?"), Value::NativeFunction(empty));
@@ -1726,6 +1792,7 @@ pub fn load(env: Rc<RefCell<Env>>) {
     e.insert(intern("number?"), Value::NativeFunction(is_number));
     e.insert(intern("string?"), Value::NativeFunction(is_string));
     e.insert(intern("symbol?"), Value::NativeFunction(is_symbol));
+    e.insert(intern("gensym"), Value::NativeFunction(gensym));
     e.insert(intern("function?"), Value::NativeFunction(is_function));
     e.insert(intern("record?"), Value::NativeFunction(is_record));
     e.insert(intern("char?"), Value::NativeFunction(is_char));

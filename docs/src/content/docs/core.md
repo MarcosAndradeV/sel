@@ -53,6 +53,11 @@ These predicates allow runtime type introspection. They all take **1 argument** 
   (type-of {a 1})    ; 'record
   (type-of #\a)      ; 'char
   ```
+- `(gensym [prefix])`: Generates a globally unique interned symbol with an optional prefix (defaults to `"g"`). Indispensable for generating non-colliding variable names inside macros:
+  ```lisp
+  (gensym)        ; 'g0
+  (gensym "temp") ; 'temp1
+  ```
 
 ### Character Conversions
 
@@ -80,6 +85,10 @@ These functions convert between character values and their corresponding integer
 - `(cdr list)`: Returns a new list containing all elements of `list` except the first. If the list has only one element, returns `nil`.
   ```lisp
   (cdr '(10 20 30)) ; (20 30)
+  ```
+- `(drop n list)`: Drops the first `n` elements from `list` and returns the remaining sublist in $O(1)$ time without copying. If `n >= (count list)`, returns `nil`.
+  ```lisp
+  (drop 2 '(10 20 30 40)) ; (30 40)
   ```
 - `(nth list index)`: Accesses the element at 0-indexed position `index` in `list`. Returns `nil` if out of bounds.
   ```lisp
@@ -273,4 +282,18 @@ Allows functional error-handling patterns without stack-unwinding `try/catch` cl
   ```lisp
   (define puts-fn (ffi-func (ffi-dlsym libc "puts") 'i32 '(*u8)))
   (puts-fn "Called easily via Scheme wrapper!")
+  ```
+
+### Pattern Matching Helpers
+
+- `(match-lambda &clauses)`: *Macro*. Creates an anonymous lambda of one argument that immediately pattern matches the argument against `clauses`:
+  ```lisp
+  (define describe-num
+    (match-lambda
+      (0 "zero")
+      (1 "one")
+      (n (+ n 100))))
+
+  (describe-num 0) ; "zero"
+  (describe-num 5) ; 105
   ```
