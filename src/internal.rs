@@ -155,6 +155,7 @@ pub fn mul(loc: Loc, args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn div(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() == 1 {
         match args[0] {
@@ -195,7 +196,14 @@ pub fn div(loc: Loc, args: Vec<Value>) -> Result<Value> {
     Ok(Value::Float(float_val))
 }
 
+#[inline]
 pub fn modulo(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected 2 arguments for mod".into(),
+        ));
+    }
     let a = match args[0] {
         Value::Integer(i) => i,
         _ => {
@@ -211,6 +219,7 @@ pub fn modulo(loc: Loc, args: Vec<Value>) -> Result<Value> {
     Ok(Value::Integer(a % b))
 }
 
+#[inline]
 fn compare_nums(loc: Loc, args: Vec<Value>, op: fn(f64, f64) -> bool) -> Result<Value> {
     let mut prev = match args[0] {
         Value::Integer(i) => i as f64,
@@ -235,6 +244,7 @@ fn compare_nums(loc: Loc, args: Vec<Value>, op: fn(f64, f64) -> bool) -> Result<
     Ok(Value::Boolean(true))
 }
 
+#[inline]
 pub fn is_equal(_loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() < 2 {
         return Ok(Value::Boolean(true));
@@ -249,6 +259,7 @@ pub fn is_equal(_loc: Loc, args: Vec<Value>) -> Result<Value> {
     Ok(Value::Boolean(true))
 }
 
+#[inline]
 fn is_value_equal(first: &Value, arg: &Value) -> bool {
     match (first, arg) {
         (Value::Nil, Value::Nil) => true,
@@ -275,25 +286,32 @@ fn is_value_equal(first: &Value, arg: &Value) -> bool {
     }
 }
 
+#[inline]
 pub fn num_noteq(loc: Loc, args: Vec<Value>) -> Result<Value> {
     compare_nums(loc, args, |a, b| a != b)
 }
+#[inline]
 pub fn num_eq(loc: Loc, args: Vec<Value>) -> Result<Value> {
     compare_nums(loc, args, |a, b| a == b)
 }
+#[inline]
 pub fn num_lt(loc: Loc, args: Vec<Value>) -> Result<Value> {
     compare_nums(loc, args, |a, b| a < b)
 }
+#[inline]
 pub fn num_gt(loc: Loc, args: Vec<Value>) -> Result<Value> {
     compare_nums(loc, args, |a, b| a > b)
 }
+#[inline]
 pub fn num_lte(loc: Loc, args: Vec<Value>) -> Result<Value> {
     compare_nums(loc, args, |a, b| a <= b)
 }
+#[inline]
 pub fn num_gte(loc: Loc, args: Vec<Value>) -> Result<Value> {
     compare_nums(loc, args, |a, b| a >= b)
 }
 
+#[inline]
 pub fn error(loc: Loc, args: Vec<Value>) -> Result<Value> {
     let msg = args
         .iter()
@@ -303,6 +321,7 @@ pub fn error(loc: Loc, args: Vec<Value>) -> Result<Value> {
     Err(SelError::Runtime(loc, msg))
 }
 
+#[inline]
 pub fn value_type_name(v: &Value) -> &str {
     match v {
         Value::Nil => "nil",
@@ -323,6 +342,7 @@ pub fn value_type_name(v: &Value) -> &str {
     }
 }
 
+#[inline]
 pub fn not(_loc: Loc, args: Vec<Value>) -> Result<Value> {
     match args[0] {
         Value::Boolean(false) => Ok(Value::Boolean(true)),
@@ -1057,6 +1077,7 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn cons(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
         return Err(SelError::SyntaxError(
@@ -1077,6 +1098,7 @@ pub fn cons(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn car(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::Runtime(
@@ -1091,10 +1113,17 @@ pub fn car(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
             }
             Ok(l[0].clone())
         }
+        Value::String(s) => {
+            if s.is_empty() {
+                return Err(SelError::Runtime(loc, "car on empty string".into()));
+            }
+            Ok(Value::Char(s.chars().nth(0).unwrap_or_default()))
+        }
         _ => Err(SelError::Runtime(loc, "car requires a list".into())),
     }
 }
 
+#[inline]
 pub fn cdr(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::Runtime(
@@ -1114,10 +1143,19 @@ pub fn cdr(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
             new_l.extend_from_slice(&l[1..]);
             Ok(Value::List(new_l.into_boxed_slice().into()))
         }
+        Value::String(s) => {
+            if s.is_empty() {
+                return Err(SelError::Runtime(loc, "cdr on empty string".into()));
+            }
+            Ok(s.get(1..)
+                .map(|s| Value::String(s.to_string().into()))
+                .unwrap_or(Value::Nil))
+        }
         _ => Err(SelError::Runtime(loc, "cdr requires a list".into())),
     }
 }
 
+#[inline]
 pub fn nth(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
         return Err(SelError::Runtime(
@@ -1139,6 +1177,7 @@ pub fn nth(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn drop(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
         return Err(SelError::Runtime(
@@ -1156,7 +1195,12 @@ pub fn drop(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
                 i as usize
             }
         }
-        _ => return Err(SelError::Runtime(loc, "drop requires an integer count".into())),
+        _ => {
+            return Err(SelError::Runtime(
+                loc,
+                "drop requires an integer count".into(),
+            ));
+        }
     };
     match list_val {
         Value::List(l) => {
@@ -1173,6 +1217,7 @@ pub fn drop(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn count(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::Runtime(
@@ -1188,10 +1233,12 @@ pub fn count(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn list(_loc: Loc, args: Vec<Value>) -> Result<Value> {
     Ok(Value::List(args.into_boxed_slice().into()))
 }
 
+#[inline]
 pub fn empty(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::SyntaxError(
@@ -1210,6 +1257,7 @@ pub fn empty(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn rget(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
         return Err(SelError::Runtime(
@@ -1231,6 +1279,7 @@ pub fn rget(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn rset(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 3 {
         return Err(SelError::Runtime(
@@ -1253,6 +1302,7 @@ pub fn rset(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn rdel(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
         return Err(SelError::Runtime(
@@ -1274,6 +1324,7 @@ pub fn rdel(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn rkeys(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::Runtime(
@@ -1290,6 +1341,7 @@ pub fn rkeys(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn rvals(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::Runtime(
@@ -1306,6 +1358,7 @@ pub fn rvals(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn rcontains(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
         return Err(SelError::Runtime(
@@ -1329,6 +1382,7 @@ pub fn rcontains(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn is_nil(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::Runtime(
@@ -1342,6 +1396,7 @@ pub fn is_nil(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn is_list(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::Runtime(
@@ -1355,6 +1410,7 @@ pub fn is_list(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn is_number(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::Runtime(
@@ -1369,6 +1425,7 @@ pub fn is_number(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn is_string(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::Runtime(
@@ -1382,6 +1439,7 @@ pub fn is_string(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn string_contains(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
         return Err(SelError::Runtime(
@@ -1395,6 +1453,7 @@ pub fn string_contains(loc: Loc, args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn is_symbol(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::Runtime(
@@ -1410,6 +1469,7 @@ pub fn is_symbol(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 
 static GENSYM_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+#[inline]
 pub fn gensym(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() > 1 {
         return Err(SelError::Runtime(
@@ -1435,6 +1495,7 @@ pub fn gensym(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     Ok(Value::Symbol(intern(&format!("{}_{}", prefix, count))))
 }
 
+#[inline]
 pub fn is_record(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::Runtime(
@@ -1448,6 +1509,7 @@ pub fn is_record(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn is_function(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::Runtime(
@@ -1462,6 +1524,7 @@ pub fn is_function(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn is_char(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::Runtime(
@@ -1475,6 +1538,7 @@ pub fn is_char(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn char_to_integer(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::Runtime(
@@ -1494,6 +1558,7 @@ pub fn char_to_integer(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn integer_to_char(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::Runtime(
@@ -1522,6 +1587,7 @@ pub fn integer_to_char(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[inline]
 pub fn type_of(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
         return Err(SelError::Runtime(
@@ -1804,7 +1870,10 @@ pub fn load(env: Rc<RefCell<Env>>) {
     e.insert(intern("list?"), Value::NativeFunction(is_list));
     e.insert(intern("number?"), Value::NativeFunction(is_number));
     e.insert(intern("string?"), Value::NativeFunction(is_string));
-    e.insert(intern("string-contains?"), Value::NativeFunction(string_contains));
+    e.insert(
+        intern("string-contains?"),
+        Value::NativeFunction(string_contains),
+    );
     e.insert(intern("symbol?"), Value::NativeFunction(is_symbol));
     e.insert(intern("gensym"), Value::NativeFunction(gensym));
     e.insert(intern("function?"), Value::NativeFunction(is_function));

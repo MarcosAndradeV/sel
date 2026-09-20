@@ -9,7 +9,6 @@ use crate::diagnostics::*;
 use crate::internal;
 use crate::internal::load_core_lib;
 use crate::internal::read_script;
-use crate::internal::value_type_name;
 use crate::lexer::Loc;
 use crate::parser::parse_all;
 use crate::types::Record;
@@ -867,11 +866,9 @@ impl VM {
                 25 => {
                     // MakeList
                     let count = read_usize(frame);
-                    let mut items = Vec::with_capacity(count);
                     let start = self.stack.len() - count;
-                    items.extend(self.stack.drain(start..));
-                    self.stack
-                        .push(Value::List(items.into_boxed_slice().into()));
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::list(loc, args)?);
                 }
                 26 => {
                     // ConcatList
@@ -923,20 +920,9 @@ impl VM {
                 }
                 31 => {
                     // Mod
-                    let b = match self.stack.pop().unwrap() {
-                        Value::Integer(i) => i,
-                        _ => {
-                            return Err(SelError::Runtime(loc, "modulo requires integer".into()));
-                        }
-                    };
-                    let a = match self.stack.pop().unwrap() {
-                        Value::Integer(i) => i,
-                        _ => {
-                            return Err(SelError::Runtime(loc, "modulo requires integer".into()));
-                        }
-                    };
-
-                    self.stack.push(Value::Integer(a % b));
+                    let start = self.stack.len() - 2;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::modulo(loc, args)?);
                 }
                 32 => {
                     // Eq
@@ -989,124 +975,70 @@ impl VM {
                 }
                 39 => {
                     // Cons
-                    let tail = self.stack.pop().unwrap();
-                    let head = self.stack.pop().unwrap();
-                    match tail {
-                        Value::List(l) => {
-                            let mut new_l = vec![head];
-                            new_l.extend(l.iter().cloned());
-                            self.stack
-                                .push(Value::List(new_l.into_boxed_slice().into()));
-                        }
-                        Value::Nil => self.stack.push(Value::List(Rc::new([head]))),
-                        _ => self.stack.push(Value::List(Rc::new([head, tail]))),
-                    }
+                    let start = self.stack.len() - 2;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::cons(loc, args)?);
                 }
-                40 => match self.stack.pop().unwrap() {
+                40 => {
                     // Car
-                    Value::List(l) => {
-                        if l.is_empty() {
-                            return Err(SelError::Runtime(loc, "car on empty list".into()));
-                        }
-                        self.stack.push(l[0].clone());
-                    }
-                    _ => return Err(SelError::Runtime(loc, "car requires a list".into())),
-                },
-                41 => match self.stack.pop().unwrap() {
+                    let arg = self.stack.pop().unwrap();
+                    self.stack.push(internal::car(loc, vec![arg])?);
+                }
+                41 => {
                     // Cdr
-                    Value::List(l) => {
-                        if l.is_empty() {
-                            return Err(SelError::Runtime(loc, "car on empty list".into()));
-                        }
-                        if l.len() == 1 {
-                            self.stack.push(Value::Nil);
-                        } else {
-                            let mut new_l = Vec::with_capacity(l.len() - 1);
-                            new_l.extend_from_slice(&l[1..]);
-                            self.stack
-                                .push(Value::List(new_l.into_boxed_slice().into()));
-                        }
-                    }
-                    _ => return Err(SelError::Runtime(loc, "cdr requires a list".into())),
-                },
+                    let arg = self.stack.pop().unwrap();
+                    self.stack.push(internal::cdr(loc, vec![arg])?);
+                }
                 42 => {
                     // Nth
-                    let index = self.stack.pop().unwrap();
-                    match self.stack.pop().unwrap() {
-                        Value::List(l) => match index {
-                            Value::Integer(index) => {
-                                self.stack.push(if (index as usize) < l.len() {
-                                    l[index as usize].clone()
-                                } else {
-                                    Value::Nil
-                                });
-                            }
-                            _ => {
-                                return Err(SelError::Runtime(
-                                    loc,
-                                    "nth requires a interger".into(),
-                                ));
-                            }
-                        },
-                        _ => return Err(SelError::Runtime(loc, "nth requires a list".into())),
-                    }
+                    let start = self.stack.len() - 2;
+                    let args: Vec<Value> = self.stack.drain(start..).collect();
+                    self.stack.push(internal::nth(loc, args)?);
                 }
-                43 => match self.stack.pop().unwrap() {
+                43 => {
                     // Count
-                    Value::List(l) => self.stack.push(Value::Integer(l.len() as _)),
-                    Value::String(s) => self.stack.push(Value::Integer(s.len() as _)),
-                    Value::Nil => self.stack.push(Value::Integer(0)),
-                    _ => return Err(SelError::Runtime(loc, "count requires a list".into())),
-                },
-                44 => match self.stack.pop().unwrap() {
+                    let arg = self.stack.pop().unwrap();
+                    self.stack.push(internal::count(loc, vec![arg])?);
+                }
+                44 => {
                     // Empty
-                    Value::List(l) => self.stack.push(Value::Boolean(l.is_empty())),
-                    Value::Nil => self.stack.push(Value::Boolean(true)),
-                    Value::String(s) => self.stack.push(Value::Boolean(s.is_empty())),
-                    _ => return Err(SelError::Runtime(loc, "empty requires a list".into())),
-                },
-                45 => match self.stack.pop().unwrap() {
+                    let arg = self.stack.pop().unwrap();
+                    self.stack.push(internal::empty(loc, vec![arg])?);
+                }
+                45 => {
                     // IsNil
-                    Value::Nil => self.stack.push(Value::Boolean(true)),
-                    _ => self.stack.push(Value::Boolean(false)),
-                },
-                46 => match self.stack.pop().unwrap() {
+                    let arg = self.stack.pop().unwrap();
+                    self.stack.push(internal::is_nil(loc, vec![arg])?);
+                }
+                46 => {
                     // IsList
-                    Value::List(l) if !l.is_empty() => self.stack.push(Value::Boolean(true)),
-                    _ => self.stack.push(Value::Boolean(false)),
-                },
+                    let arg = self.stack.pop().unwrap();
+                    self.stack.push(internal::is_list(loc, vec![arg])?);
+                }
                 47 => {
                     // IsNumber
-                    let value = self.stack.pop().unwrap();
-                    self.stack.push(Value::Boolean(matches!(
-                        value,
-                        Value::Integer(_) | Value::Float(_)
-                    )));
+                    let arg = self.stack.pop().unwrap();
+                    self.stack.push(internal::is_number(loc, vec![arg])?);
                 }
                 48 => {
                     // IsString
-                    let value = self.stack.pop().unwrap();
-                    self.stack
-                        .push(Value::Boolean(matches!(value, Value::String(_))));
+                    let arg = self.stack.pop().unwrap();
+                    self.stack.push(internal::is_string(loc, vec![arg])?);
                 }
                 49 => {
                     // IsSymbol
-                    let value = self.stack.pop().unwrap();
-                    self.stack
-                        .push(Value::Boolean(matches!(value, Value::Symbol(_))));
+                    let arg = self.stack.pop().unwrap();
+                    self.stack.push(internal::is_symbol(loc, vec![arg])?);
                 }
                 50 => {
                     // IsFunction
-                    let value = self.stack.pop().unwrap();
-                    self.stack.push(Value::Boolean(matches!(
-                        value,
-                        Value::NativeFunction(_) | Value::Closure { .. }
-                    )));
+                    let arg = self.stack.pop().unwrap();
+                    self.stack.push(internal::is_function(loc, vec![arg])?);
                 }
                 51 => {
                     // TypeOf
-                    let v = self.stack.pop().unwrap();
-                    self.stack.push(Value::Symbol(intern(value_type_name(&v))));
+                    let arg = self.stack.pop().unwrap();
+                    self.stack.push(internal::type_of(loc, vec![arg])?);
                 }
                 52 => {
                     // Not
