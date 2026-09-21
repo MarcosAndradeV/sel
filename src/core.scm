@@ -1,5 +1,6 @@
 ;; Sel Core Library
 
+; assert :: Bool -> [a] -> ? Error
 (define (assert test &args)
     (if (empty? args)
         (when (not test)
@@ -7,14 +8,17 @@
         (when (not test)
             (error "Assertion fail:" args))))
 
+; delay :: Ast -> Ast
 (defmacro delay (expr)
   (list 'lambda '() expr))
 
+; map :: (a -> b) -> [a] -> [b]
 (define (map f l)
   (if (empty? l)
       '()
       (cons (f (car l)) (map f (cdr l)))))
 
+; filter :: (a -> Bool) -> [a] -> [a]
 (define (filter f l)
   (if (empty? l)
       '()
@@ -22,46 +26,57 @@
           (cons (car l) (filter f (cdr l)))
           (filter f (cdr l)))))
 
+; foldl :: (b -> a -> b) -> b -> [a] -> b
 (define (foldl f acc l)
   (if (empty? l)
       acc
       (foldl f (f acc (car l)) (cdr l))))
 
+; foldr :: (a -> b -> b) -> b -> [a] -> b
 (define (foldr f acc l)
   (if (empty? l)
       acc
       (f (car l) (foldr f acc (cdr l)))))
 
+; reverse :: [a] -> [a]
 (define (reverse l)
   (foldl (lambda (acc x) (cons x acc)) '() l))
 
+; repeat :: (->) -> Int
 (define (repeat f n)
     (if (<= n 0)
         nil
         (begin (f) (repeat f (- n 1)))))
 
+; force :: (->) -> ? a
 (define (force promise)
   (promise))
 
 ;; List utilities
+
+; last :: [a] -> ? a
 (define (last l)
   (if (empty? (cdr l))
       (car l)
       (last (cdr l))))
 
+; append :: [a] -> [a] -> [a]
 (define (append l1 l2)
   (if (empty? l1)
       l2
       (cons (car l1) (append (cdr l1) l2))))
 
+; even? :: Int -> Bool
 (define (even? x) (= (mod x 2) 0))
 
+; range-impl :: Int -> Int -> Int -> [Int] -> [Int]
 (define (range-impl end start step acc)
     (if (>= start end)
         acc
         (range-impl end (+ step start) step (cons start acc))))
 
 ; Just a convinient wrapper
+; range :: [Int] -> [Int]
 (define (range &args)
     (match args
         ((end)

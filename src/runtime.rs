@@ -132,6 +132,7 @@ impl VM {
             stack: Vec::new(),
             catch_handlers: Vec::new(),
             sandbox_root: None,
+
         }
     }
 
@@ -1307,6 +1308,10 @@ pub fn execute_asts_sandboxed(
         last_val = vm.run(loc, Rc::new(chunk), env.clone(), Vec::new())?;
     }
     Ok(last_val)
+}
+
+pub fn execute_asts_debug(asts: Vec<Ast>, env: Rc<RefCell<Env>>) -> Result<Value> {
+    execute_asts_sandboxed(asts, env, None)
 }
 
 pub fn execute_asts(asts: Vec<Ast>, env: Rc<RefCell<Env>>) -> Result<Value> {

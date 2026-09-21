@@ -58,7 +58,6 @@ pub enum Value {
     Nil,
     Integer(i64),
     Float(f64),
-    String(Rc<[char]>, usize),
     Boolean(bool),
     Symbol(u32),
     List(Rc<[Value]>, usize),
@@ -83,7 +82,8 @@ impl Value {
 
     #[inline]
     pub fn make_string(s: &str) -> Self {
-        Value::String(Rc::from(s.chars().collect::<Box<[char]>>()), 0)
+        let items: Vec<Value> = s.chars().map(Value::Char).collect();
+        Value::make_list(items)
     }
 
     #[inline]
@@ -101,28 +101,19 @@ impl Value {
     }
 
     #[inline]
-    pub fn as_char_slice(&self) -> Option<&[char]> {
-        match self {
-            Value::String(s, offset) => {
-                if *offset <= s.len() {
-                    Some(&s[*offset..])
-                } else {
-                    Some(&[])
-                }
-            }
-            _ => None,
-        }
-    }
-
-    #[inline]
     pub fn to_string_lossy(&self) -> Option<String> {
         match self {
-            Value::String(s, offset) => {
-                if *offset <= s.len() {
-                    Some(s[*offset..].iter().collect())
-                } else {
-                    Some(String::new())
+            Value::List(l, offset) => {
+                let slice = if *offset <= l.len() { &l[*offset..] } else { &[] };
+                let mut s = String::with_capacity(slice.len());
+                for v in slice {
+                    if let Value::Char(c) = v {
+                        s.push(*c);
+                    } else {
+                        return None;
+                    }
                 }
+                Some(s)
             }
             _ => None,
         }
@@ -135,6 +126,10 @@ impl Value {
             None
         }
     }
+
+    pub fn is_char(&self) -> bool {
+        matches!(self, Value::Char(_))
+    }
 }
 
 fn format_value(val: &Value) -> String {
@@ -142,7 +137,6 @@ fn format_value(val: &Value) -> String {
         Value::Nil => "()".to_string(),
         Value::Integer(i) => i.to_string(),
         Value::Float(f) => f.to_string(),
-        Value::String(s, offset) => s.iter().skip(*offset).collect(),
         Value::Boolean(b) => {
             if *b {
                 "#t".to_string()
@@ -159,15 +153,26 @@ fn format_value(val: &Value) -> String {
             ch => format!("#\\{}", ch),
         },
         Value::List(l, offset) => {
-            let mut s = String::from("(");
-            for (i, v) in l.iter().skip(*offset).enumerate() {
-                if i > 0 {
-                    s.push(' ');
+            let slice = if *offset <= l.len() { &l[*offset..] } else { &[] };
+            if !slice.is_empty() && slice.iter().all(|v| matches!(v, Value::Char(_))) {
+                slice
+                    .iter()
+                    .map(|v| match v {
+                        Value::Char(c) => *c,
+                        _ => unreachable!(),
+                    })
+                    .collect()
+            } else {
+                let mut s = String::from("(");
+                for (i, v) in slice.iter().enumerate() {
+                    if i > 0 {
+                        s.push(' ');
+                    }
+                    s.push_str(&format_value(v));
                 }
-                s.push_str(&format_value(v));
+                s.push(')');
+                s
             }
-            s.push(')');
-            s
         }
         Value::Record(r) => {
             let mut s = String::from("{");

@@ -223,8 +223,18 @@ mod tests {
         assert!(matches!(eq_test, Value::Boolean(true)));
 
         // Test string equality with different offsets
-        let s_eq_test = eval("(eq? (cdr \"abc\") \"bc\")", env).unwrap();
+        let s_eq_test = eval("(eq? (cdr \"abc\") \"bc\")", env.clone()).unwrap();
         assert!(matches!(s_eq_test, Value::Boolean(true)));
+
+        // Test strings are lists and format properly
+        let str_is_list = eval("(list? \"hello\")", env.clone()).unwrap();
+        assert!(matches!(str_is_list, Value::Boolean(true)));
+
+        let list_of_chars_is_string = eval("(string? '(#\\h #\\i))", env.clone()).unwrap();
+        assert!(matches!(list_of_chars_is_string, Value::Boolean(true)));
+
+        let cons_str = eval("(cons #\\h \"ello\")", env).unwrap();
+        assert_eq!(format!("{cons_str}"), "hello");
     }
 }
 

@@ -268,7 +268,6 @@ fn is_value_equal(first: &Value, arg: &Value) -> bool {
         (Value::Boolean(a), Value::Boolean(b)) => a == b,
         (Value::Integer(a), Value::Integer(b)) => a == b,
         (Value::Float(a), Value::Float(b)) => a == b,
-        (Value::String(a, off_a), Value::String(b, off_b)) => a[*off_a..] == b[*off_b..],
         (Value::Symbol(a), Value::Symbol(b)) => a == b,
         (Value::Pointer(a), Value::Pointer(b)) => a == b,
         (Value::List(a, off_a), Value::List(b, off_b)) => {
@@ -329,10 +328,20 @@ pub fn value_type_name(v: &Value) -> &str {
         Value::Nil => "nil",
         Value::Integer(_) => "int",
         Value::Float(_) => "float",
-        Value::String(..) => "string",
         Value::Boolean(_) => "bool",
         Value::Symbol(_) => "symbol",
-        Value::List(..) => "list",
+        Value::List(l, offset) => {
+            let slice = if *offset <= l.len() {
+                &l[*offset..]
+            } else {
+                &[]
+            };
+            if !slice.is_empty() && slice.iter().all(|v| matches!(v, Value::Char(_))) {
+                "string"
+            } else {
+                "list"
+            }
+        }
         Value::NativeClosure(_) | Value::Closure(_) | Value::NativeFunction(_) => "function",
         Value::Macro { .. } => "macro",
         Value::Pointer(_) => "pointer",
@@ -788,15 +797,14 @@ fn serialize_value(
         }
         FfiType::Pointer | FfiType::CStr => {
             let ptr = match val {
-                Value::String(s, offset) => {
-                    let s_str: String = s[*offset..].iter().collect();
+                Value::Pointer(p) => *p,
+                Value::Nil => 0,
+                v if let Some(s_str) = v.to_string_lossy() => {
                     let cstr = std::ffi::CString::new(s_str).unwrap();
                     let ptr = cstr.as_ptr() as usize;
                     c_strings.push(cstr);
                     ptr
                 }
-                Value::Pointer(p) => *p,
-                Value::Nil => 0,
                 _ => {
                     return Err(SelError::Runtime(
                         loc,
@@ -1118,18 +1126,12 @@ pub fn car(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         Value::List(l, offset) => {
             let slice = &l[offset..];
             if slice.is_empty() {
-                return Err(SelError::Runtime(loc, "car on empty list".into()));
+                // return Err(SelError::Runtime(loc, "car on empty list".into()));
+                return Ok(Value::Nil);
             }
             Ok(slice[0].clone())
         }
-        Value::String(s, offset) => {
-            let slice = &s[offset..];
-            if slice.is_empty() {
-                return Err(SelError::Runtime(loc, "car on empty string".into()));
-            }
-            Ok(Value::Char(slice[0]))
-        }
-        _ => Err(SelError::Runtime(loc, "car requires a list or string".into())),
+        _ => Err(SelError::Runtime(loc, "car requires a list".into())),
     }
 }
 
@@ -1145,24 +1147,15 @@ pub fn cdr(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         Value::List(l, offset) => {
             let slice = &l[offset..];
             if slice.is_empty() {
-                return Err(SelError::Runtime(loc, "cdr on empty list".into()));
+                // return Err(SelError::Runtime(loc, "cdr on empty list".into()));
+                return Ok(Value::Nil)
             }
             if slice.len() == 1 {
                 return Ok(Value::Nil);
             }
             Ok(Value::List(l, offset + 1))
         }
-        Value::String(s, offset) => {
-            let slice = &s[offset..];
-            if slice.is_empty() {
-                return Err(SelError::Runtime(loc, "cdr on empty string".into()));
-            }
-            if slice.len() == 1 {
-                return Ok(Value::Nil);
-            }
-            Ok(Value::String(s, offset + 1))
-        }
-        _ => Err(SelError::Runtime(loc, "cdr requires a list or string".into())),
+        _ => Err(SelError::Runtime(loc, "cdr requires a list".into())),
     }
 }
 
@@ -1187,18 +1180,7 @@ pub fn nth(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
             }
             _ => Err(SelError::Runtime(loc, "nth requires an integer".into())),
         },
-        Value::String(s, offset) => match index {
-            Value::Integer(idx) => {
-                let slice = &s[offset..];
-                Ok(if idx >= 0 && (idx as usize) < slice.len() {
-                    Value::Char(slice[idx as usize])
-                } else {
-                    Value::Nil
-                })
-            }
-            _ => Err(SelError::Runtime(loc, "nth requires an integer".into())),
-        },
-        _ => Err(SelError::Runtime(loc, "nth requires a list or string".into())),
+        _ => Err(SelError::Runtime(loc, "nth requires a list".into())),
     }
 }
 
@@ -1236,16 +1218,8 @@ pub fn drop(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
                 Ok(Value::List(l, offset + n))
             }
         }
-        Value::String(s, offset) => {
-            let slice = &s[offset..];
-            if n >= slice.len() {
-                Ok(Value::Nil)
-            } else {
-                Ok(Value::String(s, offset + n))
-            }
-        }
         Value::Nil => Ok(Value::Nil),
-        _ => Err(SelError::Runtime(loc, "drop requires a list or string".into())),
+        _ => Err(SelError::Runtime(loc, "drop requires a list".into())),
     }
 }
 
@@ -1259,9 +1233,8 @@ pub fn count(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
     match args.pop().unwrap() {
         Value::List(l, offset) => Ok(Value::Integer((l.len().saturating_sub(offset)) as _)),
-        Value::String(s, offset) => Ok(Value::Integer((s.len().saturating_sub(offset)) as _)),
         Value::Nil => Ok(Value::Integer(0)),
-        _ => Err(SelError::Runtime(loc, "count requires a list or string".into())),
+        _ => Err(SelError::Runtime(loc, "count requires a list".into())),
     }
 }
 
@@ -1281,7 +1254,6 @@ pub fn empty(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     match args.pop().unwrap() {
         Value::List(l, offset) => Ok(Value::Boolean(offset >= l.len())),
         Value::Nil => Ok(Value::Boolean(true)),
-        Value::String(s, offset) => Ok(Value::Boolean(offset >= s.len())),
         v => Err(SelError::Runtime(
             loc,
             format!("empty requires a list got {v}"),
@@ -1437,7 +1409,7 @@ pub fn is_list(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         ));
     }
     match args.pop().unwrap() {
-        Value::List(..)|Value::String(..) => Ok(Value::Boolean(true)),
+        Value::List(..) => Ok(Value::Boolean(true)),
         _ => Ok(Value::Boolean(false)),
     }
 }
@@ -1466,7 +1438,12 @@ pub fn is_string(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         ));
     }
     match args.pop().unwrap() {
-        Value::String(..) => Ok(Value::Boolean(true)),
+        Value::List(l, offset) => {
+            let slice = if offset <= l.len() { &l[offset..] } else { &[] };
+            Ok(Value::Boolean(
+                !slice.is_empty() && slice.iter().all(|v| matches!(v, Value::Char(_))),
+            ))
+        }
         _ => Ok(Value::Boolean(false)),
     }
 }
@@ -1479,20 +1456,10 @@ pub fn string_contains(loc: Loc, args: Vec<Value>) -> Result<Value> {
             "Expected exactly 2 arguments for string-contains?".into(),
         ));
     }
-    match (&args[0], &args[1]) {
-        (Value::String(s, off_s), Value::String(sub, off_sub)) => {
-            let s_slice = &s[*off_s..];
-            let sub_slice = &sub[*off_sub..];
-            let contains = if sub_slice.is_empty() {
-                true
-            } else if sub_slice.len() > s_slice.len() {
-                false
-            } else {
-                s_slice.windows(sub_slice.len()).any(|w| w == sub_slice)
-            };
-            Ok(Value::Boolean(contains))
-        }
-        _ => Ok(Value::Boolean(false)),
+    if let (Some(s_str), Some(sub_str)) = (args[0].to_string_lossy(), args[1].to_string_lossy()) {
+        Ok(Value::Boolean(s_str.contains(&sub_str)))
+    } else {
+        Ok(Value::Boolean(false))
     }
 }
 
@@ -1523,14 +1490,18 @@ pub fn gensym(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     let prefix = if args.is_empty() {
         "g".to_string()
     } else {
-        match args.pop().unwrap() {
-            Value::String(s, offset) => s[offset..].iter().collect(),
+        let val = args.pop().unwrap();
+        match val {
             Value::Symbol(id) => lookup(id),
             v => {
-                return Err(SelError::Runtime(
-                    loc,
-                    format!("gensym: expected string or symbol prefix, got {v}"),
-                ));
+                if let Some(s) = v.to_string_lossy() {
+                    s
+                } else {
+                    return Err(SelError::Runtime(
+                        loc,
+                        format!("gensym: expected string or symbol prefix, got {v}"),
+                    ));
+                }
             }
         }
     };

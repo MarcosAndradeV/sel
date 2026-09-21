@@ -445,22 +445,30 @@ pub fn value_to_ast(val: Value, loc: Loc) -> Result<Ast> {
         Value::Nil => Ok(Ast::Nil(loc)),
         Value::Integer(i) => Ok(Ast::Integer(loc, i)),
         Value::Float(f) => Ok(Ast::Float(loc, f)),
-        Value::String(s, offset) => {
-            let s_str: String = s[offset..].iter().collect();
-            Ok(Ast::String(loc, s_str))
-        }
         Value::Boolean(b) => Ok(Ast::Boolean(loc, b)),
         Value::Symbol(id) => Ok(Ast::Symbol(loc, id)),
         Value::Char(c) => Ok(Ast::Char(loc, c)),
         Value::List(l, offset) => {
-            let mut ast_list = Vec::new();
-            for v in l[offset..].iter() {
-                ast_list.push(value_to_ast(v.clone(), loc)?);
+            let slice = &l[offset..];
+            if !slice.is_empty() && slice.iter().all(|v| matches!(v, Value::Char(_))) {
+                let s_str: String = slice
+                    .iter()
+                    .map(|v| match v {
+                        Value::Char(c) => *c,
+                        _ => unreachable!(),
+                    })
+                    .collect();
+                Ok(Ast::String(loc, s_str))
+            } else {
+                let mut ast_list = Vec::new();
+                for v in slice.iter() {
+                    ast_list.push(value_to_ast(v.clone(), loc)?);
+                }
+                if ast_list.is_empty() {
+                    return Ok(Ast::Nil(loc));
+                }
+                Ok(Ast::List(loc, ast_list))
             }
-            if ast_list.is_empty() {
-                return Ok(Ast::Nil(loc));
-            }
-            Ok(Ast::List(loc, ast_list))
         }
         Value::Record(r) => {
             let mut fields = Vec::new();
