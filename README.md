@@ -61,9 +61,9 @@ sel
 
 Comprehensive documentation has been structured inside the `docs/` directory:
 
-- **[Language Reference](docs/REFERENCE.md)**: Full syntax, types, base conversions, special forms, FFI rules, and execution models.
-- **[Interactive REPL](docs/REPL.md)**: Guide to using the interactive REPL shell, special environment commands, variable inspection, loading Scheme scripts, and CLI features.
-- **[Standard & Core Library](docs/CORE.md)**: References for both the native internal built-ins (implemented in Rust) and the Scheme-defined standard library modules (TCO loops, functional maps, monadic errors, etc.).
+- **[Language Reference](docs/src/content/docs/reference.md)**: Full syntax, types, base conversions, special forms, FFI rules, and execution models.
+- **[Interactive REPL](docs/src/content/docs/repl.md)**: Guide to using the interactive REPL shell, special environment commands, variable inspection, loading Scheme scripts, and CLI features.
+- **[Standard & Core Library](docs/src/content/docs/core.md)**: References for both the native internal built-ins (implemented in Rust) and the Scheme-defined standard library modules (TCO loops, functional maps, monadic errors, etc.).
 
 ### Web-Based Documentation Viewer (Starlight)
 `sel` docs include a fully configured, ultra-fast **Astro Starlight** documentation site. 
