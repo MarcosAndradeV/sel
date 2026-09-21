@@ -178,42 +178,40 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
     match ast {
         Ast::Load(loc, path) => (
             loc,
-            Value::List(Rc::new([
+            Value::make_list(vec![
                 Value::Symbol(intern("load")),
                 ast_to_value(*path).1,
-            ])),
+            ]),
         ),
         Ast::Symbol(loc, id) => (loc, Value::Symbol(id)),
         Ast::Integer(loc, i) => (loc, Value::Integer(i)),
         Ast::Float(loc, f) => (loc, Value::Float(f)),
-        Ast::String(loc, s) => (loc, Value::String(Rc::new(s))),
+        Ast::String(loc, s) => (loc, Value::make_string(&s)),
         Ast::Boolean(loc, b) => (loc, Value::Boolean(b)),
         Ast::Nil(loc) => (loc, Value::Nil),
         Ast::List(loc, l) => (
             loc,
-            Value::List(
+            Value::make_list(
                 l.into_iter()
                     .map(|a| ast_to_value(a).1)
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice()
-                    .into(),
+                    .collect(),
             ),
         ),
         Ast::Define(loc, id, val) => (
             loc,
-            Value::List(Rc::new([
+            Value::make_list(vec![
                 Value::Symbol(intern("define")),
                 Value::Symbol(id),
                 ast_to_value(*val).1,
-            ])),
+            ]),
         ),
         Ast::DefMacro(loc, id, val) => (
             loc,
-            Value::List(Rc::new([
+            Value::make_list(vec![
                 Value::Symbol(intern("defmacro")),
                 Value::Symbol(id),
                 ast_to_value(*val).1,
-            ])),
+            ]),
         ),
         Ast::Import(loc, id, alias) => {
             let mut list = vec![Value::Symbol(intern("import")), Value::Symbol(id)];
@@ -221,15 +219,15 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
                 list.push(Value::Symbol(intern(":as")));
                 list.push(Value::Symbol(a));
             }
-            (loc, Value::List(list.into_boxed_slice().into()))
+            (loc, Value::make_list(list))
         }
         Ast::Set(loc, id, val) => (
             loc,
-            Value::List(Rc::new([
+            Value::make_list(vec![
                 Value::Symbol(intern("set!")),
                 Value::Symbol(id),
                 ast_to_value(*val).1,
-            ])),
+            ]),
         ),
         Ast::If(loc, cond, t, f) => {
             let mut list = vec![
@@ -240,7 +238,7 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
             if let Some(f) = f {
                 list.push(ast_to_value(*f).1);
             }
-            (loc, Value::List(list.into_boxed_slice().into()))
+            (loc, Value::make_list(list))
         }
         Ast::Cond(loc, branches) => {
             let mut list = vec![Value::Symbol(intern("cond"))];
@@ -248,12 +246,12 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
                 list.push(ast_to_value(c).1);
                 list.push(ast_to_value(e).1);
             }
-            (loc, Value::List(list.into_boxed_slice().into()))
+            (loc, Value::make_list(list))
         }
         Ast::When(loc, cond, body) => {
             let mut list = vec![Value::Symbol(intern("when")), ast_to_value(*cond).1];
             list.extend(body.into_iter().map(|a| ast_to_value(a).1));
-            (loc, Value::List(list.into_boxed_slice().into()))
+            (loc, Value::make_list(list))
         }
         Ast::Unless(loc, cond, f, t) => {
             let mut list = vec![
@@ -264,7 +262,7 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
             if let Some(t) = t {
                 list.push(ast_to_value(*t).1);
             }
-            (loc, Value::List(list.into_boxed_slice().into()))
+            (loc, Value::make_list(list))
         }
         Ast::While(loc, cond, body) => {
             let list = vec![
@@ -272,7 +270,7 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
                 ast_to_value(*cond).1,
                 ast_to_value(*body).1,
             ];
-            (loc, Value::List(list.into_boxed_slice().into()))
+            (loc, Value::make_list(list))
         }
         Ast::Until(loc, cond, body) => {
             let list = vec![
@@ -280,107 +278,102 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
                 ast_to_value(*cond).1,
                 ast_to_value(*body).1,
             ];
-            (loc, Value::List(list.into_boxed_slice().into()))
+            (loc, Value::make_list(list))
         }
         Ast::Lambda(loc, params, body) => {
             let mut list = vec![
                 Value::Symbol(intern("lambda")),
-                Value::List(
+                Value::make_list(
                     params
                         .into_iter()
                         .map(Value::Symbol)
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice()
-                        .into(),
+                        .collect(),
                 ),
             ];
             list.extend(body.into_iter().map(|a| ast_to_value(a).1));
-            (loc, Value::List(list.into_boxed_slice().into()))
+            (loc, Value::make_list(list))
         }
         Ast::Begin(loc, body) => {
             let mut list = vec![Value::Symbol(intern("begin"))];
             list.extend(body.into_iter().map(|a| ast_to_value(a).1));
-            (loc, Value::List(list.into_boxed_slice().into()))
+            (loc, Value::make_list(list))
         }
         Ast::Let(loc, bindings, body) => {
             let mut list = vec![Value::Symbol(intern("let"))];
             let mut bind_list = Vec::new();
             for (id, val) in bindings {
-                bind_list.push(Value::List(Rc::new([
+                bind_list.push(Value::make_list(vec![
                     Value::Symbol(id),
                     ast_to_value(val).1,
-                ])));
+                ]));
             }
-            list.push(Value::List(bind_list.into_boxed_slice().into()));
+            list.push(Value::make_list(bind_list));
             list.extend(body.into_iter().map(|a| ast_to_value(a).1));
-            (loc, Value::List(list.into_boxed_slice().into()))
+            (loc, Value::make_list(list))
         }
         Ast::Quote(loc, val) => (
             loc,
-            Value::List(Rc::new([
+            Value::make_list(vec![
                 Value::Symbol(intern("quote")),
                 ast_to_value(*val).1,
-            ])),
+            ]),
         ),
         Ast::Quasiquote(loc, val) => (
             loc,
-            Value::List(Rc::new([
+            Value::make_list(vec![
                 Value::Symbol(intern("quasiquote")),
                 ast_to_value(*val).1,
-            ])),
+            ]),
         ),
         Ast::Unquote(loc, val) => (
             loc,
-            Value::List(Rc::new([
+            Value::make_list(vec![
                 Value::Symbol(intern("unquote")),
                 ast_to_value(*val).1,
-            ])),
+            ]),
         ),
         Ast::UnquoteSplicing(loc, val) => (
             loc,
-            Value::List(Rc::new([
+            Value::make_list(vec![
                 Value::Symbol(intern("unquote-splicing")),
                 ast_to_value(*val).1,
-            ])),
+            ]),
         ),
         Ast::And(loc, exprs) => {
             let mut list = vec![Value::Symbol(intern("and"))];
             list.extend(exprs.into_iter().map(|a| ast_to_value(a).1));
-            (loc, Value::List(list.into_boxed_slice().into()))
+            (loc, Value::make_list(list))
         }
         Ast::Or(loc, exprs) => {
             let mut list = vec![Value::Symbol(intern("or"))];
             list.extend(exprs.into_iter().map(|a| ast_to_value(a).1));
-            (loc, Value::List(list.into_boxed_slice().into()))
+            (loc, Value::make_list(list))
         }
         Ast::Bind(loc, id) => (loc, Value::Symbol(intern(&format!("&{}", lookup(id))))),
         Ast::Try(loc, body, err_var, catch_body) => {
+            let mut catch_list = vec![Value::Symbol(intern("catch")), Value::Symbol(err_var)];
+            catch_list.extend(catch_body.into_iter().map(|a| ast_to_value(a).1));
             let list = vec![
                 Value::Symbol(intern("try")),
                 ast_to_value(*body).1,
-                Value::List({
-                    let mut catch_list =
-                        vec![Value::Symbol(intern("catch")), Value::Symbol(err_var)];
-                    catch_list.extend(catch_body.into_iter().map(|a| ast_to_value(a).1));
-                    catch_list.into_boxed_slice().into()
-                }),
+                Value::make_list(catch_list),
             ];
-            (loc, Value::List(list.into_boxed_slice().into()))
+            (loc, Value::make_list(list))
         }
         Ast::Yield(loc, val) => (
             loc,
-            Value::List(Rc::new([
+            Value::make_list(vec![
                 Value::Symbol(intern("co-yield")),
                 ast_to_value(*val).1,
-            ])),
+            ]),
         ),
         Ast::CoResume(loc, co, arg) => (
             loc,
-            Value::List(Rc::new([
+            Value::make_list(vec![
                 Value::Symbol(intern("co-resume")),
                 ast_to_value(*co).1,
                 ast_to_value(*arg).1,
-            ])),
+            ]),
         ),
         Ast::Char(loc, c) => (loc, Value::Char(c)),
         Ast::VisibilityDirective(loc, is_public) => (
@@ -398,15 +391,15 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
             for c in clauses {
                 let mut c_items = vec![pattern_to_value(c.pattern)];
                 if let Some(guard) = c.guard {
-                    c_items.push(Value::List(Rc::new([
+                    c_items.push(Value::make_list(vec![
                         Value::Symbol(intern("where")),
                         ast_to_value(guard).1,
-                    ])));
+                    ]));
                 }
                 c_items.extend(c.body.into_iter().map(|b| ast_to_value(b).1));
-                list.push(Value::List(c_items.into_boxed_slice().into()));
+                list.push(Value::make_list(c_items));
             }
-            (loc, Value::List(list.into_boxed_slice().into()))
+            (loc, Value::make_list(list))
         }
     }
 }
@@ -416,23 +409,21 @@ pub fn pattern_to_value(pat: Pattern) -> Value {
         Pattern::Wildcard(_) => Value::Symbol(intern("_")),
         Pattern::Variable(_, id) => Value::Symbol(id),
         Pattern::Literal(_, ast) => ast_to_value(*ast).1,
-        Pattern::List(_, pats) => Value::List(
+        Pattern::List(_, pats) => Value::make_list(
             pats.into_iter()
                 .map(pattern_to_value)
-                .collect::<Vec<_>>()
-                .into_boxed_slice()
-                .into(),
+                .collect(),
         ),
-        Pattern::Cons(_, h, t) => Value::List(Rc::new([
+        Pattern::Cons(_, h, t) => Value::make_list(vec![
             Value::Symbol(intern("cons")),
             pattern_to_value(*h),
             pattern_to_value(*t),
-        ])),
+        ]),
         Pattern::Rest(_, pfx, rest) => {
             let mut list: Vec<Value> = pfx.into_iter().map(pattern_to_value).collect();
             list.push(Value::Symbol(intern("&")));
             list.push(pattern_to_value(*rest));
-            Value::List(list.into_boxed_slice().into())
+            Value::make_list(list)
         }
         Pattern::Record(_, fields) => {
             let mut rec = Record::new();
@@ -444,7 +435,7 @@ pub fn pattern_to_value(pat: Pattern) -> Value {
         Pattern::Or(_, pats) => {
             let mut list = vec![Value::Symbol(intern("or"))];
             list.extend(pats.into_iter().map(pattern_to_value));
-            Value::List(list.into_boxed_slice().into())
+            Value::make_list(list)
         }
     }
 }
@@ -454,13 +445,16 @@ pub fn value_to_ast(val: Value, loc: Loc) -> Result<Ast> {
         Value::Nil => Ok(Ast::Nil(loc)),
         Value::Integer(i) => Ok(Ast::Integer(loc, i)),
         Value::Float(f) => Ok(Ast::Float(loc, f)),
-        Value::String(s) => Ok(Ast::String(loc, (*s).clone())),
+        Value::String(s, offset) => {
+            let s_str: String = s[offset..].iter().collect();
+            Ok(Ast::String(loc, s_str))
+        }
         Value::Boolean(b) => Ok(Ast::Boolean(loc, b)),
         Value::Symbol(id) => Ok(Ast::Symbol(loc, id)),
         Value::Char(c) => Ok(Ast::Char(loc, c)),
-        Value::List(l) => {
+        Value::List(l, offset) => {
             let mut ast_list = Vec::new();
-            for v in l.iter() {
+            for v in l[offset..].iter() {
                 ast_list.push(value_to_ast(v.clone(), loc)?);
             }
             if ast_list.is_empty() {

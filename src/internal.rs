@@ -263,16 +263,18 @@ pub fn is_equal(_loc: Loc, args: Vec<Value>) -> Result<Value> {
 fn is_value_equal(first: &Value, arg: &Value) -> bool {
     match (first, arg) {
         (Value::Nil, Value::Nil) => true,
-        (Value::Nil, Value::List(b)) if b.is_empty() => true,
-        (Value::List(a), Value::Nil) if a.is_empty() => true,
+        (Value::Nil, Value::List(b, off)) if b[*off..].is_empty() => true,
+        (Value::List(a, off), Value::Nil) if a[*off..].is_empty() => true,
         (Value::Boolean(a), Value::Boolean(b)) => a == b,
         (Value::Integer(a), Value::Integer(b)) => a == b,
         (Value::Float(a), Value::Float(b)) => a == b,
-        (Value::String(a), Value::String(b)) => a == b,
+        (Value::String(a, off_a), Value::String(b, off_b)) => a[*off_a..] == b[*off_b..],
         (Value::Symbol(a), Value::Symbol(b)) => a == b,
         (Value::Pointer(a), Value::Pointer(b)) => a == b,
-        (Value::List(a), Value::List(b)) => {
-            a.len() == b.len() && a.iter().zip(b.iter()).all(|(a, b)| is_value_equal(a, b))
+        (Value::List(a, off_a), Value::List(b, off_b)) => {
+            let sa = &a[*off_a..];
+            let sb = &b[*off_b..];
+            sa.len() == sb.len() && sa.iter().zip(sb.iter()).all(|(a, b)| is_value_equal(a, b))
         }
         (Value::Record(a), Value::Record(b)) => {
             a.fields().len() == b.fields().len()
@@ -327,10 +329,10 @@ pub fn value_type_name(v: &Value) -> &str {
         Value::Nil => "nil",
         Value::Integer(_) => "int",
         Value::Float(_) => "float",
-        Value::String(_) => "string",
+        Value::String(..) => "string",
         Value::Boolean(_) => "bool",
         Value::Symbol(_) => "symbol",
-        Value::List(_) => "list",
+        Value::List(..) => "list",
         Value::NativeClosure(_) | Value::Closure(_) | Value::NativeFunction(_) => "function",
         Value::Macro { .. } => "macro",
         Value::Pointer(_) => "pointer",
@@ -376,9 +378,9 @@ pub fn ffi_dlopen(loc: Loc, args: Vec<Value>) -> Result<Value> {
             "Expected exactly 1 arguments for ffi-dlopen".into(),
         ));
     }
-    if let Value::String(s) = &args[0] {
+    if let Some(s) = args[0].to_string_lossy() {
         unsafe {
-            match libloading::Library::new(s.as_str()) {
+            match libloading::Library::new(&s) {
                 Ok(lib) => Ok(Value::Library(Rc::new(lib))),
                 Err(e) => Err(SelError::Runtime(loc, format!("dlopen failed: {}", e))),
             }
@@ -408,9 +410,9 @@ pub fn ffi_dlsym(loc: Loc, args: Vec<Value>) -> Result<Value> {
             ));
         }
     };
-    let sym_name = match &args[1] {
-        Value::String(s) => s,
-        _ => {
+    let sym_name = match args[1].to_string_lossy() {
+        Some(s) => s,
+        None => {
             return Err(SelError::Runtime(
                 loc,
                 "ffi-dlsym requires a string symbol name".into(),
@@ -418,7 +420,7 @@ pub fn ffi_dlsym(loc: Loc, args: Vec<Value>) -> Result<Value> {
         }
     };
 
-    let mut sym_bytes = sym_name.as_bytes().to_vec();
+    let mut sym_bytes = sym_name.into_bytes();
     sym_bytes.push(0);
 
     unsafe {
@@ -530,14 +532,15 @@ fn parse_ffi_type(loc: Loc, val: &Value) -> Result<FfiType> {
                 )),
             }
         }
-        Value::List(l) => {
-            if l.len() != 2 {
+        Value::List(l, offset) => {
+            let slice = &l[*offset..];
+            if slice.len() != 2 {
                 return Err(SelError::Runtime(
                     loc,
                     "Invalid FFI type list: expected (struct (type1 type2 ...))".into(),
                 ));
             }
-            let first_sym = match &l[0] {
+            let first_sym = match &slice[0] {
                 Value::Symbol(s) => crate::lookup(*s),
                 _ => {
                     return Err(SelError::Runtime(
@@ -552,8 +555,8 @@ fn parse_ffi_type(loc: Loc, val: &Value) -> Result<FfiType> {
                     format!("Expected 'struct' keyword but got {first_sym}"),
                 ));
             }
-            let fields_list = match &l[1] {
-                Value::List(fl) => fl,
+            let fields_slice = match &slice[1] {
+                Value::List(fl, f_offset) => &fl[*f_offset..],
                 Value::Nil => return Ok(FfiType::Struct(Vec::new())),
                 _ => {
                     return Err(SelError::Runtime(
@@ -562,8 +565,8 @@ fn parse_ffi_type(loc: Loc, val: &Value) -> Result<FfiType> {
                     ));
                 }
             };
-            let mut fields = Vec::with_capacity(fields_list.len());
-            for field in fields_list.iter() {
+            let mut fields = Vec::with_capacity(fields_slice.len());
+            for field in fields_slice.iter() {
                 fields.push(parse_ffi_type(loc, field)?);
             }
             Ok(FfiType::Struct(fields))
@@ -785,8 +788,9 @@ fn serialize_value(
         }
         FfiType::Pointer | FfiType::CStr => {
             let ptr = match val {
-                Value::String(s) => {
-                    let cstr = std::ffi::CString::new(s.as_str()).unwrap();
+                Value::String(s, offset) => {
+                    let s_str: String = s[*offset..].iter().collect();
+                    let cstr = std::ffi::CString::new(s_str).unwrap();
                     let ptr = cstr.as_ptr() as usize;
                     c_strings.push(cstr);
                     ptr
@@ -807,15 +811,17 @@ fn serialize_value(
             Ok(())
         }
         FfiType::Struct(fields) => {
-            let list = match val {
-                Value::List(l) => l.clone(),
-                Value::Record(r) => r
-                    .fields()
-                    .iter()
-                    .map(|(_, v)| v.clone())
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice()
-                    .into(),
+            let record_vals;
+            let list: &[Value] = match val {
+                Value::List(l, offset) => &l[*offset..],
+                Value::Record(r) => {
+                    record_vals = r
+                        .fields()
+                        .iter()
+                        .map(|(_, v)| v.clone())
+                        .collect::<Vec<_>>();
+                    &record_vals
+                }
                 _ => {
                     return Err(SelError::Runtime(
                         loc,
@@ -925,7 +931,7 @@ unsafe fn deserialize_value(ty: &FfiType, ptr: *const u8) -> Value {
                     list.push(deserialize_value(f_type, field_ptr));
                     current_offset = target_offset + f_size;
                 }
-                Value::List(list.into_boxed_slice().into())
+                Value::make_list(list)
             }
         }
     }
@@ -948,28 +954,28 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
 
     let ret_type = parse_ffi_type(loc, &args[1])?;
 
-    let arg_types_list = match &args[2] {
-        Value::List(l) => l.clone(),
-        Value::Nil => Rc::new([]),
+    let arg_types_slice: &[Value] = match &args[2] {
+        Value::List(l, offset) => &l[*offset..],
+        Value::Nil => &[],
         _ => return Err(SelError::Runtime(loc, "arg_types must be a list".into())),
     };
-    let mut arg_types = Vec::with_capacity(arg_types_list.len());
-    for t in arg_types_list.iter() {
+    let mut arg_types = Vec::with_capacity(arg_types_slice.len());
+    for t in arg_types_slice.iter() {
         arg_types.push(parse_ffi_type(loc, t)?);
     }
 
-    let arg_vals = match &args[3] {
-        Value::List(l) => l.clone(),
-        Value::Nil => Rc::new([]),
+    let arg_vals_slice: &[Value] = match &args[3] {
+        Value::List(l, offset) => &l[*offset..],
+        Value::Nil => &[],
         _ => return Err(SelError::Runtime(loc, "arg_vals must be a list".into())),
     };
-    if arg_vals.len() != arg_types.len() {
+    if arg_vals_slice.len() != arg_types.len() {
         return Err(SelError::Runtime(
             loc,
             format!(
                 "Argument count mismatch: expected {} but got {}",
                 arg_types.len(),
-                arg_vals.len()
+                arg_vals_slice.len()
             ),
         ));
     }
@@ -978,15 +984,15 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
     let ffi_arg_types: Vec<_> = arg_types.iter().map(|t| t.to_libffi_type()).collect();
     let cif = libffi::middle::Cif::new(ffi_arg_types, ffi_ret_type);
 
-    let mut arg_buffers = Vec::with_capacity(arg_vals.len());
+    let mut arg_buffers = Vec::with_capacity(arg_vals_slice.len());
     let mut c_strings = Vec::new();
-    for (arg_val, arg_type) in arg_vals.iter().zip(&arg_types) {
+    for (arg_val, arg_type) in arg_vals_slice.iter().zip(&arg_types) {
         let mut buf = Vec::new();
         serialize_value(loc, arg_val, arg_type, &mut buf, &mut c_strings)?;
         arg_buffers.push(buf);
     }
 
-    let mut call_args = Vec::with_capacity(arg_vals.len());
+    let mut call_args = Vec::with_capacity(arg_vals_slice.len());
     for buf in &arg_buffers {
         if buf.is_empty() {
             call_args.push(libffi::middle::arg(&0u8));
@@ -1049,7 +1055,7 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
                     Ok(Value::Nil)
                 } else {
                     let c_str = std::ffi::CStr::from_ptr(res);
-                    Ok(Value::String(Rc::new(c_str.to_string_lossy().into_owned())))
+                    Ok(Value::make_string(&c_str.to_string_lossy()))
                 }
             }
             FfiType::Pointer => {
@@ -1088,13 +1094,15 @@ pub fn cons(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     let tail = args.pop().unwrap();
     let head = args.pop().unwrap();
     match tail {
-        Value::List(l) => {
-            let mut new_l = vec![head];
-            new_l.extend(l.iter().cloned());
-            Ok(Value::List(new_l.into_boxed_slice().into()))
+        Value::List(l, offset) => {
+            let slice = &l[offset..];
+            let mut new_l = Vec::with_capacity(slice.len() + 1);
+            new_l.push(head);
+            new_l.extend(slice.iter().cloned());
+            Ok(Value::make_list(new_l))
         }
-        Value::Nil => Ok(Value::List(Rc::new([head]))),
-        _ => Ok(Value::List(Rc::new([head, tail]))),
+        Value::Nil => Ok(Value::make_list(vec![head])),
+        _ => Ok(Value::make_list(vec![head, tail])),
     }
 }
 
@@ -1107,19 +1115,21 @@ pub fn car(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         ));
     }
     match args.pop().unwrap() {
-        Value::List(l) => {
-            if l.is_empty() {
+        Value::List(l, offset) => {
+            let slice = &l[offset..];
+            if slice.is_empty() {
                 return Err(SelError::Runtime(loc, "car on empty list".into()));
             }
-            Ok(l[0].clone())
+            Ok(slice[0].clone())
         }
-        Value::String(s) => {
-            if s.is_empty() {
+        Value::String(s, offset) => {
+            let slice = &s[offset..];
+            if slice.is_empty() {
                 return Err(SelError::Runtime(loc, "car on empty string".into()));
             }
-            Ok(Value::Char(s.chars().nth(0).unwrap_or_default()))
+            Ok(Value::Char(slice[0]))
         }
-        _ => Err(SelError::Runtime(loc, "car requires a list".into())),
+        _ => Err(SelError::Runtime(loc, "car requires a list or string".into())),
     }
 }
 
@@ -1132,26 +1142,27 @@ pub fn cdr(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         ));
     }
     match args.pop().unwrap() {
-        Value::List(l) => {
-            if l.is_empty() {
+        Value::List(l, offset) => {
+            let slice = &l[offset..];
+            if slice.is_empty() {
                 return Err(SelError::Runtime(loc, "cdr on empty list".into()));
             }
-            if l.len() == 1 {
+            if slice.len() == 1 {
                 return Ok(Value::Nil);
             }
-            let mut new_l = Vec::with_capacity(l.len() - 1);
-            new_l.extend_from_slice(&l[1..]);
-            Ok(Value::List(new_l.into_boxed_slice().into()))
+            Ok(Value::List(l, offset + 1))
         }
-        Value::String(s) => {
-            if s.is_empty() {
+        Value::String(s, offset) => {
+            let slice = &s[offset..];
+            if slice.is_empty() {
                 return Err(SelError::Runtime(loc, "cdr on empty string".into()));
             }
-            Ok(s.get(1..)
-                .map(|s| Value::String(s.to_string().into()))
-                .unwrap_or(Value::Nil))
+            if slice.len() == 1 {
+                return Ok(Value::Nil);
+            }
+            Ok(Value::String(s, offset + 1))
         }
-        _ => Err(SelError::Runtime(loc, "cdr requires a list".into())),
+        _ => Err(SelError::Runtime(loc, "cdr requires a list or string".into())),
     }
 }
 
@@ -1165,15 +1176,29 @@ pub fn nth(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
     let index = args.pop().unwrap();
     match args.pop().unwrap() {
-        Value::List(l) => match index {
-            Value::Integer(index) => Ok(if (index as usize) < l.len() {
-                l[index as usize].clone()
-            } else {
-                Value::Nil
-            }),
-            _ => Err(SelError::Runtime(loc, "nth requires a interger".into())),
+        Value::List(l, offset) => match index {
+            Value::Integer(idx) => {
+                let slice = &l[offset..];
+                Ok(if idx >= 0 && (idx as usize) < slice.len() {
+                    slice[idx as usize].clone()
+                } else {
+                    Value::Nil
+                })
+            }
+            _ => Err(SelError::Runtime(loc, "nth requires an integer".into())),
         },
-        _ => Err(SelError::Runtime(loc, "nth requires a list".into())),
+        Value::String(s, offset) => match index {
+            Value::Integer(idx) => {
+                let slice = &s[offset..];
+                Ok(if idx >= 0 && (idx as usize) < slice.len() {
+                    Value::Char(slice[idx as usize])
+                } else {
+                    Value::Nil
+                })
+            }
+            _ => Err(SelError::Runtime(loc, "nth requires an integer".into())),
+        },
+        _ => Err(SelError::Runtime(loc, "nth requires a list or string".into())),
     }
 }
 
@@ -1203,17 +1228,24 @@ pub fn drop(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         }
     };
     match list_val {
-        Value::List(l) => {
-            if n >= l.len() {
+        Value::List(l, offset) => {
+            let slice = &l[offset..];
+            if n >= slice.len() {
                 Ok(Value::Nil)
             } else {
-                let mut new_l = Vec::with_capacity(l.len() - n);
-                new_l.extend_from_slice(&l[n..]);
-                Ok(Value::List(new_l.into_boxed_slice().into()))
+                Ok(Value::List(l, offset + n))
+            }
+        }
+        Value::String(s, offset) => {
+            let slice = &s[offset..];
+            if n >= slice.len() {
+                Ok(Value::Nil)
+            } else {
+                Ok(Value::String(s, offset + n))
             }
         }
         Value::Nil => Ok(Value::Nil),
-        _ => Err(SelError::Runtime(loc, "drop requires a list".into())),
+        _ => Err(SelError::Runtime(loc, "drop requires a list or string".into())),
     }
 }
 
@@ -1226,16 +1258,16 @@ pub fn count(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         ));
     }
     match args.pop().unwrap() {
-        Value::List(l) => Ok(Value::Integer(l.len() as _)),
-        Value::String(s) => Ok(Value::Integer(s.len() as _)),
+        Value::List(l, offset) => Ok(Value::Integer((l.len().saturating_sub(offset)) as _)),
+        Value::String(s, offset) => Ok(Value::Integer((s.len().saturating_sub(offset)) as _)),
         Value::Nil => Ok(Value::Integer(0)),
-        _ => Err(SelError::Runtime(loc, "count requires a list".into())),
+        _ => Err(SelError::Runtime(loc, "count requires a list or string".into())),
     }
 }
 
 #[inline]
 pub fn list(_loc: Loc, args: Vec<Value>) -> Result<Value> {
-    Ok(Value::List(args.into_boxed_slice().into()))
+    Ok(Value::make_list(args))
 }
 
 #[inline]
@@ -1247,9 +1279,9 @@ pub fn empty(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         ));
     }
     match args.pop().unwrap() {
-        Value::List(l) => Ok(Value::Boolean(l.is_empty())),
+        Value::List(l, offset) => Ok(Value::Boolean(offset >= l.len())),
         Value::Nil => Ok(Value::Boolean(true)),
-        Value::String(s) => Ok(Value::Boolean(s.is_empty())),
+        Value::String(s, offset) => Ok(Value::Boolean(offset >= s.len())),
         v => Err(SelError::Runtime(
             loc,
             format!("empty requires a list got {v}"),
@@ -1335,7 +1367,7 @@ pub fn rkeys(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     match args.pop().unwrap() {
         Value::Record(r) => {
             let keys_vec: Vec<Value> = r.fields().keys().map(|&k| Value::Symbol(k)).collect();
-            Ok(Value::List(keys_vec.into_boxed_slice().into()))
+            Ok(Value::make_list(keys_vec))
         }
         _ => Err(SelError::Runtime(loc, "rkeys requires a record".into())),
     }
@@ -1352,7 +1384,7 @@ pub fn rvals(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     match args.pop().unwrap() {
         Value::Record(r) => {
             let vals_vec: Vec<Value> = r.fields().values().cloned().collect();
-            Ok(Value::List(vals_vec.into_boxed_slice().into()))
+            Ok(Value::make_list(vals_vec))
         }
         _ => Err(SelError::Runtime(loc, "rvals requires a record".into())),
     }
@@ -1405,7 +1437,7 @@ pub fn is_list(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         ));
     }
     match args.pop().unwrap() {
-        Value::List(_) => Ok(Value::Boolean(true)),
+        Value::List(..)|Value::String(..) => Ok(Value::Boolean(true)),
         _ => Ok(Value::Boolean(false)),
     }
 }
@@ -1434,7 +1466,7 @@ pub fn is_string(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         ));
     }
     match args.pop().unwrap() {
-        Value::String(_) => Ok(Value::Boolean(true)),
+        Value::String(..) => Ok(Value::Boolean(true)),
         _ => Ok(Value::Boolean(false)),
     }
 }
@@ -1448,7 +1480,18 @@ pub fn string_contains(loc: Loc, args: Vec<Value>) -> Result<Value> {
         ));
     }
     match (&args[0], &args[1]) {
-        (Value::String(s), Value::String(sub)) => Ok(Value::Boolean(s.contains(sub.as_str()))),
+        (Value::String(s, off_s), Value::String(sub, off_sub)) => {
+            let s_slice = &s[*off_s..];
+            let sub_slice = &sub[*off_sub..];
+            let contains = if sub_slice.is_empty() {
+                true
+            } else if sub_slice.len() > s_slice.len() {
+                false
+            } else {
+                s_slice.windows(sub_slice.len()).any(|w| w == sub_slice)
+            };
+            Ok(Value::Boolean(contains))
+        }
         _ => Ok(Value::Boolean(false)),
     }
 }
@@ -1481,7 +1524,7 @@ pub fn gensym(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         "g".to_string()
     } else {
         match args.pop().unwrap() {
-            Value::String(s) => (*s).clone(),
+            Value::String(s, offset) => s[offset..].iter().collect(),
             Value::Symbol(id) => lookup(id),
             v => {
                 return Err(SelError::Runtime(
@@ -1627,8 +1670,8 @@ pub fn file_system(loc: Loc, mut call_args: Vec<Value>) -> Result<Value> {
                         "Expected exactly 1 arguments for file-exists?".into(),
                     ));
                 }
-                return if let Value::String(path) = &args[0] {
-                    Ok(Value::Boolean(std::path::Path::new(path.as_str()).exists()))
+                return if let Some(path) = args[0].to_string_lossy() {
+                    Ok(Value::Boolean(std::path::Path::new(&path).exists()))
                 } else {
                     Err(SelError::Runtime(
                         loc,
@@ -1654,8 +1697,8 @@ fn fs_write(loc: Loc, args: &[Value]) -> Result<Value> {
             "Expected exactly 2 arguments for write".into(),
         ));
     }
-    if let (Value::String(path), Value::String(content)) = (&args[0], &args[1]) {
-        match std::fs::write(path.as_str(), content.as_str()) {
+    if let (Some(path), Some(content)) = (args[0].to_string_lossy(), args[1].to_string_lossy()) {
+        match std::fs::write(&path, &content) {
             Ok(_) => Ok(Value::Nil),
             Err(e) => Err(SelError::Runtime(loc, format!("write failed: {}", e))),
         }
@@ -1674,9 +1717,9 @@ fn fs_read(loc: Loc, args: &[Value]) -> Result<Value> {
             "Expected exactly 1 arguments for read".into(),
         ));
     }
-    if let Value::String(path) = &args[0] {
-        match std::fs::read_to_string(path.as_str()) {
-            Ok(content) => Ok(Value::String(Rc::new(content))),
+    if let Some(path) = args[0].to_string_lossy() {
+        match std::fs::read_to_string(&path) {
+            Ok(content) => Ok(Value::make_string(&content)),
             Err(e) => Err(SelError::Runtime(loc, format!("read failed: {}", e))),
         }
     } else {
@@ -1706,11 +1749,9 @@ pub fn system(loc: Loc, mut system_args: Vec<Value>) -> Result<Value> {
                 }
                 let args_vec = std::env::args()
                     .skip(1)
-                    .map(|s| Value::String(Rc::new(s)))
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice()
-                    .into();
-                return Ok(Value::List(args_vec));
+                    .map(|s| Value::make_string(&s))
+                    .collect::<Vec<_>>();
+                return Ok(Value::make_list(args_vec));
             }
             "getenv" => {
                 if args.len() != 1 {
@@ -1719,9 +1760,9 @@ pub fn system(loc: Loc, mut system_args: Vec<Value>) -> Result<Value> {
                         "Expected exactly 1 arguments for getenv".into(),
                     ));
                 }
-                return if let Value::String(key) = &args[0] {
-                    match std::env::var(key.as_str()) {
-                        Ok(val) => Ok(Value::String(Rc::new(val))),
+                return if let Some(key) = args[0].to_string_lossy() {
+                    match std::env::var(&key) {
+                        Ok(val) => Ok(Value::make_string(&val)),
                         Err(_) => Ok(Value::Nil),
                     }
                 } else {

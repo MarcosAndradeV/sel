@@ -63,7 +63,7 @@ impl<'a> Compiler<'a> {
                 self.chunk.write((loc, OpCode::Constant(idx)));
             }
             Ast::String(loc, s) => {
-                let idx = self.chunk.add_constant(Value::String(Rc::new(s)));
+                let idx = self.chunk.add_constant(Value::make_string(&s));
                 self.chunk.write((loc, OpCode::Constant(idx)));
             }
             Ast::Boolean(loc, b) => {

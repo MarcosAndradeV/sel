@@ -178,7 +178,7 @@ impl VM {
 
             // Push the error message as a String
             let err_msg = err.to_string();
-            self.stack.push(Value::String(Rc::new(err_msg)));
+            self.stack.push(Value::make_string(&err_msg));
 
             // Clean up any other catch handlers that were registered inside frames we just unwound
             let frame_count = frames.len();
@@ -322,7 +322,7 @@ impl VM {
                                     let rest_args =
                                         self.stack.split_off(self.stack.len() - (arg_count - i));
                                     let name = &lookup(*id)[1..];
-                                    let rest_val = Value::List(rest_args.into_boxed_slice().into());
+                                    let rest_val = Value::make_list(rest_args);
                                     call_env.insert(intern(name), rest_val.clone());
                                     locals.push(rest_val);
                                     has_rest = true;
@@ -468,7 +468,7 @@ impl VM {
                                     let rest_args =
                                         self.stack.split_off(self.stack.len() - (arg_count - i));
                                     let name = &lookup(*id)[1..];
-                                    let rest_val = Value::List(rest_args.into_boxed_slice().into());
+                                    let rest_val = Value::make_list(rest_args);
                                     call_env.insert(intern(name), rest_val.clone());
                                     locals.push(rest_val);
                                     has_rest = true;
@@ -736,7 +736,7 @@ impl VM {
                                 let first_param = params[0];
                                 if lookup(first_param).starts_with('&') {
                                     let name = &lookup(first_param)[1..];
-                                    let rest_val = Value::List(Rc::new([arg.clone()]));
+                                    let rest_val = Value::make_list(vec![arg.clone()]);
                                     call_env.insert(intern(name), rest_val.clone());
                                     locals.push(rest_val);
                                 } else {
@@ -877,7 +877,7 @@ impl VM {
                     let start = self.stack.len() - count;
                     for val in self.stack.drain(start..) {
                         match val {
-                            Value::List(l) => items.extend(l.iter().cloned()),
+                            Value::List(l, offset) => items.extend(l[offset..].iter().cloned()),
                             Value::Nil => {}
                             _ => {
                                 return Err(SelError::TypeError(
@@ -888,7 +888,7 @@ impl VM {
                         }
                     }
                     self.stack
-                        .push(Value::List(items.into_boxed_slice().into()));
+                        .push(Value::make_list(items));
                 }
                 27 => {
                     // Sum
@@ -1052,18 +1052,18 @@ impl VM {
                     let path_val = self.stack.pop().ok_or_else(|| {
                         SelError::Runtime(frame.loc, "load: missing path on stack".into())
                     })?;
-                    if let Value::String(path_str) = path_val {
+                    if let Some(path_str) = path_val.to_string_lossy() {
                         let fp = PathBuf::from(lookup(loc.file_id));
                         let target_path = if lookup(loc.file_id) != "<repl>"
                             && fp
                                 .parent()
                                 .is_some_and(|p| p.is_dir() && p != std::path::Path::new(""))
                         {
-                            fp.parent().unwrap().join(path_str.as_ref())
+                            fp.parent().unwrap().join(&path_str)
                         } else {
                             std::env::current_dir()
                                 .unwrap_or_default()
-                                .join(path_str.as_ref())
+                                .join(&path_str)
                         };
 
                         if let Some(ref root) = self.sandbox_root {
@@ -1124,7 +1124,7 @@ pub fn macro_expand(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
                         if lookup(*pid).starts_with('&') {
                             let rest_args = args.split_off(i);
                             let name = &lookup(*pid)[1..];
-                            let rest_val = Value::List(rest_args.into_boxed_slice().into());
+                            let rest_val = Value::make_list(rest_args);
                             call_env.insert(intern(name), rest_val.clone());
                             locals.push(rest_val);
                             break;

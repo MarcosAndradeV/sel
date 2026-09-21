@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::ops::ControlFlow;
 use std::rc::Rc;
 
 use crate::compiler::Chunk;
@@ -58,10 +59,10 @@ pub enum Value {
     Nil,
     Integer(i64),
     Float(f64),
-    String(Rc<String>),
+    String(Rc<[char]>, usize),
     Boolean(bool),
     Symbol(u32),
-    List(Rc<[Value]>),
+    List(Rc<[Value]>, usize),
     Record(Rc<Record<Self>>),
     Closure(Rc<Closure>),
     NativeFunction(fn(loc: Loc, args: Vec<Value>) -> Result<Value>),
@@ -75,12 +76,74 @@ pub enum Value {
     Char(char),
 }
 
+impl Value {
+    #[inline]
+    pub fn make_list(items: Vec<Value>) -> Self {
+        Value::List(items.into_boxed_slice().into(), 0)
+    }
+
+    #[inline]
+    pub fn make_string(s: &str) -> Self {
+        Value::String(Rc::from(s.chars().collect::<Box<[char]>>()), 0)
+    }
+
+    #[inline]
+    pub fn as_list_slice(&self) -> Option<&[Value]> {
+        match self {
+            Value::List(l, offset) => {
+                if *offset <= l.len() {
+                    Some(&l[*offset..])
+                } else {
+                    Some(&[])
+                }
+            }
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn as_char_slice(&self) -> Option<&[char]> {
+        match self {
+            Value::String(s, offset) => {
+                if *offset <= s.len() {
+                    Some(&s[*offset..])
+                } else {
+                    Some(&[])
+                }
+            }
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn to_string_lossy(&self) -> Option<String> {
+        match self {
+            Value::String(s, offset) => {
+                if *offset <= s.len() {
+                    Some(s[*offset..].iter().collect())
+                } else {
+                    Some(String::new())
+                }
+            }
+            _ => None,
+        }
+    }
+
+    pub fn as_char(&self) -> Option<&char> {
+        if let Self::Char(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+}
+
 fn format_value(val: &Value) -> String {
     match val {
         Value::Nil => "()".to_string(),
         Value::Integer(i) => i.to_string(),
         Value::Float(f) => f.to_string(),
-        Value::String(s) => s.to_string(),
+        Value::String(s, offset) => s.iter().skip(*offset).collect(),
         Value::Boolean(b) => {
             if *b {
                 "#t".to_string()
@@ -96,16 +159,29 @@ fn format_value(val: &Value) -> String {
             '\r' => "#\\return".to_string(),
             ch => format!("#\\{}", ch),
         },
-        Value::List(l) => {
-            let mut s = String::from("(");
-            for (i, v) in l.iter().enumerate() {
-                if i > 0 {
-                    s.push(' ');
-                }
-                s.push_str(&format_value(v));
+        Value::List(l, offset) => {
+            match l
+                .iter()
+                .skip(*offset)
+                .enumerate()
+                .try_fold(String::new(), |mut s, (i, v)| {
+                    if i > 0 {
+                        s.push(' ');
+                    }
+                    if let Some(c) = v.as_char() {
+                        s.push(*c);
+                        ControlFlow::Continue(s)
+                    } else {
+                        s.push_str(&format_value(v));
+                        ControlFlow::Break(s)
+                    }
+                })
+                .continue_ok()
+                .map_err(|s| format!("({})", s))
+            {
+                Ok(s) => s,
+                Err(s) => s,
             }
-            s.push(')');
-            s
         }
         Value::Record(r) => {
             let mut s = String::from("{");

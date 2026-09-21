@@ -180,4 +180,51 @@ mod tests {
         assert!(err_name.loc().is_some());
         assert_eq!(err_name.message(), "Undefined variable `non-existent-variable`");
     }
+
+    #[test]
+    fn test_slice_window_list_and_string() {
+        let env = Rc::new(RefCell::new(Env::default()));
+        env.borrow_mut().parent = Some(load_core_lib());
+
+        // Test list cdr and drop
+        let res1 = eval("(cdr '(1 2 3))", env.clone()).unwrap();
+        assert_eq!(format!("{res1}"), "(2 3)");
+
+        let res2 = eval("(cdr (cdr '(1 2 3)))", env.clone()).unwrap();
+        assert_eq!(format!("{res2}"), "(3)");
+
+        let res3 = eval("(cdr (cdr (cdr '(1 2 3))))", env.clone()).unwrap();
+        assert_eq!(format!("{res3}"), "()");
+
+        let res4 = eval("(drop 2 '(10 20 30 40))", env.clone()).unwrap();
+        assert_eq!(format!("{res4}"), "(30 40)");
+
+        let res5 = eval("(nth (cdr '(10 20 30 40)) 1)", env.clone()).unwrap();
+        assert!(matches!(res5, Value::Integer(30)));
+
+        // Test string cdr and drop
+        let s1 = eval("(cdr \"hello\")", env.clone()).unwrap();
+        assert_eq!(format!("{s1}"), "ello");
+
+        let s2 = eval("(cdr (cdr \"hello\"))", env.clone()).unwrap();
+        assert_eq!(format!("{s2}"), "llo");
+
+        let s3 = eval("(drop 3 \"abcdef\")", env.clone()).unwrap();
+        assert_eq!(format!("{s3}"), "def");
+
+        let s4 = eval("(car (cdr \"world\"))", env.clone()).unwrap();
+        assert!(matches!(s4, Value::Char('o')));
+
+        let s5 = eval("(nth (cdr \"world\") 2)", env.clone()).unwrap();
+        assert!(matches!(s5, Value::Char('l')));
+
+        // Test list equality with different offsets
+        let eq_test = eval("(eq? (cdr '(1 2 3)) '(2 3))", env.clone()).unwrap();
+        assert!(matches!(eq_test, Value::Boolean(true)));
+
+        // Test string equality with different offsets
+        let s_eq_test = eval("(eq? (cdr \"abc\") \"bc\")", env).unwrap();
+        assert!(matches!(s_eq_test, Value::Boolean(true)));
+    }
 }
+
