@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::ops::ControlFlow;
 use std::rc::Rc;
 
 use crate::compiler::Chunk;
@@ -160,28 +159,15 @@ fn format_value(val: &Value) -> String {
             ch => format!("#\\{}", ch),
         },
         Value::List(l, offset) => {
-            match l
-                .iter()
-                .skip(*offset)
-                .enumerate()
-                .try_fold(String::new(), |mut s, (i, v)| {
-                    if i > 0 {
-                        s.push(' ');
-                    }
-                    if let Some(c) = v.as_char() {
-                        s.push(*c);
-                        ControlFlow::Continue(s)
-                    } else {
-                        s.push_str(&format_value(v));
-                        ControlFlow::Break(s)
-                    }
-                })
-                .continue_ok()
-                .map_err(|s| format!("({})", s))
-            {
-                Ok(s) => s,
-                Err(s) => s,
+            let mut s = String::from("(");
+            for (i, v) in l.iter().skip(*offset).enumerate() {
+                if i > 0 {
+                    s.push(' ');
+                }
+                s.push_str(&format_value(v));
             }
+            s.push(')');
+            s
         }
         Value::Record(r) => {
             let mut s = String::from("{");

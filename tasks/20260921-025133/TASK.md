@@ -1,6 +1,6 @@
 # List with nil are not working
 
-- STATUS: OPEN
+- STATUS: CLOSED
 - PRIORITY: 200
 - TAGS: bug
 
