@@ -1551,3 +1551,92 @@ pub fn import_module(
 ) -> Result<Record<Value>> {
     import_module_sandboxed(module_name, asts, env, None)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_env() -> Rc<RefCell<Env>> {
+        let env = Rc::new(RefCell::new(Env::default()));
+        env.borrow_mut().parent = Some(load_core_lib());
+        env
+    }
+
+    #[test]
+    fn test_env_lookup_and_mutation() {
+        let parent_env = Rc::new(RefCell::new(Env::default()));
+        let var_a = intern("a");
+        let var_b = intern("b");
+
+        parent_env.borrow_mut().insert(var_a, Value::Integer(10));
+        assert!(matches!(parent_env.borrow().get(var_a), Some(Value::Integer(10))));
+
+        let child_env = Rc::new(RefCell::new(Env::new(Some(parent_env.clone()))));
+        assert!(matches!(child_env.borrow().get(var_a), Some(Value::Integer(10))));
+
+        child_env.borrow_mut().insert(var_b, Value::Integer(20));
+        assert!(matches!(child_env.borrow().get(var_b), Some(Value::Integer(20))));
+        assert!(parent_env.borrow().get(var_b).is_none());
+
+        // Mutate parent variable from child
+        assert!(child_env.borrow_mut().set(var_a, Value::Integer(30)));
+        assert!(matches!(parent_env.borrow().get(var_a), Some(Value::Integer(30))));
+    }
+
+    #[test]
+    fn test_runtime_fast_path_arithmetic() {
+        let env = create_test_env();
+
+        let res_sum = crate::eval("(+ 10 20)", env.clone()).unwrap();
+        assert!(matches!(res_sum, Value::Integer(30)));
+
+        let res_sub = crate::eval("(- 100 40)", env.clone()).unwrap();
+        assert!(matches!(res_sub, Value::Integer(60)));
+
+        let res_mul = crate::eval("(* 6 7)", env.clone()).unwrap();
+        assert!(matches!(res_mul, Value::Integer(42)));
+
+        let res_mod = crate::eval("(mod 17 5)", env.clone()).unwrap();
+        assert!(matches!(res_mod, Value::Integer(2)));
+
+        let res_variadic_sum = crate::eval("(+ 1 2 3 4 5)", env).unwrap();
+        assert!(matches!(res_variadic_sum, Value::Integer(15)));
+    }
+
+    #[test]
+    fn test_runtime_fast_path_comparisons() {
+        let env = create_test_env();
+
+        assert!(matches!(crate::eval("(< 5 10)", env.clone()).unwrap(), Value::Boolean(true)));
+        assert!(matches!(crate::eval("(> 5 10)", env.clone()).unwrap(), Value::Boolean(false)));
+        assert!(matches!(crate::eval("(<= 10 10)", env.clone()).unwrap(), Value::Boolean(true)));
+        assert!(matches!(crate::eval("(>= 12 10)", env.clone()).unwrap(), Value::Boolean(true)));
+        assert!(matches!(crate::eval("(= 42 42)", env.clone()).unwrap(), Value::Boolean(true)));
+        assert!(matches!(crate::eval("(!= 42 10)", env.clone()).unwrap(), Value::Boolean(true)));
+    }
+
+    #[test]
+    fn test_runtime_rest_params() {
+        let env = create_test_env();
+
+        crate::eval("(define (len &xs) (count xs))", env.clone()).unwrap();
+        let res = crate::eval("(len 1 2 3 4)", env).unwrap();
+        assert!(matches!(res, Value::Integer(4)));
+    }
+
+    #[test]
+    fn test_vm_module_cache() {
+        let mut vm = VM::new();
+        assert!(vm.module_cache.is_empty());
+
+        let fake_path = PathBuf::from("/fake/path/mod.scm");
+        let exports = vec![(intern("foo"), Value::Integer(42))];
+        vm.module_cache.insert(fake_path.clone(), exports);
+
+        assert!(vm.module_cache.contains_key(&fake_path));
+        let cached = vm.module_cache.get(&fake_path).unwrap();
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].0, intern("foo"));
+        assert!(matches!(cached[0].1, Value::Integer(42)));
+    }
+}
