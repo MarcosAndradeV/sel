@@ -136,6 +136,76 @@ fn check_sandbox(path: &std::path::Path, sandbox_root: &std::path::Path, loc: Lo
     Ok(())
 }
 
+fn resolve_module_path(spec: &str, caller_file_id: u32, loc: Loc) -> Result<(String, PathBuf)> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    let caller_file = lookup(caller_file_id);
+    let caller_path = PathBuf::from(&caller_file);
+
+    let mut add_candidates = |base: &std::path::Path, spec_str: &str| {
+        let p = base.join(spec_str);
+        if p.is_file() {
+            candidates.push(p.clone());
+        }
+        let with_scm = if spec_str.ends_with(".scm") {
+            base.join(spec_str)
+        } else {
+            base.join(format!("{spec_str}.scm"))
+        };
+        candidates.push(with_scm);
+
+        let mod_scm = base.join(spec_str).join("mod.scm");
+        candidates.push(mod_scm);
+    };
+
+    // 1. Direct path if spec exists as a file directly
+    let direct_p = PathBuf::from(spec);
+    if direct_p.is_file() {
+        return Ok((spec.to_string(), direct_p));
+    }
+
+    // 2. Relative to caller file's parent directory
+    if caller_file != "<repl>"
+        && caller_file != "<embedded>"
+        && let Some(parent) = caller_path.parent()
+        && parent.is_dir()
+        && parent != std::path::Path::new("")
+    {
+        add_candidates(parent, spec);
+    }
+
+    // 3. Relative to current working directory
+    if let Ok(current) = std::env::current_dir() {
+        add_candidates(&current, spec);
+    }
+
+    // 4. In SEL_PATH environment variable
+    if let Ok(sel_path) = std::env::var("SEL_PATH") {
+        for dir in std::env::split_paths(&sel_path) {
+            add_candidates(&dir, spec);
+        }
+    }
+
+    // Check candidate paths
+    for cand in &candidates {
+        if cand.is_file() {
+            return Ok((spec.to_string(), cand.clone()));
+        }
+    }
+
+    Err(SelError::Runtime(
+        loc,
+        format!(
+            "Cannot find module `{}`. Searched candidate paths:\n{}",
+            spec,
+            candidates
+                .iter()
+                .map(|p| format!("  - {}", p.display()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    ))
+}
+
 impl VM {
     pub fn new() -> Self {
         Self {
@@ -803,22 +873,8 @@ impl VM {
                     } else {
                         None
                     };
-                    let fp = PathBuf::from(lookup(loc.file_id));
                     let sym = lookup(id);
-
-                    let (modname, fp) = if lookup(loc.file_id) != "<repl>"
-                        && fp
-                            .parent()
-                            .is_some_and(|p| p.is_dir() && p != std::path::Path::new(""))
-                    {
-                        let parent = fp.parent().unwrap();
-                        let pth = parent.join(format!("{}.scm", sym));
-                        (sym.clone(), pth)
-                    } else {
-                        let current = std::env::current_dir().unwrap_or_default();
-                        let pth = current.join(format!("{}.scm", sym));
-                        (sym.clone(), pth)
-                    };
+                    let (modname, fp) = resolve_module_path(&sym, loc.file_id, loc)?;
 
                     if let Some(ref root) = self.sandbox_root {
                         check_sandbox(&fp, root, loc)?;
@@ -831,12 +887,20 @@ impl VM {
                     let m_env = Rc::new(RefCell::new(Env::default()));
                     m_env.borrow_mut().parent = Some(load_core_lib());
 
-                    // Extract base module name (e.g. "tests/math" -> "math")
-                    let base_name = PathBuf::from(&modname)
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or(&modname)
-                        .to_string();
+                    // Extract base module name (e.g. "tests/math" -> "math", "pkg/mod.scm" -> "pkg")
+                    let base_name = if fp.file_name().and_then(|s| s.to_str()) == Some("mod.scm") {
+                        fp.parent()
+                            .and_then(|p| p.file_name())
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(&modname)
+                            .to_string()
+                    } else {
+                        PathBuf::from(&modname)
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(&modname)
+                            .to_string()
+                    };
 
                     // Determine namespace prefix
                     let prefix = if let Some(alias_id) = alias {
@@ -889,6 +953,7 @@ impl VM {
                     for val in self.stack.drain(start..) {
                         match val {
                             Value::List(l) => items.append(*l),
+                            Value::String(s) => items.extend(s.as_str().chars().map(Value::Char)),
                             Value::Nil => {}
                             _ => {
                                 return Err(SelError::TypeError(

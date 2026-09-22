@@ -265,11 +265,23 @@ fn is_value_equal(first: &Value, arg: &Value) -> bool {
         (Value::Nil, Value::Nil) => true,
         (Value::Nil, Value::List(l)) if l.is_empty() => true,
         (Value::List(l), Value::Nil) if l.is_empty() => true,
+        (Value::Nil, Value::String(s)) if s.is_empty() => true,
+        (Value::String(s), Value::Nil) if s.is_empty() => true,
+        (Value::List(l), Value::String(s)) if l.is_empty() && s.is_empty() => true,
+        (Value::String(s), Value::List(l)) if s.is_empty() && l.is_empty() => true,
         (Value::Boolean(a), Value::Boolean(b)) => a == b,
         (Value::Integer(a), Value::Integer(b)) => a == b,
         (Value::Float(a), Value::Float(b)) => a == b,
         (Value::Symbol(a), Value::Symbol(b)) => a == b,
         (Value::Pointer(a), Value::Pointer(b)) => a == b,
+        (Value::String(a), Value::String(b)) => a.as_str() == b.as_str(),
+        (Value::String(s), Value::List(l)) | (Value::List(l), Value::String(s)) => {
+            s.char_count() == l.len()
+                && s.as_str().chars().zip(l.iter()).all(|(c, v)| match v {
+                    Value::Char(vc) => c == *vc,
+                    _ => false,
+                })
+        }
         (Value::List(sa), Value::List(sb)) => {
             sa.len() == sb.len() && sa.iter().zip(sb.iter()).all(|(a, b)| is_value_equal(a, b))
         }
@@ -328,6 +340,7 @@ pub fn value_type_name(v: &Value) -> &str {
         Value::Float(_) => "float",
         Value::Boolean(_) => "bool",
         Value::Symbol(_) => "symbol",
+        Value::String(_) => "string",
         Value::List(l) => {
             if !l.is_empty() && l.iter().all(|v| matches!(v, Value::Char(_))) {
                 "string"
@@ -1098,6 +1111,22 @@ pub fn cons(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
             l.push_front(head);
             Ok(Value::List(l))
         }
+        Value::String(s) => match head {
+            Value::Char(c) => {
+                let mut res = String::with_capacity(c.len_utf8() + s.len());
+                res.push(c);
+                res.push_str(s.as_str());
+                Ok(Value::make_string(&res))
+            }
+            _ => {
+                let mut items = imbl::Vector::new();
+                items.push_back(head);
+                for c in s.as_str().chars() {
+                    items.push_back(Value::Char(c));
+                }
+                Ok(Value::List(Box::new(items)))
+            }
+        },
         Value::Nil => Ok(Value::make_list(vec![head])),
         _ => Ok(Value::make_list(vec![head, tail])),
     }
@@ -1113,6 +1142,13 @@ pub fn car(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
     match args.pop().unwrap() {
         Value::List(mut l) => Ok(l.pop_front().unwrap_or(Value::Nil)),
+        Value::String(s) => {
+            if let Some(c) = s.as_str().chars().next() {
+                Ok(Value::Char(c))
+            } else {
+                Ok(Value::Nil)
+            }
+        }
         _ => Err(SelError::Runtime(loc, "car requires a list".into())),
     }
 }
@@ -1132,6 +1168,14 @@ pub fn cdr(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
                 Ok(Value::Nil)
             } else {
                 Ok(Value::List(l))
+            }
+        }
+        Value::String(mut s) => {
+            *s = s.drop_chars(1);
+            if s.is_empty() {
+                Ok(Value::Nil)
+            } else {
+                Ok(Value::String(s))
             }
         }
         _ => Err(SelError::Runtime(loc, "cdr requires a list".into())),
@@ -1154,6 +1198,20 @@ pub fn nth(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
             } else {
                 Value::Nil
             }),
+            _ => Err(SelError::Runtime(loc, "nth requires an integer".into())),
+        },
+        Value::String(s) => match index {
+            Value::Integer(idx) => {
+                if idx >= 0 {
+                    if let Some(c) = s.as_str().chars().nth(idx as usize) {
+                        Ok(Value::Char(c))
+                    } else {
+                        Ok(Value::Nil)
+                    }
+                } else {
+                    Ok(Value::Nil)
+                }
+            }
             _ => Err(SelError::Runtime(loc, "nth requires an integer".into())),
         },
         _ => Err(SelError::Runtime(loc, "nth requires a list".into())),
@@ -1194,6 +1252,14 @@ pub fn drop(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
                 Ok(Value::List(l))
             }
         }
+        Value::String(mut s) => {
+            *s = s.drop_chars(n);
+            if s.is_empty() {
+                Ok(Value::Nil)
+            } else {
+                Ok(Value::String(s))
+            }
+        }
         Value::Nil => Ok(Value::Nil),
         _ => Err(SelError::Runtime(loc, "drop requires a list".into())),
     }
@@ -1209,6 +1275,7 @@ pub fn count(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
     match args.pop().unwrap() {
         Value::List(l) => Ok(Value::Integer(l.len() as _)),
+        Value::String(s) => Ok(Value::Integer(s.char_count() as _)),
         Value::Nil => Ok(Value::Integer(0)),
         _ => Err(SelError::Runtime(loc, "count requires a list".into())),
     }
@@ -1229,6 +1296,7 @@ pub fn empty(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
     match args.pop().unwrap() {
         Value::List(l) => Ok(Value::Boolean(l.is_empty())),
+        Value::String(s) => Ok(Value::Boolean(s.is_empty())),
         Value::Nil => Ok(Value::Boolean(true)),
         v => Err(SelError::Runtime(
             loc,
@@ -1385,7 +1453,7 @@ pub fn is_list(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         ));
     }
     match args.pop().unwrap() {
-        Value::List(..) => Ok(Value::Boolean(true)),
+        Value::List(..) | Value::String(..) => Ok(Value::Boolean(true)),
         _ => Ok(Value::Boolean(false)),
     }
 }
@@ -1414,6 +1482,7 @@ pub fn is_string(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         ));
     }
     match args.pop().unwrap() {
+        Value::String(..) => Ok(Value::Boolean(true)),
         Value::List(l) => Ok(Value::Boolean(
             !l.is_empty() && l.iter().all(|v| matches!(v, Value::Char(_))),
         )),

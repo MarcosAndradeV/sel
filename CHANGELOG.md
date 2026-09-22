@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Hierarchical Module System & Search Paths:
+  - Added support for hierarchical module specs in `(import ...)`: `(import std/math)`, `(import "pkg/mod" :as p)`.
+  - Configured search path precedence: caller file's directory, current working directory, and colon-separated directories in `SEL_PATH`.
+  - Added package directory import support via `<path>/mod.scm` convention with automatic module prefix inference from the enclosing directory.
+- Compact String Sequence Architecture:
+  - Replaced heap-allocated character vector lists for strings with an optimized `StringSlice` struct and `Value::String` variant backed by `Rc<str>` with byte offset windows.
+  - Transparent list-of-char sequence polymorphism: `car`, `cdr`, `cons`, `nth`, `drop`, `count`, and `empty?` operate on strings without allocating character vectors.
+  - Both `(list? s)` and `(string? s)` return `#t` for strings.
+  - Full pattern matching interoperability: `(cons h t)`, fixed lists, and multi-clause `defn` pattern clauses seamlessly destructure strings.
+  - Multi-byte UTF-8 boundary handling for all slice operations.
 - Multiline interactive REPL support with automatic delimiter tracking (`()`, `[]`, `{}`), string literal escape awareness, and continuation prompt (`  ..> `).
 - Standard Math library built-ins:
   - Numerical utilities: `abs`, `min`, `max`, `sqrt`, `pow`, `floor`, `ceil`, `round`.

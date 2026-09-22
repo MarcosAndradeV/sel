@@ -15,4 +15,4 @@
 ; unlines :: [String] -> String
 (defn unlines
     (() nil)
-    ((cons l ls) (append (cons #\newline l) (unlines ls))))
+    ((cons l ls) (append l (cons #\newline (unlines ls)))))

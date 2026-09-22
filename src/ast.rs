@@ -428,6 +428,7 @@ pub fn value_to_ast(val: Value, loc: Loc) -> Result<Ast> {
         Value::Boolean(b) => Ok(Ast::Boolean(loc, b)),
         Value::Symbol(id) => Ok(Ast::Symbol(loc, id)),
         Value::Char(c) => Ok(Ast::Char(loc, c)),
+        Value::String(s) => Ok(Ast::String(loc, s.as_str().to_string())),
         Value::List(l) => {
             if !l.is_empty() && l.iter().all(|v| matches!(v, Value::Char(_))) {
                 let s_str: String = l

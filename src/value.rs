@@ -53,6 +53,79 @@ impl std::fmt::Debug for Coroutine {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StringSlice {
+    pub text: Rc<str>,
+    pub start: usize,
+    pub end: usize,
+}
+
+impl StringSlice {
+    #[inline]
+    pub fn new(s: &str) -> Self {
+        let text: Rc<str> = s.into();
+        let end = text.len();
+        Self {
+            text,
+            start: 0,
+            end,
+        }
+    }
+
+    #[inline]
+    pub fn from_rc(text: Rc<str>, start: usize, end: usize) -> Self {
+        Self { text, start, end }
+    }
+
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        &self.text[self.start..self.end]
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.end.saturating_sub(self.start)
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.start >= self.end
+    }
+
+    #[inline]
+    pub fn char_count(&self) -> usize {
+        self.as_str().chars().count()
+    }
+
+    #[inline]
+    pub fn slice_byte_offset(&self, byte_offset: usize) -> Self {
+        let new_start = (self.start + byte_offset).min(self.end);
+        Self {
+            text: self.text.clone(),
+            start: new_start,
+            end: self.end,
+        }
+    }
+
+    pub fn drop_chars(&self, n: usize) -> Self {
+        if n == 0 {
+            return self.clone();
+        }
+        for (count, (idx, _)) in self.as_str().char_indices().enumerate() {
+            if count == n {
+                return self.slice_byte_offset(idx);
+            }
+        }
+        self.slice_byte_offset(self.len())
+    }
+}
+
+impl std::fmt::Display for StringSlice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Value {
     Nil,
@@ -60,6 +133,7 @@ pub enum Value {
     Float(f64),
     Boolean(bool),
     Symbol(u32),
+    String(Box<StringSlice>),
     List(Box<imbl::Vector<Self>>),
     Record(Rc<Record<Self>>),
     Closure(Rc<Closure>),
@@ -82,13 +156,13 @@ impl Value {
 
     #[inline]
     pub fn make_string(s: &str) -> Self {
-        let items: Vec<Value> = s.chars().map(Value::Char).collect();
-        Value::make_list(items)
+        Value::String(Box::new(StringSlice::new(s)))
     }
 
     #[inline]
     pub fn to_string_lossy(&self) -> Option<String> {
         match self {
+            Value::String(s) => Some(s.as_str().to_string()),
             Value::List(l) => {
                 let mut s = String::with_capacity(l.len());
                 for v in l.iter() {
@@ -100,6 +174,14 @@ impl Value {
                 }
                 Some(s)
             }
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn as_str_lossy(&self) -> Option<&str> {
+        match self {
+            Value::String(s) => Some(s.as_str()),
             _ => None,
         }
     }
@@ -137,6 +219,7 @@ fn format_value(val: &Value) -> String {
             '\r' => "#\\return".to_string(),
             ch => format!("#\\{}", ch),
         },
+        Value::String(s) => s.as_str().to_string(),
         Value::List(l) => {
             if !l.is_empty() && l.iter().all(|v| matches!(v, Value::Char(_))) {
                 l.iter()
