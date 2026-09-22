@@ -327,3 +327,15 @@
                                    (car body)
                                    (cons 'begin body)))))
             (for-build-loop gens core-body let-bindings when-cond #t))))))
+
+;; Mathematical Constants
+(define pi 3.141592653589793)
+(define tau 6.283185307179586)
+(define e 2.718281828459045)
+
+;; Filesystem Conveniences
+(define (fs-exists? path) (file-system 'exists? path))
+(define (fs-read path) (file-system 'read path))
+(define (fs-write path content) (file-system 'write path content))
+(define (fs-list path) (file-system 'list path))
+(define (fs-delete path) (file-system 'delete path))

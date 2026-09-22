@@ -813,7 +813,7 @@ fn serialize_value(
         FfiType::Struct(fields) => {
             let record_vals;
             let list = match val {
-                Value::List(l) => &l,
+                Value::List(l) => l,
                 Value::Record(r) => {
                     record_vals = r
                         .fields()
@@ -955,7 +955,7 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
     let ret_type = parse_ffi_type(loc, &args[1])?;
 
     let arg_types_slice = match &args[2] {
-        Value::List(l) => &l,
+        Value::List(l) => l,
         Value::Nil => &imbl::Vector::new(),
         _ => return Err(SelError::Runtime(loc, "arg_types must be a list".into())),
     };
@@ -965,7 +965,7 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
     }
 
     let arg_vals_slice = match &args[3] {
-        Value::List(l) => &l,
+        Value::List(l) => l,
         Value::Nil => &imbl::Vector::new(),
         _ => return Err(SelError::Runtime(loc, "arg_vals must be a list".into())),
     };
@@ -1625,6 +1625,8 @@ pub fn file_system(loc: Loc, mut call_args: Vec<Value>) -> Result<Value> {
             }
             "write" => return fs_write(loc, &args),
             "read" => return fs_read(loc, &args),
+            "list" => return fs_list(loc, &args),
+            "delete" => return fs_delete(loc, &args),
             _ => {}
         }
     }
@@ -1670,6 +1672,65 @@ fn fs_read(loc: Loc, args: &[Value]) -> Result<Value> {
         Err(SelError::Runtime(
             loc,
             "read requires a string argument".into(),
+        ))
+    }
+}
+
+fn fs_list(loc: Loc, args: &[Value]) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::SyntaxError(
+            loc,
+            "Expected exactly 1 argument for list".into(),
+        ));
+    }
+    if let Some(path) = args[0].to_string_lossy() {
+        match std::fs::read_dir(&path) {
+            Ok(entries) => {
+                let mut list = Vec::new();
+                for entry in entries.flatten() {
+                    if let Some(name) = entry.file_name().to_str() {
+                        list.push(Value::make_string(name));
+                    }
+                }
+                Ok(Value::make_list(list))
+            }
+            Err(e) => Err(SelError::Runtime(loc, format!("list failed: {}", e))),
+        }
+    } else {
+        Err(SelError::Runtime(
+            loc,
+            "list requires a string argument".into(),
+        ))
+    }
+}
+
+fn fs_delete(loc: Loc, args: &[Value]) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::SyntaxError(
+            loc,
+            "Expected exactly 1 argument for delete".into(),
+        ));
+    }
+    if let Some(path) = args[0].to_string_lossy() {
+        let p = std::path::Path::new(&path);
+        if p.is_dir() {
+            match std::fs::remove_dir_all(p) {
+                Ok(_) => Ok(Value::Nil),
+                Err(e) => Err(SelError::Runtime(
+                    loc,
+                    format!("delete directory failed: {}", e),
+                )),
+            }
+        } else {
+            match std::fs::remove_file(p) {
+                Ok(_) => Ok(Value::Nil),
+                Err(e) => Err(SelError::Runtime(loc, format!("delete file failed: {}", e))),
+            }
+        }
+    } else {
+        Err(SelError::Runtime(
+            loc,
+            "delete requires a string argument".into(),
         ))
     }
 }
@@ -1818,6 +1879,771 @@ pub fn co_dead_p(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     }
 }
 
+// Math primitives
+#[inline]
+pub fn math_abs(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 1,
+            actual: args.len(),
+        });
+    }
+    match args[0] {
+        Value::Integer(i) => Ok(Value::Integer(i.abs())),
+        Value::Float(f) => Ok(Value::Float(f.abs())),
+        ref v => Err(SelError::TypeError(
+            loc,
+            format!("abs: expected number, found {}", value_type_name(v)),
+        )),
+    }
+}
+
+#[inline]
+pub fn math_min(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() {
+        return Err(SelError::Runtime(
+            loc,
+            "min requires at least 1 argument".into(),
+        ));
+    }
+    let mut min_val = args[0].clone();
+    for arg in args.into_iter().skip(1) {
+        match (&min_val, &arg) {
+            (Value::Integer(a), Value::Integer(b)) => {
+                if b < a {
+                    min_val = arg;
+                }
+            }
+            (Value::Float(a), Value::Float(b)) => {
+                if b < a {
+                    min_val = arg;
+                }
+            }
+            (Value::Integer(a), Value::Float(b)) => {
+                if *b < (*a as f64) {
+                    min_val = arg;
+                }
+            }
+            (Value::Float(a), Value::Integer(b)) => {
+                if (*b as f64) < *a {
+                    min_val = arg;
+                }
+            }
+            (_, v) => {
+                return Err(SelError::TypeError(
+                    loc,
+                    format!("min: expected number, found {}", value_type_name(v)),
+                ));
+            }
+        }
+    }
+    Ok(min_val)
+}
+
+#[inline]
+pub fn math_max(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() {
+        return Err(SelError::Runtime(
+            loc,
+            "max requires at least 1 argument".into(),
+        ));
+    }
+    let mut max_val = args[0].clone();
+    for arg in args.into_iter().skip(1) {
+        match (&max_val, &arg) {
+            (Value::Integer(a), Value::Integer(b)) => {
+                if b > a {
+                    max_val = arg;
+                }
+            }
+            (Value::Float(a), Value::Float(b)) => {
+                if b > a {
+                    max_val = arg;
+                }
+            }
+            (Value::Integer(a), Value::Float(b)) => {
+                if *b > (*a as f64) {
+                    max_val = arg;
+                }
+            }
+            (Value::Float(a), Value::Integer(b)) => {
+                if (*b as f64) > *a {
+                    max_val = arg;
+                }
+            }
+            (_, v) => {
+                return Err(SelError::TypeError(
+                    loc,
+                    format!("max: expected number, found {}", value_type_name(v)),
+                ));
+            }
+        }
+    }
+    Ok(max_val)
+}
+
+#[inline]
+pub fn math_sqrt(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 1,
+            actual: args.len(),
+        });
+    }
+    let f = match args[0] {
+        Value::Integer(i) => i as f64,
+        Value::Float(f) => f,
+        ref v => {
+            return Err(SelError::TypeError(
+                loc,
+                format!("sqrt: expected number, found {}", value_type_name(v)),
+            ));
+        }
+    };
+    if f < 0.0 {
+        return Err(SelError::Runtime(
+            loc,
+            "sqrt: cannot compute square root of negative number".into(),
+        ));
+    }
+    Ok(Value::Float(f.sqrt()))
+}
+
+#[inline]
+pub fn math_pow(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 2,
+            actual: args.len(),
+        });
+    }
+    match (&args[0], &args[1]) {
+        (Value::Integer(base), Value::Integer(exp)) => {
+            if *exp >= 0
+                && *exp <= (u32::MAX as i64)
+                && let Some(res) = base.checked_pow(*exp as u32)
+            {
+                return Ok(Value::Integer(res));
+            }
+            Ok(Value::Float((*base as f64).powf(*exp as f64)))
+        }
+        (Value::Integer(base), Value::Float(exp)) => Ok(Value::Float((*base as f64).powf(*exp))),
+        (Value::Float(base), Value::Integer(exp)) => Ok(Value::Float(base.powf(*exp as f64))),
+        (Value::Float(base), Value::Float(exp)) => Ok(Value::Float(base.powf(*exp))),
+        _ => Err(SelError::TypeError(loc, "pow: expected numbers".into())),
+    }
+}
+
+#[inline]
+pub fn math_floor(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 1,
+            actual: args.len(),
+        });
+    }
+    match args[0] {
+        Value::Integer(i) => Ok(Value::Integer(i)),
+        Value::Float(f) => Ok(Value::Integer(f.floor() as i64)),
+        ref v => Err(SelError::TypeError(
+            loc,
+            format!("floor: expected number, found {}", value_type_name(v)),
+        )),
+    }
+}
+
+#[inline]
+pub fn math_ceil(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 1,
+            actual: args.len(),
+        });
+    }
+    match args[0] {
+        Value::Integer(i) => Ok(Value::Integer(i)),
+        Value::Float(f) => Ok(Value::Integer(f.ceil() as i64)),
+        ref v => Err(SelError::TypeError(
+            loc,
+            format!("ceil: expected number, found {}", value_type_name(v)),
+        )),
+    }
+}
+
+#[inline]
+pub fn math_round(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 1,
+            actual: args.len(),
+        });
+    }
+    match args[0] {
+        Value::Integer(i) => Ok(Value::Integer(i)),
+        Value::Float(f) => Ok(Value::Integer(f.round() as i64)),
+        ref v => Err(SelError::TypeError(
+            loc,
+            format!("round: expected number, found {}", value_type_name(v)),
+        )),
+    }
+}
+
+#[inline]
+pub fn math_sin(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 1,
+            actual: args.len(),
+        });
+    }
+    let f = match args[0] {
+        Value::Integer(i) => i as f64,
+        Value::Float(f) => f,
+        ref v => {
+            return Err(SelError::TypeError(
+                loc,
+                format!("sin: expected number, found {}", value_type_name(v)),
+            ));
+        }
+    };
+    Ok(Value::Float(f.sin()))
+}
+
+#[inline]
+pub fn math_cos(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 1,
+            actual: args.len(),
+        });
+    }
+    let f = match args[0] {
+        Value::Integer(i) => i as f64,
+        Value::Float(f) => f,
+        ref v => {
+            return Err(SelError::TypeError(
+                loc,
+                format!("cos: expected number, found {}", value_type_name(v)),
+            ));
+        }
+    };
+    Ok(Value::Float(f.cos()))
+}
+
+#[inline]
+pub fn math_tan(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 1,
+            actual: args.len(),
+        });
+    }
+    let f = match args[0] {
+        Value::Integer(i) => i as f64,
+        Value::Float(f) => f,
+        ref v => {
+            return Err(SelError::TypeError(
+                loc,
+                format!("tan: expected number, found {}", value_type_name(v)),
+            ));
+        }
+    };
+    Ok(Value::Float(f.tan()))
+}
+
+pub fn bit_and(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() {
+        return Err(SelError::Runtime(
+            loc,
+            "bit-and requires at least 1 argument".into(),
+        ));
+    }
+    let mut acc = match args[0] {
+        Value::Integer(i) => i,
+        ref v => {
+            return Err(SelError::TypeError(
+                loc,
+                format!("bit-and: expected integer, found {}", value_type_name(v)),
+            ));
+        }
+    };
+    for arg in args.into_iter().skip(1) {
+        match arg {
+            Value::Integer(i) => acc &= i,
+            ref v => {
+                return Err(SelError::TypeError(
+                    loc,
+                    format!("bit-and: expected integer, found {}", value_type_name(v)),
+                ));
+            }
+        }
+    }
+    Ok(Value::Integer(acc))
+}
+
+pub fn bit_or(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() {
+        return Err(SelError::Runtime(
+            loc,
+            "bit-or requires at least 1 argument".into(),
+        ));
+    }
+    let mut acc = match args[0] {
+        Value::Integer(i) => i,
+        ref v => {
+            return Err(SelError::TypeError(
+                loc,
+                format!("bit-or: expected integer, found {}", value_type_name(v)),
+            ));
+        }
+    };
+    for arg in args.into_iter().skip(1) {
+        match arg {
+            Value::Integer(i) => acc |= i,
+            ref v => {
+                return Err(SelError::TypeError(
+                    loc,
+                    format!("bit-or: expected integer, found {}", value_type_name(v)),
+                ));
+            }
+        }
+    }
+    Ok(Value::Integer(acc))
+}
+
+pub fn bit_xor(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() {
+        return Err(SelError::Runtime(
+            loc,
+            "bit-xor requires at least 1 argument".into(),
+        ));
+    }
+    let mut acc = match args[0] {
+        Value::Integer(i) => i,
+        ref v => {
+            return Err(SelError::TypeError(
+                loc,
+                format!("bit-xor: expected integer, found {}", value_type_name(v)),
+            ));
+        }
+    };
+    for arg in args.into_iter().skip(1) {
+        match arg {
+            Value::Integer(i) => acc ^= i,
+            ref v => {
+                return Err(SelError::TypeError(
+                    loc,
+                    format!("bit-xor: expected integer, found {}", value_type_name(v)),
+                ));
+            }
+        }
+    }
+    Ok(Value::Integer(acc))
+}
+
+pub fn bit_not(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 1,
+            actual: args.len(),
+        });
+    }
+    match args[0] {
+        Value::Integer(i) => Ok(Value::Integer(!i)),
+        ref v => Err(SelError::TypeError(
+            loc,
+            format!("bit-not: expected integer, found {}", value_type_name(v)),
+        )),
+    }
+}
+
+pub fn bit_shl(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 2,
+            actual: args.len(),
+        });
+    }
+    match (&args[0], &args[1]) {
+        (Value::Integer(a), Value::Integer(shift)) => {
+            if *shift < 0 || *shift >= 64 {
+                return Err(SelError::Runtime(
+                    loc,
+                    format!("bit-shl: shift out of range: {}", shift),
+                ));
+            }
+            Ok(Value::Integer(a << shift))
+        }
+        _ => Err(SelError::TypeError(
+            loc,
+            "bit-shl: expected integer arguments".into(),
+        )),
+    }
+}
+
+pub fn bit_shr(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 2,
+            actual: args.len(),
+        });
+    }
+    match (&args[0], &args[1]) {
+        (Value::Integer(a), Value::Integer(shift)) => {
+            if *shift < 0 || *shift >= 64 {
+                return Err(SelError::Runtime(
+                    loc,
+                    format!("bit-shr: shift out of range: {}", shift),
+                ));
+            }
+            Ok(Value::Integer(a >> shift))
+        }
+        _ => Err(SelError::TypeError(
+            loc,
+            "bit-shr: expected integer arguments".into(),
+        )),
+    }
+}
+
+// String utilities
+pub fn string_split(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 2,
+            actual: args.len(),
+        });
+    }
+    let s = args[0].to_string_lossy().ok_or_else(|| {
+        SelError::TypeError(
+            loc,
+            format!(
+                "string-split: first argument must be string, got {}",
+                value_type_name(&args[0])
+            ),
+        )
+    })?;
+    let delim = match &args[1] {
+        Value::Char(c) => c.to_string(),
+        other => other.to_string_lossy().ok_or_else(|| {
+            SelError::TypeError(
+                loc,
+                format!(
+                    "string-split: delimiter must be string or char, got {}",
+                    value_type_name(other)
+                ),
+            )
+        })?,
+    };
+    let parts: Vec<Value> = if delim.is_empty() {
+        s.chars()
+            .map(|c| Value::make_string(&c.to_string()))
+            .collect()
+    } else {
+        s.split(&delim).map(Value::make_string).collect()
+    };
+    Ok(Value::make_list(parts))
+}
+
+pub fn string_join(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 2,
+            actual: args.len(),
+        });
+    }
+    let delim = args[1].to_string_lossy().ok_or_else(|| {
+        SelError::TypeError(
+            loc,
+            format!(
+                "string-join: delimiter must be string, got {}",
+                value_type_name(&args[1])
+            ),
+        )
+    })?;
+    let list = match &args[0] {
+        Value::List(l) => l,
+        Value::Nil => return Ok(Value::make_string("")),
+        v => {
+            return Err(SelError::TypeError(
+                loc,
+                format!("string-join: expected list, got {}", value_type_name(v)),
+            ));
+        }
+    };
+    let mut pieces = Vec::with_capacity(list.len());
+    for item in list.iter() {
+        if let Some(s) = item.to_string_lossy() {
+            pieces.push(s);
+        } else {
+            pieces.push(format!("{item}"));
+        }
+    }
+    Ok(Value::make_string(&pieces.join(&delim)))
+}
+
+pub fn string_trim(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 1,
+            actual: args.len(),
+        });
+    }
+    let s = args[0].to_string_lossy().ok_or_else(|| {
+        SelError::TypeError(
+            loc,
+            format!(
+                "string-trim: expected string, got {}",
+                value_type_name(&args[0])
+            ),
+        )
+    })?;
+    Ok(Value::make_string(s.trim()))
+}
+
+pub fn string_replace(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 3 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 3,
+            actual: args.len(),
+        });
+    }
+    let s = args[0].to_string_lossy().ok_or_else(|| {
+        SelError::TypeError(
+            loc,
+            format!(
+                "string-replace: first argument must be string, got {}",
+                value_type_name(&args[0])
+            ),
+        )
+    })?;
+    let from = args[1].to_string_lossy().ok_or_else(|| {
+        SelError::TypeError(
+            loc,
+            format!(
+                "string-replace: second argument must be string, got {}",
+                value_type_name(&args[1])
+            ),
+        )
+    })?;
+    let to = args[2].to_string_lossy().ok_or_else(|| {
+        SelError::TypeError(
+            loc,
+            format!(
+                "string-replace: third argument must be string, got {}",
+                value_type_name(&args[2])
+            ),
+        )
+    })?;
+    Ok(Value::make_string(&s.replace(&from, &to)))
+}
+
+pub fn string_upcase(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 1,
+            actual: args.len(),
+        });
+    }
+    let s = args[0].to_string_lossy().ok_or_else(|| {
+        SelError::TypeError(
+            loc,
+            format!(
+                "string-upcase: expected string, got {}",
+                value_type_name(&args[0])
+            ),
+        )
+    })?;
+    Ok(Value::make_string(&s.to_uppercase()))
+}
+
+pub fn string_downcase(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 1,
+            actual: args.len(),
+        });
+    }
+    let s = args[0].to_string_lossy().ok_or_else(|| {
+        SelError::TypeError(
+            loc,
+            format!(
+                "string-downcase: expected string, got {}",
+                value_type_name(&args[0])
+            ),
+        )
+    })?;
+    Ok(Value::make_string(&s.to_lowercase()))
+}
+
+pub fn to_string(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 1,
+            actual: args.len(),
+        });
+    }
+    let val = &args[0];
+    if val.to_string_lossy().is_some() {
+        Ok(val.clone())
+    } else {
+        Ok(Value::make_string(&format!("{val}")))
+    }
+}
+
+pub fn string_format(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.is_empty() {
+        return Err(SelError::Runtime(
+            loc,
+            "format requires at least 1 format string argument".into(),
+        ));
+    }
+    let fmt_str = args[0].to_string_lossy().ok_or_else(|| {
+        SelError::TypeError(
+            loc,
+            format!(
+                "format: first argument must be format string, got {}",
+                value_type_name(&args[0])
+            ),
+        )
+    })?;
+    let mut result = String::with_capacity(fmt_str.len());
+    let mut arg_iter = args.iter().skip(1);
+    let mut chars = fmt_str.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '{' && chars.peek() == Some(&'}') {
+            chars.next(); // consume '}'
+            if let Some(arg) = arg_iter.next() {
+                if let Some(s) = arg.to_string_lossy() {
+                    result.push_str(&s);
+                } else {
+                    result.push_str(&format!("{arg}"));
+                }
+            } else {
+                return Err(SelError::Runtime(
+                    loc,
+                    "format: not enough arguments for placeholders".into(),
+                ));
+            }
+            continue;
+        }
+        result.push(c);
+    }
+    Ok(Value::make_string(&result))
+}
+
+// System & Time primitives
+pub fn sys_get_env(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 1,
+            actual: args.len(),
+        });
+    }
+    let key = args[0].to_string_lossy().ok_or_else(|| {
+        SelError::TypeError(
+            loc,
+            format!(
+                "get-env: expected string variable name, got {}",
+                value_type_name(&args[0])
+            ),
+        )
+    })?;
+    match std::env::var(&key) {
+        Ok(val) => Ok(Value::make_string(&val)),
+        Err(_) => Ok(Value::Nil),
+    }
+}
+
+pub fn sys_set_env(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 2,
+            actual: args.len(),
+        });
+    }
+    let key = args[0].to_string_lossy().ok_or_else(|| {
+        SelError::TypeError(
+            loc,
+            format!(
+                "set-env!: expected string key, got {}",
+                value_type_name(&args[0])
+            ),
+        )
+    })?;
+    let val = args[1].to_string_lossy().ok_or_else(|| {
+        SelError::TypeError(
+            loc,
+            format!(
+                "set-env!: expected string value, got {}",
+                value_type_name(&args[1])
+            ),
+        )
+    })?;
+    unsafe {
+        std::env::set_var(&key, &val);
+    }
+    Ok(Value::Nil)
+}
+
+pub fn time_now_ms(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if !args.is_empty() {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 0,
+            actual: args.len(),
+        });
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| SelError::Runtime(loc, format!("time-now-ms failed: {e}")))?
+        .as_millis() as i64;
+    Ok(Value::Integer(now))
+}
+
+pub fn sleep_ms(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 1,
+            actual: args.len(),
+        });
+    }
+    match args[0] {
+        Value::Integer(ms) => {
+            if ms > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+            }
+            Ok(Value::Nil)
+        }
+        ref v => Err(SelError::TypeError(
+            loc,
+            format!("sleep-ms: expected integer, got {}", value_type_name(v)),
+        )),
+    }
+}
+
 pub fn load(env: Rc<RefCell<Env>>) {
     let mut e = env.borrow_mut();
     e.insert(intern("+"), Value::NativeFunction(sum));
@@ -1889,6 +2715,47 @@ pub fn load(env: Rc<RefCell<Env>>) {
 
     e.insert(intern("system"), Value::NativeFunction(system));
     e.insert(intern("file-system"), Value::NativeFunction(file_system));
+
+    e.insert(intern("abs"), Value::NativeFunction(math_abs));
+    e.insert(intern("min"), Value::NativeFunction(math_min));
+    e.insert(intern("max"), Value::NativeFunction(math_max));
+    e.insert(intern("sqrt"), Value::NativeFunction(math_sqrt));
+    e.insert(intern("pow"), Value::NativeFunction(math_pow));
+    e.insert(intern("floor"), Value::NativeFunction(math_floor));
+    e.insert(intern("ceil"), Value::NativeFunction(math_ceil));
+    e.insert(intern("round"), Value::NativeFunction(math_round));
+    e.insert(intern("sin"), Value::NativeFunction(math_sin));
+    e.insert(intern("cos"), Value::NativeFunction(math_cos));
+    e.insert(intern("tan"), Value::NativeFunction(math_tan));
+    e.insert(intern("bit-and"), Value::NativeFunction(bit_and));
+    e.insert(intern("bit-or"), Value::NativeFunction(bit_or));
+    e.insert(intern("bit-xor"), Value::NativeFunction(bit_xor));
+    e.insert(intern("bit-not"), Value::NativeFunction(bit_not));
+    e.insert(intern("bit-shl"), Value::NativeFunction(bit_shl));
+    e.insert(intern("bit-shr"), Value::NativeFunction(bit_shr));
+
+    e.insert(intern("string-split"), Value::NativeFunction(string_split));
+    e.insert(intern("string-join"), Value::NativeFunction(string_join));
+    e.insert(intern("string-trim"), Value::NativeFunction(string_trim));
+    e.insert(
+        intern("string-replace"),
+        Value::NativeFunction(string_replace),
+    );
+    e.insert(
+        intern("string-upcase"),
+        Value::NativeFunction(string_upcase),
+    );
+    e.insert(
+        intern("string-downcase"),
+        Value::NativeFunction(string_downcase),
+    );
+    e.insert(intern("to-string"), Value::NativeFunction(to_string));
+    e.insert(intern("format"), Value::NativeFunction(string_format));
+
+    e.insert(intern("get-env"), Value::NativeFunction(sys_get_env));
+    e.insert(intern("set-env!"), Value::NativeFunction(sys_set_env));
+    e.insert(intern("time-now-ms"), Value::NativeFunction(time_now_ms));
+    e.insert(intern("sleep-ms"), Value::NativeFunction(sleep_ms));
 
     e.insert(intern("co-create"), Value::NativeFunction(co_create));
     e.insert(intern("co-state"), Value::NativeFunction(co_state));

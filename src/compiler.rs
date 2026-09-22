@@ -1293,11 +1293,7 @@ fn compile_pattern(
         Pattern::Literal(loc, ast) => {
             conditions.push(Ast::List(
                 *loc,
-                vec![
-                    Ast::Symbol(*loc, intern("eq?")),
-                    curr_expr,
-                    (**ast).clone(),
-                ],
+                vec![Ast::Symbol(*loc, intern("eq?")), curr_expr, (**ast).clone()],
             ));
             Ok(())
         }
@@ -1319,10 +1315,7 @@ fn compile_pattern(
                 *loc,
                 vec![Ast::Symbol(*loc, intern("car")), curr_expr.clone()],
             );
-            let tail_expr = Ast::List(
-                *loc,
-                vec![Ast::Symbol(*loc, intern("cdr")), curr_expr],
-            );
+            let tail_expr = Ast::List(*loc, vec![Ast::Symbol(*loc, intern("cdr")), curr_expr]);
             compile_pattern(head_pat, head_expr, conditions, bindings)?;
             compile_pattern(tail_pat, tail_expr, conditions, bindings)
         }

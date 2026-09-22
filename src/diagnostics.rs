@@ -148,7 +148,9 @@ impl SelError {
             Self::SyntaxError(_, msg) => msg.clone(),
             Self::UndefinedVariable(_, id) => format!("Undefined variable `{}`", lookup(*id)),
             Self::UnboundVariable(_, id) => format!("Unbound variable in set!: {}", lookup(*id)),
-            Self::ArityMismatch { expected, actual, .. } => {
+            Self::ArityMismatch {
+                expected, actual, ..
+            } => {
                 format!("Arity mismatch: expected {}, got {}", expected, actual)
             }
             Self::InvalidNumber(token) => format!("Invalid number format `{}`", token.source),

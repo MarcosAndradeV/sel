@@ -178,10 +178,7 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
     match ast {
         Ast::Load(loc, path) => (
             loc,
-            Value::make_list(vec![
-                Value::Symbol(intern("load")),
-                ast_to_value(*path).1,
-            ]),
+            Value::make_list(vec![Value::Symbol(intern("load")), ast_to_value(*path).1]),
         ),
         Ast::Symbol(loc, id) => (loc, Value::Symbol(id)),
         Ast::Integer(loc, i) => (loc, Value::Integer(i)),
@@ -191,11 +188,7 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
         Ast::Nil(loc) => (loc, Value::Nil),
         Ast::List(loc, l) => (
             loc,
-            Value::make_list(
-                l.into_iter()
-                    .map(|a| ast_to_value(a).1)
-                    .collect(),
-            ),
+            Value::make_list(l.into_iter().map(|a| ast_to_value(a).1).collect()),
         ),
         Ast::Define(loc, id, val) => (
             loc,
@@ -283,12 +276,7 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
         Ast::Lambda(loc, params, body) => {
             let mut list = vec![
                 Value::Symbol(intern("lambda")),
-                Value::make_list(
-                    params
-                        .into_iter()
-                        .map(Value::Symbol)
-                        .collect(),
-                ),
+                Value::make_list(params.into_iter().map(Value::Symbol).collect()),
             ];
             list.extend(body.into_iter().map(|a| ast_to_value(a).1));
             (loc, Value::make_list(list))
@@ -313,10 +301,7 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
         }
         Ast::Quote(loc, val) => (
             loc,
-            Value::make_list(vec![
-                Value::Symbol(intern("quote")),
-                ast_to_value(*val).1,
-            ]),
+            Value::make_list(vec![Value::Symbol(intern("quote")), ast_to_value(*val).1]),
         ),
         Ast::Quasiquote(loc, val) => (
             loc,
@@ -327,10 +312,7 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
         ),
         Ast::Unquote(loc, val) => (
             loc,
-            Value::make_list(vec![
-                Value::Symbol(intern("unquote")),
-                ast_to_value(*val).1,
-            ]),
+            Value::make_list(vec![Value::Symbol(intern("unquote")), ast_to_value(*val).1]),
         ),
         Ast::UnquoteSplicing(loc, val) => (
             loc,
@@ -409,11 +391,9 @@ pub fn pattern_to_value(pat: Pattern) -> Value {
         Pattern::Wildcard(_) => Value::Symbol(intern("_")),
         Pattern::Variable(_, id) => Value::Symbol(id),
         Pattern::Literal(_, ast) => ast_to_value(*ast).1,
-        Pattern::List(_, pats) => Value::make_list(
-            pats.into_iter()
-                .map(pattern_to_value)
-                .collect(),
-        ),
+        Pattern::List(_, pats) => {
+            Value::make_list(pats.into_iter().map(pattern_to_value).collect())
+        }
         Pattern::Cons(_, h, t) => Value::make_list(vec![
             Value::Symbol(intern("cons")),
             pattern_to_value(*h),

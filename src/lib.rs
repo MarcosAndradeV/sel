@@ -56,10 +56,16 @@ pub fn load_file_sandboxed(
     let target_path = PathBuf::from(script_path);
     if let Some(ref root) = sandbox_root {
         let canonical_path = target_path.canonicalize().map_err(|e| {
-            SelError::SandboxViolation(Loc::default(), format!("Failed to resolve path {}: {}", target_path.display(), e))
+            SelError::SandboxViolation(
+                Loc::default(),
+                format!("Failed to resolve path {}: {}", target_path.display(), e),
+            )
         })?;
         let canonical_root = root.canonicalize().map_err(|e| {
-            SelError::SandboxViolation(Loc::default(), format!("Failed to resolve sandbox root {}: {}", root.display(), e))
+            SelError::SandboxViolation(
+                Loc::default(),
+                format!("Failed to resolve sandbox root {}: {}", root.display(), e),
+            )
         })?;
         if !canonical_path.starts_with(&canonical_root) {
             return Err(SelError::SandboxViolation(
@@ -150,13 +156,13 @@ mod tests {
 
         // Loading from outside sandbox should fail with SandboxViolation
         let root_outside = tests_dir.join("errors"); // Sandbox root is tests/errors
-        let res_denied = load_file_sandboxed(
-            script_path.to_str().unwrap(),
-            env,
-            Some(root_outside),
-        );
+        let res_denied =
+            load_file_sandboxed(script_path.to_str().unwrap(), env, Some(root_outside));
         assert!(res_denied.is_err());
-        assert!(matches!(res_denied.unwrap_err(), SelError::SandboxViolation(_, _)));
+        assert!(matches!(
+            res_denied.unwrap_err(),
+            SelError::SandboxViolation(_, _)
+        ));
     }
 
     #[test]
@@ -170,7 +176,11 @@ mod tests {
         let err_type = res_type.unwrap_err();
         assert_eq!(err_type.kind(), SelErrorKind::Type);
         assert!(err_type.loc().is_some());
-        assert!(err_type.message().contains("Invalid argument to +: expected number"));
+        assert!(
+            err_type
+                .message()
+                .contains("Invalid argument to +: expected number")
+        );
 
         // Undefined NameError
         let res_name = eval("(non-existent-variable)", env);
@@ -178,7 +188,10 @@ mod tests {
         let err_name = res_name.unwrap_err();
         assert_eq!(err_name.kind(), SelErrorKind::Name);
         assert!(err_name.loc().is_some());
-        assert_eq!(err_name.message(), "Undefined variable `non-existent-variable`");
+        assert_eq!(
+            err_name.message(),
+            "Undefined variable `non-existent-variable`"
+        );
     }
 
     #[test]
@@ -237,4 +250,3 @@ mod tests {
         assert_eq!(format!("{cons_str}"), "hello");
     }
 }
-

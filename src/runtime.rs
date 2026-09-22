@@ -108,10 +108,20 @@ pub struct VM {
 
 fn check_sandbox(path: &std::path::Path, sandbox_root: &std::path::Path, loc: Loc) -> Result<()> {
     let canonical_path = path.canonicalize().map_err(|e| {
-        SelError::SandboxViolation(loc, format!("Failed to resolve path {}: {}", path.display(), e))
+        SelError::SandboxViolation(
+            loc,
+            format!("Failed to resolve path {}: {}", path.display(), e),
+        )
     })?;
     let canonical_root = sandbox_root.canonicalize().map_err(|e| {
-        SelError::SandboxViolation(loc, format!("Failed to resolve sandbox root {}: {}", sandbox_root.display(), e))
+        SelError::SandboxViolation(
+            loc,
+            format!(
+                "Failed to resolve sandbox root {}: {}",
+                sandbox_root.display(),
+                e
+            ),
+        )
     })?;
     if !canonical_path.starts_with(&canonical_root) {
         return Err(SelError::SandboxViolation(
@@ -132,7 +142,6 @@ impl VM {
             stack: Vec::new(),
             catch_handlers: Vec::new(),
             sandbox_root: None,
-
         }
     }
 
@@ -836,7 +845,8 @@ impl VM {
                         base_name
                     };
 
-                    let rec = import_module_sandboxed(&prefix, asts, m_env, self.sandbox_root.clone())?;
+                    let rec =
+                        import_module_sandboxed(&prefix, asts, m_env, self.sandbox_root.clone())?;
                     let mut frame_env = frame.env.borrow_mut();
                     for (sym, val) in rec.into_fields() {
                         frame_env.insert(sym, val);
@@ -888,8 +898,7 @@ impl VM {
                             }
                         }
                     }
-                    self.stack
-                        .push(Value::List(Box::new(items)));
+                    self.stack.push(Value::List(Box::new(items)));
                 }
                 27 => {
                     // Sum
@@ -1062,9 +1071,7 @@ impl VM {
                         {
                             fp.parent().unwrap().join(&path_str)
                         } else {
-                            std::env::current_dir()
-                                .unwrap_or_default()
-                                .join(&path_str)
+                            std::env::current_dir().unwrap_or_default().join(&path_str)
                         };
 
                         if let Some(ref root) = self.sandbox_root {
@@ -1080,7 +1087,11 @@ impl VM {
                             return Err(diags.remove(0));
                         }
 
-                        let result_val = execute_asts_sandboxed(asts, frame.env.clone(), self.sandbox_root.clone())?;
+                        let result_val = execute_asts_sandboxed(
+                            asts,
+                            frame.env.clone(),
+                            self.sandbox_root.clone(),
+                        )?;
                         self.stack.push(result_val);
                     } else {
                         return Err(SelError::Runtime(

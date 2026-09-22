@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Multiline interactive REPL support with automatic delimiter tracking (`()`, `[]`, `{}`), string literal escape awareness, and continuation prompt (`  ..> `).
+- Standard Math library built-ins:
+  - Numerical utilities: `abs`, `min`, `max`, `sqrt`, `pow`, `floor`, `ceil`, `round`.
+  - Trigonometric operations: `sin`, `cos`, `tan`.
+  - Bitwise integer operations: `bit-and`, `bit-or`, `bit-xor`, `bit-not`, `bit-shl`, `bit-shr`.
+  - Standard constants in core library: `pi`, `tau`, `e`.
+- Standard String utility library:
+  - `string-split`, `string-join`, `string-trim`, `string-replace`.
+  - `string-upcase`, `string-downcase`.
+  - `to-string` (universal stringification) and `format` (sequential `{}` placeholder interpolation).
+- System, OS, and Time primitives:
+  - `get-env` and `set-env!` for process environment variable inspection and mutation.
+  - `time-now-ms` (UNIX epoch milliseconds) and `sleep-ms` (thread sleeping).
+  - Extended filesystem primitives: `fs-list` and `fs-delete` with Scheme helper wrappers.
+- Integration test suites under `tests/`: `test_math.scm`, `test_string_utils.scm`, and `test_system.scm`.
 - Comprehensive pattern matching system (`match`, `match-lambda`) supporting:
   - Literals (numbers, strings, booleans, nil, symbols)
   - Wildcards (`_`) and variable bindings

@@ -1000,18 +1000,17 @@ fn parse_list_or_rest_pattern(loc: Loc, items: Vec<Ast>) -> Result<Pattern> {
         return Ok(Pattern::Rest(loc, prefix, Box::new(rest)));
     }
     // Check if second-to-last item is symbol "&"
-    if items.len() >= 2 {
-        if let Ast::Symbol(_, id) = &items[items.len() - 2] {
-            if lookup(*id) == "&" {
-                let prefix_items = &items[..items.len() - 2];
-                let mut prefix = Vec::with_capacity(prefix_items.len());
-                for item in prefix_items {
-                    prefix.push(parse_pattern(item.clone())?);
-                }
-                let rest = parse_pattern(items.last().unwrap().clone())?;
-                return Ok(Pattern::Rest(loc, prefix, Box::new(rest)));
-            }
+    if items.len() >= 2
+        && let Ast::Symbol(_, id) = &items[items.len() - 2]
+        && lookup(*id) == "&"
+    {
+        let prefix_items = &items[..items.len() - 2];
+        let mut prefix = Vec::with_capacity(prefix_items.len());
+        for item in prefix_items {
+            prefix.push(parse_pattern(item.clone())?);
         }
+        let rest = parse_pattern(items.last().unwrap().clone())?;
+        return Ok(Pattern::Rest(loc, prefix, Box::new(rest)));
     }
     let mut pats = Vec::with_capacity(items.len());
     for item in items {
@@ -1052,31 +1051,29 @@ pub fn parse_match_clause(ast: Ast) -> Result<MatchClause> {
                 guard = Some((**cond).clone());
                 items.remove(0);
             }
-        } else if let Ast::List(g_loc, g_items) = &items[0] {
-            if !g_items.is_empty() {
-                if let Ast::Symbol(_, sym_id) = &g_items[0] {
-                    let sym_name = lookup(*sym_id);
-                    if sym_name == "where" || sym_name == "when" {
-                        if g_items.len() != 2 {
-                            return Err(SelError::SyntaxError(
-                                *g_loc,
-                                "Expected (where condition) or (when condition)".into(),
-                            ));
-                        }
-                        guard = Some(g_items[1].clone());
-                        items.remove(0);
-                    }
+        } else if let Ast::List(g_loc, g_items) = &items[0]
+            && !g_items.is_empty()
+            && let Ast::Symbol(_, sym_id) = &g_items[0]
+        {
+            let sym_name = lookup(*sym_id);
+            if sym_name == "where" || sym_name == "when" {
+                if g_items.len() != 2 {
+                    return Err(SelError::SyntaxError(
+                        *g_loc,
+                        "Expected (where condition) or (when condition)".into(),
+                    ));
                 }
+                guard = Some(g_items[1].clone());
+                items.remove(0);
             }
         }
     }
 
-    if !items.is_empty() {
-        if let Ast::Symbol(_, sym_id) = &items[0] {
-            if lookup(*sym_id) == ":do" {
-                items.remove(0);
-            }
-        }
+    if !items.is_empty()
+        && let Ast::Symbol(_, sym_id) = &items[0]
+        && lookup(*sym_id) == ":do"
+    {
+        items.remove(0);
     }
 
     let body = if items.is_empty() {
@@ -1124,12 +1121,12 @@ fn parse_try(list: Vec<Ast>, s_loc: Loc) -> Result<Ast> {
     let mut first = iter
         .next()
         .ok_or_else(|| SelError::SyntaxError(s_loc, "Missing body in try".into()))?;
-    if let Ast::Symbol(_, s) = &first {
-        if lookup(*s) == ":do" {
-            first = iter.next().ok_or_else(|| {
-                SelError::SyntaxError(s_loc, "Missing body after :do in try".into())
-            })?;
-        }
+    if let Ast::Symbol(_, s) = &first
+        && lookup(*s) == ":do"
+    {
+        first = iter
+            .next()
+            .ok_or_else(|| SelError::SyntaxError(s_loc, "Missing body after :do in try".into()))?;
     }
     let catch_clause = iter
         .next()
@@ -1159,21 +1156,17 @@ fn parse_try(list: Vec<Ast>, s_loc: Loc) -> Result<Ast> {
                         }
                     };
                     let catch_body: Vec<Ast> = c_iter.collect();
-                    return Ok(Ast::Try(s_loc, Box::new(first), err_var_id, catch_body));
+                    Ok(Ast::Try(s_loc, Box::new(first), err_var_id, catch_body))
                 }
-                _ => {
-                    return Err(SelError::SyntaxError(
-                        c_loc,
-                        "Expected catch keyword as first element of catch clause".into(),
-                    ));
-                }
+                _ => Err(SelError::SyntaxError(
+                    c_loc,
+                    "Expected catch keyword as first element of catch clause".into(),
+                )),
             }
         }
-        _ => {
-            return Err(SelError::SyntaxError(
-                s_loc,
-                "Expected catch clause to be a list".into(),
-            ));
-        }
+        _ => Err(SelError::SyntaxError(
+            s_loc,
+            "Expected catch clause to be a list".into(),
+        )),
     }
 }

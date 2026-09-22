@@ -44,8 +44,68 @@ fn entry() -> Result<(), SelError> {
     }
 }
 
+fn is_input_complete(input: &str) -> bool {
+    let mut paren_count: i32 = 0;
+    let mut bracket_count: i32 = 0;
+    let mut brace_count: i32 = 0;
+    let mut in_string = false;
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if in_string {
+            if c == '\\' {
+                chars.next();
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match c {
+            ';' => {
+                for next_c in chars.by_ref() {
+                    if next_c == '\n' {
+                        break;
+                    }
+                }
+            }
+            '#' => {
+                if let Some(&'\\') = chars.peek() {
+                    chars.next(); // consume '\\'
+                    if let Some(&next_c) = chars.peek() {
+                        if next_c.is_alphabetic() {
+                            while let Some(&ch) = chars.peek() {
+                                if ch.is_alphabetic() {
+                                    chars.next();
+                                } else {
+                                    break;
+                                }
+                            }
+                        } else {
+                            chars.next(); // consume the single character (e.g. '(', ')', etc.)
+                        }
+                    }
+                }
+            }
+            '"' => {
+                in_string = true;
+            }
+            '(' => paren_count += 1,
+            ')' => paren_count -= 1,
+            '[' => bracket_count += 1,
+            ']' => bracket_count -= 1,
+            '{' => brace_count += 1,
+            '}' => brace_count -= 1,
+            _ => {}
+        }
+    }
+
+    !in_string && paren_count <= 0 && bracket_count <= 0 && brace_count <= 0
+}
+
 fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
     const QUIT_COMMAND: &str = ":quit";
+    const CONTINUATION_PROMPT: &str = "  ..> ";
     let repl_file_id = intern("<repl>");
     println!("Welcome to the Sel Scheme repl. (Use `{QUIT_COMMAND}` to exit)");
 
@@ -57,19 +117,26 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
     }
 
     let mut diags = Vec::new();
+    let mut buffer = String::new();
 
     loop {
         diags.clear();
-        match rl.readline(prompt) {
+        let current_prompt = if buffer.is_empty() {
+            prompt
+        } else {
+            CONTINUATION_PROMPT
+        };
+
+        match rl.readline(current_prompt) {
             Ok(line) => {
                 let trimmed = line.trim();
-                if trimmed.is_empty() {
+                if buffer.is_empty() && trimmed.is_empty() {
                     continue;
                 }
-                _ = rl.add_history_entry(trimmed);
-                let line = trimmed;
-                if line.starts_with(':') {
-                    let mut parts = line.splitn(2, ' ');
+
+                if buffer.is_empty() && trimmed.starts_with(':') {
+                    _ = rl.add_history_entry(trimmed);
+                    let mut parts = trimmed.splitn(2, ' ');
                     let cmd = parts.next().unwrap();
                     let arg = parts.next().unwrap_or("").trim();
                     match cmd {
@@ -280,7 +347,18 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
                     }
                 }
 
-                let asts = parse_all(line, repl_file_id, &mut diags);
+                if !buffer.is_empty() {
+                    buffer.push('\n');
+                }
+                buffer.push_str(&line);
+
+                if !is_input_complete(&buffer) {
+                    continue;
+                }
+
+                _ = rl.add_history_entry(buffer.trim());
+                let asts = parse_all(&buffer, repl_file_id, &mut diags);
+                buffer.clear();
                 if !diags.is_empty() {
                     for diag in &diags {
                         eprintln!("{}", diag);
@@ -298,6 +376,11 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
                 }
             }
             Err(ReadlineError::Interrupted) => {
+                if !buffer.is_empty() {
+                    buffer.clear();
+                    println!("^C");
+                    continue;
+                }
                 println!("CTRL-C");
                 break;
             }
@@ -351,7 +434,10 @@ mod tests {
                 let path_str = entry.path().to_string_lossy().to_string();
                 #[cfg(not(feature = "ffi"))]
                 if path_str.contains("ffi") {
-                    println!("Skipping FFI test (feature 'ffi' is disabled): {}", path_str);
+                    println!(
+                        "Skipping FFI test (feature 'ffi' is disabled): {}",
+                        path_str
+                    );
                     continue;
                 }
                 let env = Rc::new(RefCell::new(Env::default()));
@@ -377,5 +463,19 @@ mod tests {
     #[test]
     fn test_errors_folder() {
         assert!(test_folder_impl("tests/errors").is_err());
+    }
+
+    #[test]
+    fn test_is_input_complete() {
+        assert!(is_input_complete("(+ 1 2)"));
+        assert!(!is_input_complete("(define (foo x)"));
+        assert!(is_input_complete("(define (foo x)\n  (+ x 1))"));
+        assert!(!is_input_complete("{\"key\""));
+        assert!(is_input_complete("{\"key\" 123}"));
+        assert!(!is_input_complete("\"open string"));
+        assert!(is_input_complete("\"closed string\""));
+        assert!(is_input_complete("(print \"with ( parens inside\")"));
+        assert!(is_input_complete("(+ 1 2) ; unclosed ( comment"));
+        assert!(is_input_complete("(let ((c #\\()) c)"));
     }
 }

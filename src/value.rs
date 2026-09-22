@@ -139,8 +139,7 @@ fn format_value(val: &Value) -> String {
         },
         Value::List(l) => {
             if !l.is_empty() && l.iter().all(|v| matches!(v, Value::Char(_))) {
-                l
-                    .iter()
+                l.iter()
                     .map(|v| match v {
                         Value::Char(c) => *c,
                         _ => unreachable!(),
