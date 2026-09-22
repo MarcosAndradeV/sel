@@ -60,12 +60,12 @@ pub enum Value {
     Float(f64),
     Boolean(bool),
     Symbol(u32),
-    List(Rc<[Value]>, usize),
+    List(Box<imbl::Vector<Self>>),
     Record(Rc<Record<Self>>),
     Closure(Rc<Closure>),
     NativeFunction(fn(loc: Loc, args: Vec<Value>) -> Result<Value>),
     #[allow(unused)]
-    NativeClosure(NativeClosureFn),
+    NativeClosure(Rc<NativeClosureFn>),
     Macro(Rc<Macro>),
     Pointer(usize),
     #[cfg(feature = "ffi")]
@@ -77,7 +77,7 @@ pub enum Value {
 impl Value {
     #[inline]
     pub fn make_list(items: Vec<Value>) -> Self {
-        Value::List(items.into_boxed_slice().into(), 0)
+        Value::List(Box::new(items.into()))
     }
 
     #[inline]
@@ -87,26 +87,11 @@ impl Value {
     }
 
     #[inline]
-    pub fn as_list_slice(&self) -> Option<&[Value]> {
-        match self {
-            Value::List(l, offset) => {
-                if *offset <= l.len() {
-                    Some(&l[*offset..])
-                } else {
-                    Some(&[])
-                }
-            }
-            _ => None,
-        }
-    }
-
-    #[inline]
     pub fn to_string_lossy(&self) -> Option<String> {
         match self {
-            Value::List(l, offset) => {
-                let slice = if *offset <= l.len() { &l[*offset..] } else { &[] };
-                let mut s = String::with_capacity(slice.len());
-                for v in slice {
+            Value::List(l) => {
+                let mut s = String::with_capacity(l.len());
+                for v in l.iter() {
                     if let Value::Char(c) = v {
                         s.push(*c);
                     } else {
@@ -152,10 +137,9 @@ fn format_value(val: &Value) -> String {
             '\r' => "#\\return".to_string(),
             ch => format!("#\\{}", ch),
         },
-        Value::List(l, offset) => {
-            let slice = if *offset <= l.len() { &l[*offset..] } else { &[] };
-            if !slice.is_empty() && slice.iter().all(|v| matches!(v, Value::Char(_))) {
-                slice
+        Value::List(l) => {
+            if !l.is_empty() && l.iter().all(|v| matches!(v, Value::Char(_))) {
+                l
                     .iter()
                     .map(|v| match v {
                         Value::Char(c) => *c,
@@ -164,7 +148,7 @@ fn format_value(val: &Value) -> String {
                     .collect()
             } else {
                 let mut s = String::from("(");
-                for (i, v) in slice.iter().enumerate() {
+                for (i, v) in l.iter().enumerate() {
                     if i > 0 {
                         s.push(' ');
                     }

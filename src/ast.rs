@@ -448,10 +448,9 @@ pub fn value_to_ast(val: Value, loc: Loc) -> Result<Ast> {
         Value::Boolean(b) => Ok(Ast::Boolean(loc, b)),
         Value::Symbol(id) => Ok(Ast::Symbol(loc, id)),
         Value::Char(c) => Ok(Ast::Char(loc, c)),
-        Value::List(l, offset) => {
-            let slice = &l[offset..];
-            if !slice.is_empty() && slice.iter().all(|v| matches!(v, Value::Char(_))) {
-                let s_str: String = slice
+        Value::List(l) => {
+            if !l.is_empty() && l.iter().all(|v| matches!(v, Value::Char(_))) {
+                let s_str: String = l
                     .iter()
                     .map(|v| match v {
                         Value::Char(c) => *c,
@@ -461,7 +460,7 @@ pub fn value_to_ast(val: Value, loc: Loc) -> Result<Ast> {
                 Ok(Ast::String(loc, s_str))
             } else {
                 let mut ast_list = Vec::new();
-                for v in slice.iter() {
+                for v in l.iter() {
                     ast_list.push(value_to_ast(v.clone(), loc)?);
                 }
                 if ast_list.is_empty() {

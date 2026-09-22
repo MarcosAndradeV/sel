@@ -874,11 +874,11 @@ impl VM {
                 26 => {
                     // ConcatList
                     let count = read_usize(frame);
-                    let mut items = Vec::new();
+                    let mut items = imbl::Vector::new();
                     let start = self.stack.len() - count;
                     for val in self.stack.drain(start..) {
                         match val {
-                            Value::List(l, offset) => items.extend(l[offset..].iter().cloned()),
+                            Value::List(l) => items.append(*l),
                             Value::Nil => {}
                             _ => {
                                 return Err(SelError::TypeError(
@@ -889,7 +889,7 @@ impl VM {
                         }
                     }
                     self.stack
-                        .push(Value::make_list(items));
+                        .push(Value::List(Box::new(items)));
                 }
                 27 => {
                     // Sum

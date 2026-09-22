@@ -25,7 +25,8 @@ ffi = ["dep:libloading", "dep:libffi"]
 
 [dependencies]
 rustyline = "18.0.0"
-libloading = { version = "0.8.3", optional = true }
+libloading = { version = "0.9.0", optional = true }
 libffi = { version = "5.1.0", optional = true }
 rustc-hash = "2.1.2"
 indexmap = "2.14.0"
+imbl = { version = "7.0.2", git = "https://github.com/MarcosAndradeV/imbl" }
