@@ -1,5 +1,5 @@
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -22,18 +22,18 @@ type Result<T> = std::result::Result<T, SelError>;
 
 #[derive(Debug)]
 pub struct Env {
-    pub bindings: HashMap<u32, Value>,
+    pub bindings: FxHashMap<u32, Value>,
     pub parent: Option<Rc<RefCell<Env>>>,
-    pub private_bindings: std::collections::HashSet<u32>,
+    pub private_bindings: FxHashSet<u32>,
     pub current_visibility_public: bool,
 }
 
 impl Default for Env {
     fn default() -> Self {
         Self {
-            bindings: HashMap::new(),
+            bindings: FxHashMap::default(),
             parent: None,
-            private_bindings: std::collections::HashSet::new(),
+            private_bindings: FxHashSet::default(),
             current_visibility_public: true,
         }
     }
@@ -42,9 +42,9 @@ impl Default for Env {
 impl Env {
     fn new(parent: Option<Rc<RefCell<Env>>>) -> Self {
         Self {
-            bindings: HashMap::new(),
+            bindings: FxHashMap::default(),
             parent,
-            private_bindings: std::collections::HashSet::new(),
+            private_bindings: FxHashSet::default(),
             current_visibility_public: true,
         }
     }
@@ -104,6 +104,7 @@ pub struct VM {
     pub stack: Vec<Value>,
     pub catch_handlers: Vec<CatchHandler>,
     pub sandbox_root: Option<PathBuf>,
+    pub module_cache: FxHashMap<PathBuf, Vec<(u32, Value)>>,
 }
 
 fn check_sandbox(path: &std::path::Path, sandbox_root: &std::path::Path, loc: Loc) -> Result<()> {
@@ -212,6 +213,7 @@ impl VM {
             stack: Vec::new(),
             catch_handlers: Vec::new(),
             sandbox_root: None,
+            module_cache: FxHashMap::default(),
         }
     }
 
@@ -298,23 +300,13 @@ impl VM {
             };
 
             let read_u32 = |f: &mut CallFrame| {
-                let val = u32::from_le_bytes([
-                    f.chunk.code[f.ip],
-                    f.chunk.code[f.ip + 1],
-                    f.chunk.code[f.ip + 2],
-                    f.chunk.code[f.ip + 3],
-                ]);
+                let val = u32::from_le_bytes(f.chunk.code[f.ip..f.ip + 4].try_into().unwrap());
                 f.ip += 4;
                 val
             };
 
             let read_usize = |f: &mut CallFrame| {
-                let val = u32::from_le_bytes([
-                    f.chunk.code[f.ip],
-                    f.chunk.code[f.ip + 1],
-                    f.chunk.code[f.ip + 2],
-                    f.chunk.code[f.ip + 3],
-                ]);
+                let val = u32::from_le_bytes(f.chunk.code[f.ip..f.ip + 4].try_into().unwrap());
                 f.ip += 4;
                 val as usize
             };
@@ -391,31 +383,32 @@ impl VM {
                     let callee = self.stack[self.stack.len() - arg_count - 1].clone();
                     match callee {
                         Value::Closure(c) => {
-                            let params = c.params.clone();
+                            let params = &c.params;
                             let chunk = c.chunk.clone();
                             let c_env = c.env.clone();
                             let mut call_env = Env::new(Some(c_env));
-                            let mut locals = Vec::new();
-                            let mut has_rest = false;
-                            for (i, id) in params.iter().enumerate() {
-                                if lookup(*id).starts_with('&') {
-                                    let rest_args =
-                                        self.stack.split_off(self.stack.len() - (arg_count - i));
-                                    let name = &lookup(*id)[1..];
-                                    let rest_val = Value::make_list(rest_args);
-                                    call_env.insert(intern(name), rest_val.clone());
-                                    locals.push(rest_val);
-                                    has_rest = true;
-                                    break;
-                                } else {
-                                    let arg_idx = self.stack.len() - arg_count + i;
-                                    if let Some(arg_val) = self.stack.get(arg_idx).cloned() {
-                                        call_env.insert(*id, arg_val.clone());
-                                        locals.push(arg_val);
-                                    }
+                            let mut locals = Vec::with_capacity(params.len());
+
+                            if let Some((rest_idx, rest_id)) = c.rest_param {
+                                if arg_count < rest_idx {
+                                    return Err(SelError::ArityMismatch {
+                                        loc,
+                                        expected: rest_idx,
+                                        actual: arg_count,
+                                    });
                                 }
-                            }
-                            if !has_rest {
+                                let stack_start = self.stack.len() - arg_count;
+                                for i in 0..rest_idx {
+                                    let arg_val = self.stack[stack_start + i].clone();
+                                    call_env.insert(params[i], arg_val.clone());
+                                    locals.push(arg_val);
+                                }
+                                let rest_args = self.stack.split_off(stack_start + rest_idx);
+                                let rest_val = Value::make_list(rest_args);
+                                call_env.insert(rest_id, rest_val.clone());
+                                locals.push(rest_val);
+                                self.stack.pop(); // pop callee
+                            } else {
                                 if params.len() != arg_count {
                                     return Err(SelError::ArityMismatch {
                                         loc,
@@ -423,9 +416,15 @@ impl VM {
                                         actual: arg_count,
                                     });
                                 }
-                                self.stack.truncate(self.stack.len() - arg_count);
+                                let stack_start = self.stack.len() - arg_count;
+                                for i in 0..arg_count {
+                                    let arg_val = self.stack[stack_start + i].clone();
+                                    call_env.insert(params[i], arg_val.clone());
+                                    locals.push(arg_val);
+                                }
+                                self.stack.truncate(stack_start);
+                                self.stack.pop(); // pop callee
                             }
-                            self.stack.pop(); // pop callee
                             frames.push(CallFrame {
                                 loc,
                                 chunk,
@@ -537,30 +536,32 @@ impl VM {
                     let callee = self.stack[self.stack.len() - arg_count - 1].clone();
                     match callee {
                         Value::Closure(c) => {
-                            let params = c.params.clone();
+                            let params = &c.params;
                             let chunk = c.chunk.clone();
                             let c_env = c.env.clone();
                             let mut call_env = Env::new(Some(c_env));
-                            let mut locals = Vec::new();
-                            let mut has_rest = false;
-                            for (i, id) in params.iter().enumerate() {
-                                if lookup(*id).starts_with('&') {
-                                    let rest_args =
-                                        self.stack.split_off(self.stack.len() - (arg_count - i));
-                                    let name = &lookup(*id)[1..];
-                                    let rest_val = Value::make_list(rest_args);
-                                    call_env.insert(intern(name), rest_val.clone());
-                                    locals.push(rest_val);
-                                    has_rest = true;
-                                    break;
-                                } else {
-                                    let arg_idx = self.stack.len() - arg_count + i;
-                                    let arg_val = self.stack[arg_idx].clone();
-                                    call_env.insert(*id, arg_val.clone());
+                            let mut locals = Vec::with_capacity(params.len());
+
+                            if let Some((rest_idx, rest_id)) = c.rest_param {
+                                if arg_count < rest_idx {
+                                    return Err(SelError::ArityMismatch {
+                                        loc,
+                                        expected: rest_idx,
+                                        actual: arg_count,
+                                    });
+                                }
+                                let stack_start = self.stack.len() - arg_count;
+                                for i in 0..rest_idx {
+                                    let arg_val = self.stack[stack_start + i].clone();
+                                    call_env.insert(params[i], arg_val.clone());
                                     locals.push(arg_val);
                                 }
-                            }
-                            if !has_rest {
+                                let rest_args = self.stack.split_off(stack_start + rest_idx);
+                                let rest_val = Value::make_list(rest_args);
+                                call_env.insert(rest_id, rest_val.clone());
+                                locals.push(rest_val);
+                                self.stack.pop(); // pop callee
+                            } else {
                                 if params.len() != arg_count {
                                     return Err(SelError::ArityMismatch {
                                         loc,
@@ -568,9 +569,15 @@ impl VM {
                                         actual: arg_count,
                                     });
                                 }
-                                self.stack.truncate(self.stack.len() - arg_count);
+                                let stack_start = self.stack.len() - arg_count;
+                                for i in 0..arg_count {
+                                    let arg_val = self.stack[stack_start + i].clone();
+                                    call_env.insert(params[i], arg_val.clone());
+                                    locals.push(arg_val);
+                                }
+                                self.stack.truncate(stack_start);
+                                self.stack.pop(); // pop callee
                             }
-                            self.stack.pop(); // pop callee
                             frame.chunk = chunk;
                             frame.ip = 0;
                             frame.env = Rc::new(RefCell::new(call_env));
@@ -703,9 +710,10 @@ impl VM {
                 12 => {
                     // MakeClosure
                     let idx = read_usize(frame);
-                    if let Value::Closure(c) = frame.chunk.constants[idx].clone() {
+                    if let Value::Closure(c) = &frame.chunk.constants[idx] {
                         let closure = Value::Closure(Rc::new(Closure {
                             params: c.params.clone(),
+                            rest_param: c.rest_param,
                             chunk: c.chunk.clone(),
                             env: frame.env.clone(),
                         }));
@@ -716,9 +724,10 @@ impl VM {
                     // MakeMacro
                     let id = read_u32(frame);
                     let idx = read_usize(frame);
-                    if let Value::Macro(m) = frame.chunk.constants[idx].clone() {
+                    if let Value::Macro(m) = &frame.chunk.constants[idx] {
                         let mac = Value::Macro(Rc::new(Macro {
                             params: m.params.clone(),
+                            rest_param: m.rest_param,
                             chunk: m.chunk.clone(),
                             env: frame.env.clone(),
                         }));
@@ -814,10 +823,9 @@ impl VM {
                             let mut locals = Vec::new();
                             if !params.is_empty() {
                                 let first_param = params[0];
-                                if lookup(first_param).starts_with('&') {
-                                    let name = &lookup(first_param)[1..];
+                                if let Some((0, rest_id)) = co.closure.rest_param {
                                     let rest_val = Value::make_list(vec![arg.clone()]);
-                                    call_env.insert(intern(name), rest_val.clone());
+                                    call_env.insert(rest_id, rest_val.clone());
                                     locals.push(rest_val);
                                 } else {
                                     call_env.insert(first_param, arg.clone());
@@ -880,13 +888,6 @@ impl VM {
                         check_sandbox(&fp, root, loc)?;
                     }
 
-                    let src = read_script(&fp).map_err(|e| SelError::Internal(e.to_string()))?;
-                    let mut diags = Vec::new();
-                    let file_id = intern(fp.to_string_lossy().as_ref());
-                    let asts = parse_all(&src, file_id, &mut diags);
-                    let m_env = Rc::new(RefCell::new(Env::default()));
-                    m_env.borrow_mut().parent = Some(load_core_lib());
-
                     // Extract base module name (e.g. "tests/math" -> "math", "pkg/mod.scm" -> "pkg")
                     let base_name = if fp.file_name().and_then(|s| s.to_str()) == Some("mod.scm") {
                         fp.parent()
@@ -909,11 +910,32 @@ impl VM {
                         base_name
                     };
 
-                    let rec =
-                        import_module_sandboxed(&prefix, asts, m_env, self.sandbox_root.clone())?;
+                    let exports = if let Some(exports) = self.module_cache.get(&fp) {
+                        exports.clone()
+                    } else {
+                        let src = read_script(&fp).map_err(|e| SelError::Internal(e.to_string()))?;
+                        let mut diags = Vec::new();
+                        let file_id = intern(fp.to_string_lossy().as_ref());
+                        let asts = parse_all(&src, file_id, &mut diags);
+                        let m_env = Rc::new(RefCell::new(Env::default()));
+                        m_env.borrow_mut().parent = Some(load_core_lib());
+
+                        execute_asts_sandboxed(asts, m_env.clone(), self.sandbox_root.clone())?;
+                        let mut exports = Vec::new();
+                        for (sym, val) in m_env.borrow().bindings.iter() {
+                            if m_env.borrow().private_bindings.contains(sym) {
+                                continue;
+                            }
+                            exports.push((*sym, val.clone()));
+                        }
+                        self.module_cache.insert(fp.clone(), exports.clone());
+                        exports
+                    };
+
                     let mut frame_env = frame.env.borrow_mut();
-                    for (sym, val) in rec.into_fields() {
-                        frame_env.insert(sym, val);
+                    for (sym, val) in exports {
+                        let prefixed = intern(&format!("{prefix}/{}", lookup(sym)));
+                        frame_env.insert(prefixed, val);
                     }
                 }
                 22 => {
@@ -942,8 +964,8 @@ impl VM {
                     // MakeList
                     let count = read_usize(frame);
                     let start = self.stack.len() - count;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::list(loc, args)?);
+                    let args = self.stack.drain(start..).collect();
+                    self.stack.push(Value::make_list(args));
                 }
                 26 => {
                     // ConcatList
@@ -967,86 +989,194 @@ impl VM {
                 }
                 27 => {
                     // Sum
-                    let arity = read_u32(frame);
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::sum(loc, args)?);
+                    let arity = read_u32(frame) as usize;
+                    let start = self.stack.len() - arity;
+                    let res = if arity == 2 {
+                        if let (Value::Integer(a), Value::Integer(b)) =
+                            (&self.stack[start], &self.stack[start + 1])
+                        {
+                            Value::Integer(a + b)
+                        } else {
+                            internal::sum_slice(loc, &self.stack[start..])?
+                        }
+                    } else {
+                        internal::sum_slice(loc, &self.stack[start..])?
+                    };
+                    self.stack.truncate(start);
+                    self.stack.push(res);
                 }
                 28 => {
                     // Sub
-                    let arity = read_u32(frame);
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::sub(loc, args)?);
+                    let arity = read_u32(frame) as usize;
+                    let start = self.stack.len() - arity;
+                    let res = if arity == 2 {
+                        if let (Value::Integer(a), Value::Integer(b)) =
+                            (&self.stack[start], &self.stack[start + 1])
+                        {
+                            Value::Integer(a - b)
+                        } else {
+                            internal::sub_slice(loc, &self.stack[start..])?
+                        }
+                    } else {
+                        internal::sub_slice(loc, &self.stack[start..])?
+                    };
+                    self.stack.truncate(start);
+                    self.stack.push(res);
                 }
                 29 => {
                     // Mul
-                    let arity = read_u32(frame);
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::mul(loc, args)?);
+                    let arity = read_u32(frame) as usize;
+                    let start = self.stack.len() - arity;
+                    let res = if arity == 2 {
+                        if let (Value::Integer(a), Value::Integer(b)) =
+                            (&self.stack[start], &self.stack[start + 1])
+                        {
+                            Value::Integer(a * b)
+                        } else {
+                            internal::mul_slice(loc, &self.stack[start..])?
+                        }
+                    } else {
+                        internal::mul_slice(loc, &self.stack[start..])?
+                    };
+                    self.stack.truncate(start);
+                    self.stack.push(res);
                 }
                 30 => {
                     // Div
-                    let arity = read_u32(frame);
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::div(loc, args)?);
+                    let arity = read_u32(frame) as usize;
+                    let start = self.stack.len() - arity;
+                    let res = internal::div_slice(loc, &self.stack[start..])?;
+                    self.stack.truncate(start);
+                    self.stack.push(res);
                 }
                 31 => {
                     // Mod
                     let start = self.stack.len() - 2;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::modulo(loc, args)?);
+                    let res = if let (Value::Integer(a), Value::Integer(b)) =
+                        (&self.stack[start], &self.stack[start + 1])
+                    {
+                        Value::Integer(a % b)
+                    } else {
+                        internal::modulo_slice(loc, &self.stack[start..])?
+                    };
+                    self.stack.truncate(start);
+                    self.stack.push(res);
                 }
                 32 => {
                     // Eq
-                    let arity = read_u32(frame);
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::is_equal(loc, args)?);
+                    let arity = read_u32(frame) as usize;
+                    let start = self.stack.len() - arity;
+                    let res = internal::is_equal_slice(loc, &self.stack[start..])?;
+                    self.stack.truncate(start);
+                    self.stack.push(res);
                 }
                 33 => {
                     // NumEq
-                    let arity = read_u32(frame);
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::num_eq(loc, args)?);
+                    let arity = read_u32(frame) as usize;
+                    let start = self.stack.len() - arity;
+                    let res = if arity == 2 {
+                        if let (Value::Integer(a), Value::Integer(b)) =
+                            (&self.stack[start], &self.stack[start + 1])
+                        {
+                            Value::Boolean(a == b)
+                        } else {
+                            internal::num_eq_slice(loc, &self.stack[start..])?
+                        }
+                    } else {
+                        internal::num_eq_slice(loc, &self.stack[start..])?
+                    };
+                    self.stack.truncate(start);
+                    self.stack.push(res);
                 }
                 34 => {
                     // NumNotEq
-                    let arity = read_u32(frame);
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::num_noteq(loc, args)?);
+                    let arity = read_u32(frame) as usize;
+                    let start = self.stack.len() - arity;
+                    let res = if arity == 2 {
+                        if let (Value::Integer(a), Value::Integer(b)) =
+                            (&self.stack[start], &self.stack[start + 1])
+                        {
+                            Value::Boolean(a != b)
+                        } else {
+                            internal::num_noteq_slice(loc, &self.stack[start..])?
+                        }
+                    } else {
+                        internal::num_noteq_slice(loc, &self.stack[start..])?
+                    };
+                    self.stack.truncate(start);
+                    self.stack.push(res);
                 }
                 35 => {
                     // NumLt
-                    let arity = read_u32(frame);
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::num_lt(loc, args)?);
+                    let arity = read_u32(frame) as usize;
+                    let start = self.stack.len() - arity;
+                    let res = if arity == 2 {
+                        if let (Value::Integer(a), Value::Integer(b)) =
+                            (&self.stack[start], &self.stack[start + 1])
+                        {
+                            Value::Boolean(a < b)
+                        } else {
+                            internal::num_lt_slice(loc, &self.stack[start..])?
+                        }
+                    } else {
+                        internal::num_lt_slice(loc, &self.stack[start..])?
+                    };
+                    self.stack.truncate(start);
+                    self.stack.push(res);
                 }
                 36 => {
                     // NumGt
-                    let arity = read_u32(frame);
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::num_gt(loc, args)?);
+                    let arity = read_u32(frame) as usize;
+                    let start = self.stack.len() - arity;
+                    let res = if arity == 2 {
+                        if let (Value::Integer(a), Value::Integer(b)) =
+                            (&self.stack[start], &self.stack[start + 1])
+                        {
+                            Value::Boolean(a > b)
+                        } else {
+                            internal::num_gt_slice(loc, &self.stack[start..])?
+                        }
+                    } else {
+                        internal::num_gt_slice(loc, &self.stack[start..])?
+                    };
+                    self.stack.truncate(start);
+                    self.stack.push(res);
                 }
                 37 => {
                     // NumLte
-                    let arity = read_u32(frame);
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::num_lte(loc, args)?);
+                    let arity = read_u32(frame) as usize;
+                    let start = self.stack.len() - arity;
+                    let res = if arity == 2 {
+                        if let (Value::Integer(a), Value::Integer(b)) =
+                            (&self.stack[start], &self.stack[start + 1])
+                        {
+                            Value::Boolean(a <= b)
+                        } else {
+                            internal::num_lte_slice(loc, &self.stack[start..])?
+                        }
+                    } else {
+                        internal::num_lte_slice(loc, &self.stack[start..])?
+                    };
+                    self.stack.truncate(start);
+                    self.stack.push(res);
                 }
                 38 => {
                     // NumGte
-                    let arity = read_u32(frame);
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::num_gte(loc, args)?);
+                    let arity = read_u32(frame) as usize;
+                    let start = self.stack.len() - arity;
+                    let res = if arity == 2 {
+                        if let (Value::Integer(a), Value::Integer(b)) =
+                            (&self.stack[start], &self.stack[start + 1])
+                        {
+                            Value::Boolean(a >= b)
+                        } else {
+                            internal::num_gte_slice(loc, &self.stack[start..])?
+                        }
+                    } else {
+                        internal::num_gte_slice(loc, &self.stack[start..])?
+                    };
+                    self.stack.truncate(start);
+                    self.stack.push(res);
                 }
                 39 => {
                     // Cons
@@ -1117,10 +1247,10 @@ impl VM {
                 }
                 52 => {
                     // Not
-                    let arity = read_u32(frame);
-                    let start = self.stack.len() - arity as usize;
-                    let args: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(internal::not(loc, args)?);
+                    let arity = read_u32(frame) as usize;
+                    let start = self.stack.len() - arity;
+                    let res = internal::not(loc, self.stack.drain(start..).collect())?;
+                    self.stack.push(res);
                 }
                 53 => {
                     // Load

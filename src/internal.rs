@@ -14,26 +14,26 @@ use crate::value::*;
 type Result<T> = std::result::Result<T, SelError>;
 
 #[inline]
-pub fn sum(loc: Loc, args: Vec<Value>) -> Result<Value> {
-    let mut int_sum = 0;
-    let mut float_sum = 0.0;
+pub fn sum_slice(loc: Loc, args: &[Value]) -> Result<Value> {
+    let mut int_sum = 0i64;
+    let mut float_sum = 0.0f64;
     let mut is_float = false;
 
     for arg in args {
         match arg {
             Value::Integer(i) => {
                 if is_float {
-                    float_sum += i as f64;
+                    float_sum += *i as f64;
                 } else {
-                    int_sum += i;
+                    int_sum += *i;
                 }
             }
             Value::Float(f) => {
                 if !is_float {
                     is_float = true;
-                    float_sum = int_sum as f64 + f;
+                    float_sum = int_sum as f64 + *f;
                 } else {
-                    float_sum += f;
+                    float_sum += *f;
                 }
             }
             v => {
@@ -41,7 +41,7 @@ pub fn sum(loc: Loc, args: Vec<Value>) -> Result<Value> {
                     loc,
                     format!(
                         "Invalid argument to +: expected number but got {}",
-                        value_type_name(&v)
+                        value_type_name(v)
                     ),
                 ));
             }
@@ -55,10 +55,18 @@ pub fn sum(loc: Loc, args: Vec<Value>) -> Result<Value> {
 }
 
 #[inline]
-pub fn sub(loc: Loc, args: Vec<Value>) -> Result<Value> {
+pub fn sum(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    sum_slice(loc, &args)
+}
+
+#[inline]
+pub fn sub_slice(loc: Loc, args: &[Value]) -> Result<Value> {
+    if args.is_empty() {
+        return Err(SelError::Runtime(loc, "Expected at least 1 argument for -".into()));
+    }
     let mut is_float = false;
-    let mut int_val = 0;
-    let mut float_val = 0.0;
+    let mut int_val = 0i64;
+    let mut float_val = 0.0f64;
 
     match &args[0] {
         Value::Integer(i) => int_val = *i,
@@ -85,21 +93,21 @@ pub fn sub(loc: Loc, args: Vec<Value>) -> Result<Value> {
         };
     }
 
-    for arg in args.into_iter().skip(1) {
+    for arg in &args[1..] {
         match arg {
             Value::Integer(i) => {
                 if is_float {
-                    float_val -= i as f64;
+                    float_val -= *i as f64;
                 } else {
-                    int_val -= i;
+                    int_val -= *i;
                 }
             }
             Value::Float(f) => {
                 if !is_float {
                     is_float = true;
-                    float_val = int_val as f64 - f;
+                    float_val = int_val as f64 - *f;
                 } else {
-                    float_val -= f;
+                    float_val -= *f;
                 }
             }
             _ => {
@@ -118,26 +126,31 @@ pub fn sub(loc: Loc, args: Vec<Value>) -> Result<Value> {
 }
 
 #[inline]
-pub fn mul(loc: Loc, args: Vec<Value>) -> Result<Value> {
-    let mut int_val = 1;
-    let mut float_val = 1.0;
+pub fn sub(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    sub_slice(loc, &args)
+}
+
+#[inline]
+pub fn mul_slice(loc: Loc, args: &[Value]) -> Result<Value> {
+    let mut int_val = 1i64;
+    let mut float_val = 1.0f64;
     let mut is_float = false;
 
     for arg in args {
         match arg {
             Value::Integer(i) => {
                 if is_float {
-                    float_val *= i as f64;
+                    float_val *= *i as f64;
                 } else {
-                    int_val *= i;
+                    int_val *= *i;
                 }
             }
             Value::Float(f) => {
                 if !is_float {
                     is_float = true;
-                    float_val = int_val as f64 * f;
+                    float_val = int_val as f64 * *f;
                 } else {
-                    float_val *= f;
+                    float_val *= *f;
                 }
             }
             _ => {
@@ -156,7 +169,15 @@ pub fn mul(loc: Loc, args: Vec<Value>) -> Result<Value> {
 }
 
 #[inline]
-pub fn div(loc: Loc, args: Vec<Value>) -> Result<Value> {
+pub fn mul(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    mul_slice(loc, &args)
+}
+
+#[inline]
+pub fn div_slice(loc: Loc, args: &[Value]) -> Result<Value> {
+    if args.is_empty() {
+        return Err(SelError::Runtime(loc, "Expected at least 1 argument for /".into()));
+    }
     if args.len() == 1 {
         match args[0] {
             Value::Integer(i) => return Ok(Value::Float(1.0 / i as f64)),
@@ -181,10 +202,10 @@ pub fn div(loc: Loc, args: Vec<Value>) -> Result<Value> {
         }
     };
 
-    for arg in args.into_iter().skip(1) {
+    for arg in &args[1..] {
         match arg {
-            Value::Integer(i) => float_val /= i as f64,
-            Value::Float(f) => float_val /= f,
+            Value::Integer(i) => float_val /= *i as f64,
+            Value::Float(f) => float_val /= *f,
             _ => {
                 return Err(SelError::Runtime(
                     loc,
@@ -197,7 +218,12 @@ pub fn div(loc: Loc, args: Vec<Value>) -> Result<Value> {
 }
 
 #[inline]
-pub fn modulo(loc: Loc, args: Vec<Value>) -> Result<Value> {
+pub fn div(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    div_slice(loc, &args)
+}
+
+#[inline]
+pub fn modulo_slice(loc: Loc, args: &[Value]) -> Result<Value> {
     if args.len() != 2 {
         return Err(SelError::Runtime(
             loc,
@@ -220,7 +246,15 @@ pub fn modulo(loc: Loc, args: Vec<Value>) -> Result<Value> {
 }
 
 #[inline]
-fn compare_nums(loc: Loc, args: Vec<Value>, op: fn(f64, f64) -> bool) -> Result<Value> {
+pub fn modulo(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    modulo_slice(loc, &args)
+}
+
+#[inline]
+fn compare_nums_slice(loc: Loc, args: &[Value], op: fn(f64, f64) -> bool) -> Result<Value> {
+    if args.is_empty() {
+        return Ok(Value::Boolean(true));
+    }
     let mut prev = match args[0] {
         Value::Integer(i) => i as f64,
         Value::Float(f) => f,
@@ -228,10 +262,10 @@ fn compare_nums(loc: Loc, args: Vec<Value>, op: fn(f64, f64) -> bool) -> Result<
             return Err(SelError::Runtime(loc, "comparison requires numbers".into()));
         }
     };
-    for arg in args.into_iter().skip(1) {
+    for arg in &args[1..] {
         let curr = match arg {
-            Value::Integer(i) => i as f64,
-            Value::Float(f) => f,
+            Value::Integer(i) => *i as f64,
+            Value::Float(f) => *f,
             _ => {
                 return Err(SelError::Runtime(loc, "comparison requires numbers".into()));
             }
@@ -245,18 +279,23 @@ fn compare_nums(loc: Loc, args: Vec<Value>, op: fn(f64, f64) -> bool) -> Result<
 }
 
 #[inline]
-pub fn is_equal(_loc: Loc, args: Vec<Value>) -> Result<Value> {
+pub fn is_equal_slice(_loc: Loc, args: &[Value]) -> Result<Value> {
     if args.len() < 2 {
         return Ok(Value::Boolean(true));
     }
     let first = &args[0];
-    for arg in args.iter().skip(1) {
+    for arg in &args[1..] {
         let eq = is_value_equal(first, arg);
         if !eq {
             return Ok(Value::Boolean(false));
         }
     }
     Ok(Value::Boolean(true))
+}
+
+#[inline]
+pub fn is_equal(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    is_equal_slice(loc, &args)
 }
 
 #[inline]
@@ -298,28 +337,52 @@ fn is_value_equal(first: &Value, arg: &Value) -> bool {
 }
 
 #[inline]
+pub fn num_noteq_slice(loc: Loc, args: &[Value]) -> Result<Value> {
+    compare_nums_slice(loc, args, |a, b| a != b)
+}
+#[inline]
 pub fn num_noteq(loc: Loc, args: Vec<Value>) -> Result<Value> {
-    compare_nums(loc, args, |a, b| a != b)
+    num_noteq_slice(loc, &args)
+}
+#[inline]
+pub fn num_eq_slice(loc: Loc, args: &[Value]) -> Result<Value> {
+    compare_nums_slice(loc, args, |a, b| a == b)
 }
 #[inline]
 pub fn num_eq(loc: Loc, args: Vec<Value>) -> Result<Value> {
-    compare_nums(loc, args, |a, b| a == b)
+    num_eq_slice(loc, &args)
+}
+#[inline]
+pub fn num_lt_slice(loc: Loc, args: &[Value]) -> Result<Value> {
+    compare_nums_slice(loc, args, |a, b| a < b)
 }
 #[inline]
 pub fn num_lt(loc: Loc, args: Vec<Value>) -> Result<Value> {
-    compare_nums(loc, args, |a, b| a < b)
+    num_lt_slice(loc, &args)
+}
+#[inline]
+pub fn num_gt_slice(loc: Loc, args: &[Value]) -> Result<Value> {
+    compare_nums_slice(loc, args, |a, b| a > b)
 }
 #[inline]
 pub fn num_gt(loc: Loc, args: Vec<Value>) -> Result<Value> {
-    compare_nums(loc, args, |a, b| a > b)
+    num_gt_slice(loc, &args)
+}
+#[inline]
+pub fn num_lte_slice(loc: Loc, args: &[Value]) -> Result<Value> {
+    compare_nums_slice(loc, args, |a, b| a <= b)
 }
 #[inline]
 pub fn num_lte(loc: Loc, args: Vec<Value>) -> Result<Value> {
-    compare_nums(loc, args, |a, b| a <= b)
+    num_lte_slice(loc, &args)
+}
+#[inline]
+pub fn num_gte_slice(loc: Loc, args: &[Value]) -> Result<Value> {
+    compare_nums_slice(loc, args, |a, b| a >= b)
 }
 #[inline]
 pub fn num_gte(loc: Loc, args: Vec<Value>) -> Result<Value> {
-    compare_nums(loc, args, |a, b| a >= b)
+    num_gte_slice(loc, &args)
 }
 
 #[inline]

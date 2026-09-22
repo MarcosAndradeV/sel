@@ -315,11 +315,11 @@ impl<'a> Compiler<'a> {
                 }
                 child_chunk.write((loc, OpCode::Return));
 
-                let stub = Value::Closure(Rc::new(Closure {
+                let stub = Value::Closure(Rc::new(Closure::new(
                     params,
-                    chunk: Rc::new(child_chunk),
-                    env: Rc::new(RefCell::new(Env::default())),
-                }));
+                    Rc::new(child_chunk),
+                    Rc::new(RefCell::new(Env::default())),
+                )));
                 let idx = self.chunk.add_constant(stub);
                 self.chunk.write((loc, OpCode::MakeClosure(idx)));
             }
@@ -348,11 +348,11 @@ impl<'a> Compiler<'a> {
                     }
                     child_chunk.write((loc, OpCode::Return));
 
-                    let stub = Value::Macro(Rc::new(Macro {
+                    let stub = Value::Macro(Rc::new(Macro::new(
                         params,
-                        chunk: Rc::new(child_chunk),
-                        env: Rc::new(RefCell::new(Env::default())),
-                    }));
+                        Rc::new(child_chunk),
+                        Rc::new(RefCell::new(Env::default())),
+                    )));
                     let idx = self.chunk.add_constant(stub);
                     self.chunk.write((loc, OpCode::MakeMacro(id, idx)));
                 } else {

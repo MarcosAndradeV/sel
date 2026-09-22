@@ -6,6 +6,7 @@ use crate::diagnostics::SelError;
 use crate::lexer::Loc;
 use crate::runtime::Env;
 use crate::types::Record;
+use crate::types::intern;
 use crate::types::lookup;
 
 type Result<T> = std::result::Result<T, SelError>;
@@ -13,15 +14,57 @@ type Result<T> = std::result::Result<T, SelError>;
 #[derive(Debug, Clone)]
 pub struct Closure {
     pub params: Vec<u32>,
+    pub rest_param: Option<(usize, u32)>,
     pub chunk: Rc<Chunk>,
     pub env: Rc<RefCell<Env>>,
+}
+
+impl Closure {
+    pub fn new(params: Vec<u32>, chunk: Rc<Chunk>, env: Rc<RefCell<Env>>) -> Self {
+        let mut rest_param = None;
+        for (i, &pid) in params.iter().enumerate() {
+            let name = lookup(pid);
+            if name.starts_with('&') {
+                let clean_name = &name[1..];
+                rest_param = Some((i, intern(clean_name)));
+                break;
+            }
+        }
+        Self {
+            params,
+            rest_param,
+            chunk,
+            env,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct Macro {
     pub params: Vec<u32>,
+    pub rest_param: Option<(usize, u32)>,
     pub chunk: Rc<Chunk>,
     pub env: Rc<RefCell<Env>>,
+}
+
+impl Macro {
+    pub fn new(params: Vec<u32>, chunk: Rc<Chunk>, env: Rc<RefCell<Env>>) -> Self {
+        let mut rest_param = None;
+        for (i, &pid) in params.iter().enumerate() {
+            let name = lookup(pid);
+            if name.starts_with('&') {
+                let clean_name = &name[1..];
+                rest_param = Some((i, intern(clean_name)));
+                break;
+            }
+        }
+        Self {
+            params,
+            rest_param,
+            chunk,
+            env,
+        }
+    }
 }
 
 #[derive(Clone)]
