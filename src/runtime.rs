@@ -245,7 +245,7 @@ impl VM {
         }
     }
 
-    fn handle_error(&mut self, frames: &mut Vec<CallFrame>, err: SelError) -> Result<()> {
+    pub fn handle_error(&mut self, frames: &mut Vec<CallFrame>, err: SelError) -> Result<()> {
         if let Some(handler) = self.catch_handlers.pop() {
             // Unwind frames to the saved frame_index
             frames.truncate(handler.frame_index + 1);
@@ -272,21 +272,25 @@ impl VM {
         }
     }
 
-    fn run_internal(&mut self, frames: &mut Vec<CallFrame>) -> Result<Value> {
-        loop {
-            let frame_idx = frames.len() - 1;
-            let frame = &mut frames[frame_idx];
+    pub fn step_frame(&mut self, frames: &mut Vec<CallFrame>) -> Result<Option<Value>> {
+        if frames.is_empty() {
+            return Ok(Some(self.stack.pop().unwrap_or(Value::Nil)));
+        }
 
-            if frame.ip >= frame.chunk.code.len() {
-                // End of root chunk
-                if frames.len() == 1 {
-                    return Ok(self.stack.pop().unwrap_or(Value::Nil));
-                } else {
-                    return Err(SelError::Internal(
-                        "Unexpected end of function bytecode".into(),
-                    ));
-                }
+        let frame_idx = frames.len() - 1;
+        let frame = &mut frames[frame_idx];
+
+        if frame.ip >= frame.chunk.code.len() {
+            // End of root chunk
+            if frames.len() == 1 {
+                frames.pop();
+                return Ok(Some(self.stack.pop().unwrap_or(Value::Nil)));
+            } else {
+                return Err(SelError::Internal(
+                    "Unexpected end of function bytecode".into(),
+                ));
             }
+        }
 
             let instr_start = frame.ip;
             let loc = frame.chunk.get_loc(instr_start);
@@ -593,7 +597,7 @@ impl VM {
                             frames.pop();
                             self.stack.push(res);
                             if frames.is_empty() {
-                                return Ok(self.stack.pop().unwrap());
+                                return Ok(Some(self.stack.pop().unwrap()));
                             }
                         }
                         Value::Macro(_) => {
@@ -612,7 +616,7 @@ impl VM {
                             frames.pop();
                             self.stack.push(res);
                             if frames.is_empty() {
-                                return Ok(self.stack.pop().unwrap());
+                                return Ok(Some(self.stack.pop().unwrap()));
                             }
                         }
                         Value::Record(_) => {
@@ -657,7 +661,7 @@ impl VM {
                             frames.pop();
                             self.stack.push(res);
                             if frames.is_empty() {
-                                return Ok(self.stack.pop().unwrap());
+                                return Ok(Some(self.stack.pop().unwrap()));
                             }
                         }
                         Value::Symbol(sym) => {
@@ -696,7 +700,7 @@ impl VM {
                             frames.pop();
                             self.stack.push(res);
                             if frames.is_empty() {
-                                return Ok(self.stack.pop().unwrap());
+                                return Ok(Some(self.stack.pop().unwrap()));
                             }
                         }
                         _ => {
@@ -743,7 +747,7 @@ impl VM {
                     frames.pop();
                     self.stack.push(result);
                     if frames.is_empty() {
-                        return Ok(self.stack.pop().unwrap());
+                        return Ok(Some(self.stack.pop().unwrap()));
                     }
                 }
                 15 => {
@@ -787,7 +791,7 @@ impl VM {
                 19 => {
                     // Yield
                     let yielded_val = self.stack.pop().unwrap_or(Value::Nil);
-                    return Ok(yielded_val);
+                    return Ok(Some(yielded_val));
                 }
                 20 => {
                     // CoResume
@@ -1296,6 +1300,14 @@ impl VM {
                     }
                 }
                 _ => unreachable!(),
+            }
+        Ok(None)
+    }
+
+    fn run_internal(&mut self, frames: &mut Vec<CallFrame>) -> Result<Value> {
+        loop {
+            if let Some(val) = self.step_frame(frames)? {
+                return Ok(val);
             }
         }
     }

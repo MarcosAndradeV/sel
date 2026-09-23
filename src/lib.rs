@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod compiler;
+pub mod debugger;
 pub mod diagnostics;
 pub mod internal;
 pub mod lexer;
@@ -9,6 +10,7 @@ pub mod types;
 pub mod value;
 
 // Re-exports
+pub use debugger::{DebugSession, DisassembledInstruction, VmSnapshot, VmStatus};
 pub use diagnostics::SelError;
 pub use diagnostics::SelErrorKind;
 pub use internal::load_core_lib;

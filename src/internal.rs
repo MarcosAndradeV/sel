@@ -430,21 +430,58 @@ pub fn not(_loc: Loc, args: Vec<Value>) -> Result<Value> {
     }
 }
 
+thread_local! {
+    pub static OUTPUT_SINK: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+pub fn enable_output_capture() {
+    OUTPUT_SINK.with(|sink| {
+        *sink.borrow_mut() = Some(Vec::new());
+    });
+}
+
+pub fn drain_captured_output() -> Vec<String> {
+    OUTPUT_SINK.with(|sink| {
+        sink.borrow_mut().as_mut().map(std::mem::take).unwrap_or_default()
+    })
+}
+
+pub fn disable_output_capture() -> Vec<String> {
+    OUTPUT_SINK.with(|sink| {
+        sink.borrow_mut().take().unwrap_or_default()
+    })
+}
+
+pub fn emit_stdout(s: &str) {
+    let captured = OUTPUT_SINK.with(|sink| {
+        if let Some(buf) = sink.borrow_mut().as_mut() {
+            buf.push(s.to_string());
+            true
+        } else {
+            false
+        }
+    });
+    if !captured {
+        print!("{}", s);
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+    }
+}
+
 pub fn display_newline(loc: Loc, args: Vec<Value>) -> Result<Value> {
-    display(loc, args.clone())?;
-    println!();
-    Ok(Value::Nil)
+    display(loc, args)?;
+    newline(loc, Vec::new())
 }
 
 pub fn display(_loc: Loc, args: Vec<Value>) -> Result<Value> {
+    let mut out = String::new();
     for (i, arg) in args.into_iter().enumerate() {
         if i > 0 {
-            print!(" ");
+            out.push(' ');
         }
-        print!("{}", arg);
+        out.push_str(&arg.to_string());
     }
-    use std::io::Write;
-    std::io::stdout().flush().unwrap();
+    emit_stdout(&out);
     Ok(Value::Nil)
 }
 
@@ -1725,7 +1762,7 @@ pub fn newline(loc: Loc, args: Vec<Value>) -> Result<Value> {
             "Expected exactly 1 arguments for newline".into(),
         ));
     }
-    println!();
+    emit_stdout("\n");
     Ok(Value::Nil)
 }
 
