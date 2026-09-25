@@ -1553,7 +1553,7 @@ pub fn is_list(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         ));
     }
     match args.pop().unwrap() {
-        Value::List(..) | Value::String(..) => Ok(Value::Boolean(true)),
+        Value::List(..) | Value::String(..) | Value::Nil => Ok(Value::Boolean(true)),
         _ => Ok(Value::Boolean(false)),
     }
 }

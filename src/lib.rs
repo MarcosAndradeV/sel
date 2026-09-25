@@ -8,6 +8,8 @@ pub mod parser;
 pub mod runtime;
 pub mod types;
 pub mod value;
+#[cfg(feature = "alt-syntax")]
+pub mod alt_parser;
 
 // Re-exports
 pub use debugger::{DebugSession, DisassembledInstruction, VmSnapshot, VmStatus};
@@ -83,7 +85,26 @@ pub fn load_file_sandboxed(
     let src = internal::read_script(script_path)?;
     let mut diags = Vec::new();
     let file_id = intern(script_path);
-    let asts = parser::parse_all(&src, file_id, &mut diags);
+    let asts = {
+        #[cfg(feature = "alt-syntax")]
+        {
+            if script_path.ends_with(".sel") {
+                alt_parser::parse_all(&src, file_id, &mut diags)
+            } else {
+                parser::parse_all(&src, file_id, &mut diags)
+            }
+        }
+        #[cfg(not(feature = "alt-syntax"))]
+        {
+            if script_path.ends_with(".sel") {
+                return Err(SelError::SyntaxError(
+                    lexer::Loc::default(),
+                    "Alternative syntax (.sel) requires the `alt-syntax` feature".into(),
+                ));
+            }
+            parser::parse_all(&src, file_id, &mut diags)
+        }
+    };
     if !diags.is_empty() {
         for diag in diags {
             eprintln!("{}", diag);

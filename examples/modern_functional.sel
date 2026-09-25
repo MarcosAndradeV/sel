@@ -1,0 +1,83 @@
+// examples/modern_functional.sel
+// A showcase of Unison/Elixir-inspired modern functional programming in SEL
+// using the alternative syntax parsed by lex-just-parse.
+
+println("=== SEL Modern Functional Showcase (.sel) ===")
+newline()
+
+// 1. Declarations & Functions
+println("--- 1. Function & Variable Definitions ---")
+
+pub discount_rate tier amount :=
+    match tier with
+    | :vip when amount >= 1000 -> 0.25
+    | :vip -> 0.15
+    | :member when amount >= 500 -> 0.10
+    | :member -> 0.05
+    | _ -> 0.0
+    end
+
+println("VIP discount on $1200:", discount_rate(:vip, 1200))
+println("Member discount on $600:", discount_rate(:member, 600))
+println("Guest discount on $100:", discount_rate(:guest, 100))
+newline()
+
+// 2. Data Structures & Pipelines (|>)
+println("--- 2. Record Access & Pipeline (|>) ---")
+
+user := { id: 101, name: "Alice", tier: :vip, balance: 1500 }
+println("User name:", user.name)
+println("User balance:", user.balance)
+
+double x := x * 2
+add_tax amount := amount + 15
+
+total := 100 |> double |> add_tax
+println("Calculation (100 |> double |> add_tax):", total)
+newline()
+
+// 3. Local Scoping with `let ... in ...` and `do ... end`
+println("--- 3. Local Scoping (let and do) ---")
+
+result :=
+    let base = 50, factor = 3 in
+        do
+            adjusted := base * factor
+            adjusted + 10
+        end
+
+println("Scoped block result:", result)
+newline()
+
+// 4. Pattern Matching with Destructuring
+println("--- 4. Pattern Matching with List Destructuring ---")
+
+summarize_list items :=
+    match items with
+    | [] -> "empty"
+    | [single] -> "single item"
+    | [first, second | rest] -> "multiple items starting with first two"
+    end
+
+println("Summary of []:", summarize_list([]))
+println("Summary of [42]:", summarize_list([42]))
+println("Summary of [1, 2, 3, 4]:", summarize_list([1, 2, 3, 4]))
+newline()
+
+// 5. Error Handling with try / catch
+println("--- 5. Error Handling (try / catch) ---")
+
+safe_divide a b :=
+    try
+        if b == 0 then
+            error("division by zero")
+        else
+            a / b
+    catch err ->
+        :error_division_by_zero
+
+println("10 / 2 =", safe_divide(10, 2))
+println("10 / 0 =", safe_divide(10, 0))
+newline()
+
+println("=== Modern functional syntax executed successfully! ===")

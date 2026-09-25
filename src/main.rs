@@ -39,12 +39,12 @@ fn entry() -> Result<(), SelError> {
             println!("version: {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        Cli::File(script_path) => run_file(&script_path, env.clone()),
-        Cli::Repl => repl("sel> ", env),
+        Cli::File(script_path, mode) => run_file(&script_path, env.clone(), mode),
+        Cli::Repl(mode) => repl("sel> ", env, mode),
     }
 }
 
-fn is_input_complete(input: &str) -> bool {
+fn is_input_complete_sexpr(input: &str) -> bool {
     let mut paren_count: i32 = 0;
     let mut bracket_count: i32 = 0;
     let mut brace_count: i32 = 0;
@@ -103,10 +103,44 @@ fn is_input_complete(input: &str) -> bool {
     !in_string && paren_count <= 0 && bracket_count <= 0 && brace_count <= 0
 }
 
-fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
+fn is_input_complete_with_mode(input: &str, is_alt: bool) -> bool {
+    #[cfg(feature = "alt-syntax")]
+    if is_alt {
+        return sel::alt_parser::is_input_complete(input);
+    }
+    let _ = is_alt;
+    is_input_complete_sexpr(input)
+}
+
+#[allow(unused)]
+fn is_input_complete(input: &str) -> bool {
+    is_input_complete_with_mode(input, false)
+}
+
+fn is_known_repl_command(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        ":quit"
+            | ":help"
+            | ":?"
+            | ":syntax"
+            | ":summary"
+            | ":env"
+            | ":type"
+            | ":load"
+            | ":clear"
+            | ":reset"
+    )
+}
+
+fn repl(prompt: &str, env: Rc<RefCell<Env>>, initial_mode: cli::SyntaxMode) -> Result<(), SelError> {
     const QUIT_COMMAND: &str = ":quit";
     const CONTINUATION_PROMPT: &str = "  ..> ";
     let repl_file_id = intern("<repl>");
+    let mut syntax_mode = match initial_mode {
+        cli::SyntaxMode::Alt => cli::SyntaxMode::Alt,
+        _ => cli::SyntaxMode::Sexpr,
+    };
     println!("Welcome to the Sel Scheme repl. (Use `{QUIT_COMMAND}` to exit)");
 
     let sel_history_path = env::home_dir().unwrap_or_default().join(".sel_history");
@@ -121,8 +155,13 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
 
     loop {
         diags.clear();
-        let current_prompt = if buffer.is_empty() {
+        let dynamic_prompt = if syntax_mode == cli::SyntaxMode::Alt {
+            "sel[alt]> "
+        } else {
             prompt
+        };
+        let current_prompt = if buffer.is_empty() {
+            dynamic_prompt
         } else {
             CONTINUATION_PROMPT
         };
@@ -134,7 +173,13 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
                     continue;
                 }
 
-                if buffer.is_empty() && trimmed.starts_with(':') {
+                let is_alt = syntax_mode == cli::SyntaxMode::Alt;
+                let is_repl_cmd = buffer.is_empty()
+                    && trimmed.starts_with(':')
+                    && !trimmed.starts_with(":'")
+                    && (!is_alt || is_known_repl_command(trimmed.split_whitespace().next().unwrap_or("")));
+
+                if is_repl_cmd {
                     _ = rl.add_history_entry(trimmed);
                     let mut parts = trimmed.splitn(2, ' ');
                     let cmd = parts.next().unwrap();
@@ -144,6 +189,7 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
                         ":help" | ":?" => {
                             println!("Available commands:");
                             println!("  :help, :?         Show this help message");
+                            println!("  :syntax <alt|scm> Switch syntax mode between modern functional and S-expression");
                             println!("  :summary          Show a summary of user-defined bindings");
                             println!(
                                 "  :env [all]        List bindings in the environment (use 'all' to include standard library)"
@@ -152,13 +198,36 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
                                 "  :type <expr>      Evaluate an expression and show its type"
                             );
                             println!(
-                                "  :load <file>      Load and execute a Scheme file in the current environment"
+                                "  :load <file>      Load and execute a file in the current environment"
                             );
                             println!("  :clear            Clear the screen");
                             println!(
                                 "  :reset            Reset the environment (clears user-defined bindings)"
                             );
                             println!("  :quit             Exit the REPL");
+                            continue;
+                        }
+                        ":syntax" => {
+                            match arg {
+                                "alt" | "sel" => {
+                                    #[cfg(feature = "alt-syntax")]
+                                    {
+                                        syntax_mode = cli::SyntaxMode::Alt;
+                                        println!("Switched to modern functional syntax (.sel).");
+                                    }
+                                    #[cfg(not(feature = "alt-syntax"))]
+                                    {
+                                        println!("Error: Alternative syntax requires feature `alt-syntax`.");
+                                    }
+                                }
+                                "sexpr" | "scm" => {
+                                    syntax_mode = cli::SyntaxMode::Sexpr;
+                                    println!("Switched to standard S-expression syntax (.scm).");
+                                }
+                                _ => {
+                                    println!("Current syntax: {:?}. Use `:syntax <alt|scm>` to switch.", syntax_mode);
+                                }
+                            }
                             continue;
                         }
                         ":summary" => {
@@ -280,7 +349,24 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
                                 println!("Usage: :type <expr>");
                                 continue;
                             }
-                            let asts = parse_all(arg, repl_file_id, &mut diags);
+                            let asts = {
+                                #[cfg(feature = "alt-syntax")]
+                                {
+                                    if syntax_mode == cli::SyntaxMode::Alt {
+                                        sel::alt_parser::parse_all(arg, repl_file_id, &mut diags)
+                                    } else {
+                                        parse_all(arg, repl_file_id, &mut diags)
+                                    }
+                                }
+                                #[cfg(not(feature = "alt-syntax"))]
+                                {
+                                    if syntax_mode == cli::SyntaxMode::Alt {
+                                        println!("Error: Alternative syntax requires feature `alt-syntax`");
+                                        continue;
+                                    }
+                                    parse_all(arg, repl_file_id, &mut diags)
+                                }
+                            };
                             if !diags.is_empty() {
                                 for diag in &diags {
                                     eprintln!("{}", diag);
@@ -305,7 +391,24 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
                             match read_script(arg) {
                                 Ok(src) => {
                                     let load_file_id = intern(arg);
-                                    let asts = parse_all(&src, load_file_id, &mut diags);
+                                    let asts = {
+                                        #[cfg(feature = "alt-syntax")]
+                                        {
+                                            if arg.ends_with(".sel") {
+                                                sel::alt_parser::parse_all(&src, load_file_id, &mut diags)
+                                            } else {
+                                                parse_all(&src, load_file_id, &mut diags)
+                                            }
+                                        }
+                                        #[cfg(not(feature = "alt-syntax"))]
+                                        {
+                                            if arg.ends_with(".sel") {
+                                                println!("Error: Loading `.sel` files requires feature `alt-syntax`.");
+                                                continue;
+                                            }
+                                            parse_all(&src, load_file_id, &mut diags)
+                                        }
+                                    };
                                     if !diags.is_empty() {
                                         for diag in &diags {
                                             eprintln!("{}", diag);
@@ -352,12 +455,31 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
                 }
                 buffer.push_str(&line);
 
-                if !is_input_complete(&buffer) {
+                let is_alt = syntax_mode == cli::SyntaxMode::Alt;
+                if !is_input_complete_with_mode(&buffer, is_alt) {
                     continue;
                 }
 
                 _ = rl.add_history_entry(buffer.trim());
-                let asts = parse_all(&buffer, repl_file_id, &mut diags);
+                let asts = {
+                    #[cfg(feature = "alt-syntax")]
+                    {
+                        if is_alt {
+                            sel::alt_parser::parse_all(&buffer, repl_file_id, &mut diags)
+                        } else {
+                            parse_all(&buffer, repl_file_id, &mut diags)
+                        }
+                    }
+                    #[cfg(not(feature = "alt-syntax"))]
+                    {
+                        if is_alt {
+                            println!("Error: Alternative syntax requires feature `alt-syntax`");
+                            buffer.clear();
+                            continue;
+                        }
+                        parse_all(&buffer, repl_file_id, &mut diags)
+                    }
+                };
                 buffer.clear();
                 if !diags.is_empty() {
                     for diag in &diags {
@@ -398,11 +520,35 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
     Ok(())
 }
 
-fn run_file(script_path: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
+fn run_file(script_path: &str, env: Rc<RefCell<Env>>, mode: cli::SyntaxMode) -> Result<(), SelError> {
     let src = read_script(script_path)?;
     let mut diags = Vec::new();
     let file_id = intern(script_path);
-    let asts = parse_all(&src, file_id, &mut diags);
+    let use_alt = match mode {
+        cli::SyntaxMode::Alt => true,
+        cli::SyntaxMode::Sexpr => false,
+        cli::SyntaxMode::Auto => script_path.ends_with(".sel"),
+    };
+    let asts = {
+        #[cfg(feature = "alt-syntax")]
+        {
+            if use_alt {
+                sel::alt_parser::parse_all(&src, file_id, &mut diags)
+            } else {
+                parse_all(&src, file_id, &mut diags)
+            }
+        }
+        #[cfg(not(feature = "alt-syntax"))]
+        {
+            if use_alt {
+                return Err(SelError::SyntaxError(
+                    sel::lexer::Loc::default(),
+                    "Alternative syntax (.sel) requires the `alt-syntax` feature".into(),
+                ));
+            }
+            parse_all(&src, file_id, &mut diags)
+        }
+    };
     if !diags.is_empty() {
         for diag in diags {
             eprintln!("{}", diag);
@@ -428,7 +574,15 @@ mod tests {
                 .file_type()
                 .map_err(|e| eprintln!("Error: cannot get type of file because {e}"))?
                 .is_file()
-                && entry.path().extension().is_some_and(|ext| ext == "scm")
+                && entry.path().extension().is_some_and(|ext| {
+                    if ext == "scm" {
+                        true
+                    } else if cfg!(feature = "alt-syntax") && ext == "sel" {
+                        true
+                    } else {
+                        false
+                    }
+                })
             {
                 #[cfg(not(feature = "ffi"))]
                 let path_str = entry.path().to_string_lossy().to_string();
@@ -443,7 +597,7 @@ mod tests {
                 let env = Rc::new(RefCell::new(Env::default()));
                 env.borrow_mut().parent = Some(load_core_lib());
                 println!("TEST: {}", entry.path().display());
-                run_file(entry.path().to_string_lossy().as_ref(), env)
+                run_file(entry.path().to_string_lossy().as_ref(), env, cli::SyntaxMode::Auto)
                     .map_err(|e| eprintln!("{e}"))?;
             }
         }
@@ -477,5 +631,19 @@ mod tests {
         assert!(is_input_complete("(print \"with ( parens inside\")"));
         assert!(is_input_complete("(+ 1 2) ; unclosed ( comment"));
         assert!(is_input_complete("(let ((c #\\()) c)"));
+    }
+
+    #[cfg(feature = "alt-syntax")]
+    #[test]
+    fn test_is_input_complete_alt() {
+        assert!(is_input_complete_with_mode("add x y := x + y", true));
+        assert!(!is_input_complete_with_mode("add x y :=", true));
+        assert!(!is_input_complete_with_mode("10 |>", true));
+        assert!(!is_input_complete_with_mode("do\n  x := 10", true));
+        assert!(is_input_complete_with_mode("do\n  x := 10\nend", true));
+        assert!(!is_input_complete_with_mode("match x with\n| :ok -> 1", true));
+        assert!(is_input_complete_with_mode("match x with\n| :ok -> 1\nend", true));
+        assert!(!is_input_complete_with_mode(":'type-", true));
+        assert!(is_input_complete_with_mode(":'type-of'(42)", true));
     }
 }

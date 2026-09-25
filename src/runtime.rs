@@ -156,6 +156,16 @@ fn resolve_module_path(spec: &str, caller_file_id: u32, loc: Loc) -> Result<(Str
 
         let mod_scm = base.join(spec_str).join("mod.scm");
         candidates.push(mod_scm);
+
+        let with_sel = if spec_str.ends_with(".sel") {
+            base.join(spec_str)
+        } else {
+            base.join(format!("{spec_str}.sel"))
+        };
+        candidates.push(with_sel);
+
+        let mod_sel = base.join(spec_str).join("mod.sel");
+        candidates.push(mod_sel);
     };
 
     // 1. Direct path if spec exists as a file directly
@@ -893,7 +903,9 @@ impl VM {
                     }
 
                     // Extract base module name (e.g. "tests/math" -> "math", "pkg/mod.scm" -> "pkg")
-                    let base_name = if fp.file_name().and_then(|s| s.to_str()) == Some("mod.scm") {
+                    let base_name = if fp.file_name().and_then(|s| s.to_str()) == Some("mod.scm")
+                        || fp.file_name().and_then(|s| s.to_str()) == Some("mod.sel")
+                    {
                         fp.parent()
                             .and_then(|p| p.file_name())
                             .and_then(|s| s.to_str())
@@ -920,9 +932,31 @@ impl VM {
                         let src = read_script(&fp).map_err(|e| SelError::Internal(e.to_string()))?;
                         let mut diags = Vec::new();
                         let file_id = intern(fp.to_string_lossy().as_ref());
-                        let asts = parse_all(&src, file_id, &mut diags);
+                        let asts = {
+                            #[cfg(feature = "alt-syntax")]
+                            {
+                                if fp.extension().and_then(|e| e.to_str()) == Some("sel") {
+                                    crate::alt_parser::parse_all(&src, file_id, &mut diags)
+                                } else {
+                                    parse_all(&src, file_id, &mut diags)
+                                }
+                            }
+                            #[cfg(not(feature = "alt-syntax"))]
+                            {
+                                if fp.extension().and_then(|e| e.to_str()) == Some("sel") {
+                                    return Err(SelError::SyntaxError(
+                                        loc,
+                                        "Alternative syntax (.sel) requires the `alt-syntax` feature".into(),
+                                    ));
+                                }
+                                parse_all(&src, file_id, &mut diags)
+                            }
+                        };
                         let m_env = Rc::new(RefCell::new(Env::default()));
                         m_env.borrow_mut().parent = Some(load_core_lib());
+                        if fp.extension().and_then(|e| e.to_str()) == Some("sel") {
+                            m_env.borrow_mut().current_visibility_public = false;
+                        }
 
                         execute_asts_sandboxed(asts, m_env.clone(), self.sandbox_root.clone())?;
                         let mut exports = Vec::new();
@@ -937,10 +971,19 @@ impl VM {
                     };
 
                     let mut frame_env = frame.env.borrow_mut();
+                    let mut mod_rec = Record::new();
                     for (sym, val) in exports {
-                        let prefixed = intern(&format!("{prefix}/{}", lookup(sym)));
-                        frame_env.insert(prefixed, val);
+                        let name_str = lookup(sym);
+                        let prefixed = intern(&format!("{prefix}/{name_str}"));
+                        frame_env.insert(prefixed, val.clone());
+
+                        mod_rec.fields_mut().insert(sym, val.clone());
+                        if name_str.contains('-') {
+                            let alt_sym = intern(&name_str.replace('-', "_"));
+                            mod_rec.fields_mut().insert(alt_sym, val);
+                        }
                     }
+                    frame_env.insert(intern(&prefix), Value::Record(Rc::new(mod_rec)));
                 }
                 22 => {
                     // SetVisibility
@@ -1281,7 +1324,26 @@ impl VM {
                             .map_err(|e| SelError::Internal(e.to_string()))?;
                         let mut diags = Vec::new();
                         let file_id = intern(target_path.to_string_lossy().as_ref());
-                        let asts = parse_all(&src, file_id, &mut diags);
+                        let asts = {
+                            #[cfg(feature = "alt-syntax")]
+                            {
+                                if target_path.extension().and_then(|e| e.to_str()) == Some("sel") {
+                                    crate::alt_parser::parse_all(&src, file_id, &mut diags)
+                                } else {
+                                    parse_all(&src, file_id, &mut diags)
+                                }
+                            }
+                            #[cfg(not(feature = "alt-syntax"))]
+                            {
+                                if target_path.extension().and_then(|e| e.to_str()) == Some("sel") {
+                                    return Err(SelError::SyntaxError(
+                                        loc,
+                                        "Alternative syntax (.sel) requires the `alt-syntax` feature".into(),
+                                    ));
+                                }
+                                parse_all(&src, file_id, &mut diags)
+                            }
+                        };
                         if !diags.is_empty() {
                             return Err(diags.remove(0));
                         }

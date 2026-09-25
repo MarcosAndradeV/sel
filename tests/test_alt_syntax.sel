@@ -1,0 +1,77 @@
+// tests/test_alt_syntax.sel
+// Comprehensive integration test suite for the modern functional alternative syntax
+
+// 1. Math and Functions
+add x y := x + y
+assert(add(10, 20) == 30)
+
+mult x y := x * y
+assert(mult(6, 7) == 42)
+
+// 2. Lambdas and Pipelines
+square := \x -> x * x
+assert(5 |> square == 25)
+
+sub a b := a - b
+assert(10 |> sub(35) == 25)
+
+// 3. Conditionals & Let bindings
+val := let x = 5, y = 12 in if x < y then y - x else x - y
+assert(val == 7)
+
+// 4. Record access
+point := { x: 10, y: 20 }
+assert(point.x == 10)
+assert(point.y == 20)
+
+// 5. Pattern matching
+grade score :=
+    match score with
+    | s when s >= 90 -> :a
+    | s when s >= 80 -> :b
+    | _ -> :c
+    end
+
+assert(grade(95) == :a)
+assert(grade(85) == :b)
+assert(grade(60) == :c)
+
+// 6. List pattern matching
+head_or_default list default_val :=
+    match list with
+    | [h | t] -> h
+    | [] -> default_val
+    end
+
+assert(head_or_default([100, 200], 0) == 100)
+assert(head_or_default([], 99) == 99)
+
+// 7. Try / Catch
+res := try error("fail") catch e -> :caught
+assert(res == :caught)
+
+// 8. Cross-importing a .scm module from .sel
+import point as pt
+p := pt.new_point(3, 4)
+assert(p.x == 3)
+assert(p.y == 4)
+
+// 9. Escaped Scheme Name Identifiers (:'<name>')
+assert(:'type-of'(42) == :int)
+assert(:'type-of'("hello") == :string)
+assert(123 |> :'to-string' == "123")
+
+// Defining and invoking a function with a hyphenated Scheme name
+:'calc-double' a b := (a + b) * 2
+assert(:'calc-double'(10, 5) == 30)
+
+// Let binding with escaped identifier
+hyphen_res := let :'local-var' = 25 in :'local-var' * 4
+assert(hyphen_res == 100)
+
+// Calling hyphenated function from imported module via dot-access
+p2 := pt.:'new-point'(10, 20)
+assert(p2.x == 10)
+assert(p2.y == 20)
+
+println("All alternative syntax integration tests passed!")
