@@ -21,6 +21,7 @@ export default defineConfig({
           label: 'Guides & References',
           items: [
             { label: 'Language Reference', link: '/reference' },
+            { label: 'Modern Syntax (.sel)', link: '/alt_syntax' },
             { label: 'Interactive REPL', link: '/repl' },
             { label: 'Standard & Core Library', link: '/core' },
           ],

@@ -1326,8 +1326,13 @@ pub fn drop(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
             "Expected exactly 2 arguments for drop".into(),
         ));
     }
-    let list_val = args.pop().unwrap();
-    let n_val = args.pop().unwrap();
+    let arg2 = args.pop().unwrap();
+    let arg1 = args.pop().unwrap();
+    let (n_val, list_val) = match (&arg1, &arg2) {
+        (Value::Integer(_), _) => (arg1, arg2),
+        (_, Value::Integer(_)) => (arg2, arg1),
+        _ => (arg1, arg2),
+    };
     let n = match n_val {
         Value::Integer(i) => {
             if i < 0 {
@@ -1361,7 +1366,67 @@ pub fn drop(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
             }
         }
         Value::Nil => Ok(Value::Nil),
-        _ => Err(SelError::Runtime(loc, "drop requires a list".into())),
+        _ => Err(SelError::Runtime(loc, "drop requires a list or string".into())),
+    }
+}
+
+#[inline]
+pub fn take(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
+    if args.len() != 2 {
+        return Err(SelError::Runtime(
+            loc,
+            "Expected exactly 2 arguments for take".into(),
+        ));
+    }
+    let arg2 = args.pop().unwrap();
+    let arg1 = args.pop().unwrap();
+    let (n_val, list_val) = match (&arg1, &arg2) {
+        (Value::Integer(_), _) => (arg1, arg2),
+        (_, Value::Integer(_)) => (arg2, arg1),
+        _ => (arg1, arg2),
+    };
+    let n = match n_val {
+        Value::Integer(i) => {
+            if i < 0 {
+                0
+            } else {
+                i as usize
+            }
+        }
+        _ => {
+            return Err(SelError::Runtime(
+                loc,
+                "take requires an integer count".into(),
+            ));
+        }
+    };
+    match list_val {
+        Value::List(mut l) => {
+            if n == 0 {
+                Ok(Value::Nil)
+            } else {
+                *l = l.take(n);
+                if l.is_empty() {
+                    Ok(Value::Nil)
+                } else {
+                    Ok(Value::List(l))
+                }
+            }
+        }
+        Value::String(s) => {
+            if n == 0 {
+                Ok(Value::Nil)
+            } else {
+                let taken: String = s.as_str().chars().take(n).collect();
+                if taken.is_empty() {
+                    Ok(Value::Nil)
+                } else {
+                    Ok(Value::String(Box::new(StringSlice::new(&taken))))
+                }
+            }
+        }
+        Value::Nil => Ok(Value::Nil),
+        _ => Err(SelError::Runtime(loc, "take requires a list or string".into())),
     }
 }
 
@@ -2835,6 +2900,7 @@ pub fn load(env: Rc<RefCell<Env>>) {
     e.insert(intern("cdr"), Value::NativeFunction(cdr));
     e.insert(intern("nth"), Value::NativeFunction(nth));
     e.insert(intern("drop"), Value::NativeFunction(drop));
+    e.insert(intern("take"), Value::NativeFunction(take));
     e.insert(intern("count"), Value::NativeFunction(count));
     e.insert(intern("list"), Value::NativeFunction(list));
     e.insert(intern("empty?"), Value::NativeFunction(empty));
@@ -2968,5 +3034,22 @@ pub fn load_core_lib() -> Rc<RefCell<Env>> {
             eprintln!("Error loading core.scm:\n{}", e);
         }
     }
+
+    #[cfg(feature = "alt-syntax")]
+    {
+        let core_sel = include_str!("core.sel");
+        let mut diags = Vec::new();
+        let file_id = intern("<core.sel>");
+        let asts = crate::alt_parser::parse_all(core_sel, file_id, &mut diags);
+        if !diags.is_empty() {
+            for diag in diags {
+                eprintln!("{}", diag);
+            }
+        }
+        if let Err(e) = execute_asts(asts, env.clone()) {
+            eprintln!("Error loading core.sel:\n{}", e);
+        }
+    }
+
     env
 }

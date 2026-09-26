@@ -1,0 +1,37 @@
+// examples/pipelines_and_collections.sel
+// Demonstrates SEL's collection processing, pipelines, and standard library prelude.
+
+println("=== SEL Pipelines & Collections Demo (.sel) ===")
+newline()
+
+numbers := [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+// Pipeline with thread-first |>
+even_squares_sum := numbers
+    |> filter_by(\x -> is_even(x))
+    |> map_by(\x -> x * x)
+    |> sum
+
+println("Original numbers:", numbers)
+println("Sum of even squares:", even_squares_sum)
+
+// List slicing with native take and drop
+println("First 4 numbers (take 4):", numbers |> take(4))
+println("Numbers after dropping 4:", numbers |> drop(4))
+
+// Checking conditions
+has_five := numbers |> contains(5)
+all_positive := numbers |> all(\x -> x > 0)
+any_greater_than_eight := numbers |> any(\x -> x > 8)
+
+println("Contains 5?", has_five)
+println("All positive?", all_positive)
+println("Any > 8?", any_greater_than_eight)
+
+// Aggregations
+println("Sum:", numbers |> sum)
+println("Product of [1, 2, 3, 4, 5]:", [1, 2, 3, 4, 5] |> product)
+
+// Escaped Scheme identifier interop
+type_tag := :'type-of'(numbers)
+println("Scheme type tag of numbers:", type_tag)

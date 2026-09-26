@@ -46,6 +46,28 @@ pub fn eval_sandboxed(
     runtime::execute_asts_sandboxed(asts, env, sandbox_root)
 }
 
+#[cfg(feature = "alt-syntax")]
+/// Evaluate an alternative modern syntax (.sel) source string in the given environment.
+pub fn eval_alt(source: &str, env: Rc<RefCell<Env>>) -> std::result::Result<Value, SelError> {
+    eval_alt_sandboxed(source, env, None)
+}
+
+#[cfg(feature = "alt-syntax")]
+/// Evaluate an alternative modern syntax (.sel) source string with an optional filesystem sandbox directory.
+pub fn eval_alt_sandboxed(
+    source: &str,
+    env: Rc<RefCell<Env>>,
+    sandbox_root: Option<PathBuf>,
+) -> std::result::Result<Value, SelError> {
+    let mut diags = Vec::new();
+    let file_id = types::intern("<embedded.sel>");
+    let asts = alt_parser::parse_all(source, file_id, &mut diags);
+    if !diags.is_empty() {
+        return Err(diags.remove(0));
+    }
+    runtime::execute_asts_sandboxed(asts, env, sandbox_root)
+}
+
 /// Evaluate a Scheme file in the given environment and return the result.
 pub fn load_file(script_path: &str, env: Rc<RefCell<Env>>) -> Result<Value, SelError> {
     load_file_sandboxed(script_path, env, None)

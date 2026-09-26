@@ -93,4 +93,40 @@ fact n := n * fact(n - 1)
 assert(fact(1) == 1)
 assert(fact(5) == 120)
 
+classify temp when temp < 0  := :freezing
+classify temp when temp < 20 := :cool
+classify temp when temp < 30 := :warm
+classify _                   := :hot
+
+assert(classify(-5) == :freezing)
+assert(classify(15) == :cool)
+assert(classify(25) == :warm)
+assert(classify(35) == :hot)
+
+// 12. Native Standard Library Prelude (.sel)
+assert(is_int(42) && !is_int("42"))
+assert(is_string("sel") && !is_string(123))
+assert(is_even(10) && is_odd(11))
+assert(type_of(100) == :int)
+assert(to_string(42) == "42")
+
+// Collection operations and pipelines from prelude
+nums := [1, 2, 3, 4, 5]
+assert(first(nums) == 1)
+assert(rest(nums) == [2, 3, 4, 5])
+assert(nums |> sum == 15)
+assert(nums |> product == 120)
+assert(nums |> take(3) == [1, 2, 3])
+assert(nums |> drop(3) == [4, 5])
+assert(nums |> contains(3))
+assert(!(nums |> contains(99)))
+
+// Higher-order pipelines with map_by and filter_by
+even_doubled := nums
+    |> filter_by(\x -> is_even(x))
+    |> map_by(\x -> x * 10)
+    |> sum
+
+assert(even_doubled == 60) // (2*10) + (4*10) = 60
+
 println("All alternative syntax integration tests passed!")

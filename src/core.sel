@@ -1,0 +1,75 @@
+// src/core.sel
+// SEL Standard Library Prelude for Alternative Functional Syntax (.sel)
+// Provides idiomatic snake_case aliases, pipeline helpers, and pattern-matching utilities.
+
+// --- 1. Type Predicates & Introspection ---
+type_of x := :'type-of'(x)
+to_string x := :'to-string'(x)
+to_int x := :'to-int'(x)
+to_float x := :'to-float'(x)
+
+is_nil x := :'nil?'(x)
+is_number x := :'number?'(x)
+is_string x := :'string?'(x)
+is_char x := :'char?'(x)
+is_list x := :'list?'(x)
+is_symbol x := :'symbol?'(x)
+is_function x := :'function?'(x)
+is_record x := :'record?'(x)
+is_empty l := :'empty?'(l)
+is_even x := :'even?'(x)
+is_odd x := !is_even(x)
+is_ok x := :'ok?'(x)
+is_err x := :'err?'(x)
+
+is_int x := type_of(x) == :int
+is_float x := type_of(x) == :float
+is_bool x := type_of(x) == :bool
+
+// --- 2. List Access & Functional Helpers ---
+first [x | _] := x
+first [] := nil
+
+rest [_ | xs] := xs
+rest [] := []
+
+head l := first(l)
+tail l := rest(l)
+
+// Collection-first pipeline helpers (ideal for thread-first `|>`)
+map_by list f := :'map'(f, list)
+filter_by list p := :'filter'(p, list)
+reduce list acc f := :'foldl'(f, acc, list)
+
+// (take and drop are provided natively for high performance with lists and strings)
+
+// Aggregations & search
+sum [] := 0
+sum [x | xs] := x + sum(xs)
+
+product [] := 1
+product [x | xs] := x * product(xs)
+
+contains [] _ := false
+contains [x | _] target when x == target := true
+contains [_ | xs] target := contains(xs, target)
+
+find [] _ := nil
+find [x | _] pred when pred(x) := x
+find [_ | xs] pred := find(xs, pred)
+
+any [] _ := false
+any [x | _] pred when pred(x) := true
+any [_ | xs] pred := any(xs, pred)
+
+all [] _ := true
+all [x | xs] pred when pred(x) := all(xs, pred)
+all _ _ := false
+
+// --- 3. Result / Monadic Helpers ---
+unwrap_or [tag, val] _ when tag == :ok := val
+unwrap_or _ default_val := default_val
+
+// --- 4. Record Utilities ---
+set_field rec k v := :'assoc'(rec, k, v)
+delete_field rec k := :'dissoc'(rec, k)

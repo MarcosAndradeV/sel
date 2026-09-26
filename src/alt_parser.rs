@@ -1084,9 +1084,16 @@ impl<'a> AltParser<'a> {
 
     fn parse_list_literal(&mut self, loc: Loc) -> Result<Ast> {
         let mut elements = Vec::new();
+        let mut tail_expr = None;
+
         if self.peek().kind != TokenKind::CloseBracket {
             loop {
                 elements.push(self.parse_expr()?);
+                if self.peek().kind == TokenKind::Pipe {
+                    self.advance();
+                    tail_expr = Some(self.parse_expr()?);
+                    break;
+                }
                 if self.peek().kind == TokenKind::Comma {
                     self.advance();
                 } else {
@@ -1096,9 +1103,18 @@ impl<'a> AltParser<'a> {
         }
         self.expect_token(TokenKind::CloseBracket, "`]`")?;
 
-        let mut items = vec![Ast::Symbol(loc, intern("list"))];
-        items.extend(elements);
-        Ok(Ast::List(loc, items))
+        if let Some(tail) = tail_expr {
+            // [a, b | rest] -> (cons a (cons b rest))
+            let mut result = tail;
+            for elem in elements.into_iter().rev() {
+                result = Ast::List(loc, vec![Ast::Symbol(loc, intern("cons")), elem, result]);
+            }
+            Ok(result)
+        } else {
+            let mut items = vec![Ast::Symbol(loc, intern("list"))];
+            items.extend(elements);
+            Ok(Ast::List(loc, items))
+        }
     }
 
     fn parse_record_literal(&mut self, loc: Loc) -> Result<Ast> {

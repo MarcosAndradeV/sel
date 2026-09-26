@@ -1,0 +1,63 @@
+// examples/pattern_matching.sel
+// Pattern matching in SEL modern syntax
+// Demonstrates structural pattern matching, multi-clause functions,
+// list destructuring with cons ([h | t]), record patterns, and guards.
+
+println("=== SEL Modern Pattern Matching Demo (.sel) ===")
+newline()
+
+// 1. Evaluating Expression Trees with `match`
+eval_expr expr :=
+    match expr with
+    | [:add, a, b] -> eval_expr(a) + eval_expr(b)
+    | [:mul, a, b] -> eval_expr(a) * eval_expr(b)
+    | [:sub, a, b] -> eval_expr(a) - eval_expr(b)
+    | [:neg, a] -> 0 - eval_expr(a)
+    | n when is_number(n) -> n
+    | _ -> error("Invalid expression:", expr)
+    end
+
+math_ast := [:add, [:mul, 3, 4], [:neg, 2]]
+println("Evaluating AST:", math_ast, "=>", eval_expr(math_ast))
+
+// 2. Processing HTTP / API Responses with Record Pattern Matching
+handle_response resp :=
+    match resp with
+    | { status: s, data: payload } when s == 200 || s == 201 ->
+        println("Success! Received payload:", payload)
+    | { status: 404 } ->
+        println("Not Found!")
+    | { status: code, message: msg } when code >= 500 ->
+        println("Server Error", code, ":", msg)
+    | _ ->
+        println("Unhandled response:", resp)
+    end
+
+handle_response({ status: 200, data: "User Profile: Alice" })
+handle_response({ status: 404, url: "/api/items" })
+handle_response({ status: 502, message: "Bad Gateway" })
+
+// 3. Multi-Clause Recursive List Processing
+sum_squares [] := 0
+sum_squares [h | t] := (h * h) + sum_squares(t)
+
+println("Sum of squares [1, 2, 3, 4]:", sum_squares([1, 2, 3, 4]))
+
+// 4. Multi-clause List Destructuring
+describe_list [] := "empty list"
+describe_list [single] := "singleton list"
+describe_list [x, y] := "pair list"
+describe_list [first, second | rest] := "list with 3 or more elements"
+
+println("describe_list []:", describe_list([]))
+println("describe_list [1]:", describe_list([1]))
+println("describe_list [1, 2]:", describe_list([1, 2]))
+println("describe_list [1, 2, 3, 4]:", describe_list([1, 2, 3, 4]))
+
+// 5. Multi-Clause Pattern Matching on Records
+describe_shape { type: :circle, radius: r } := 3.14159 * r * r
+describe_shape { type: :rect, width: w, height: h } := w * h
+describe_shape _ := 0
+
+println("Area of circle:", describe_shape({ type: :circle, radius: 5 }))
+println("Area of rectangle:", describe_shape({ type: :rect, width: 4, height: 6 }))
