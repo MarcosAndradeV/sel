@@ -13,7 +13,10 @@ square := \x -> x * x
 assert(5 |> square == 25)
 
 sub a b := a - b
-assert(10 |> sub(35) == 25)
+// Thread-first: 35 |> sub(10) -> sub(35, 10) = 25
+assert(35 |> sub(10) == 25)
+// Thread-last: 10 |>> sub(35) -> sub(35, 10) = 25
+assert(10 |>> sub(35) == 25)
 
 // 3. Conditionals & Let bindings
 val := let x = 5, y = 12 in if x < y then y - x else x - y
@@ -73,5 +76,21 @@ assert(hyphen_res == 100)
 p2 := pt.:'new-point'(10, 20)
 assert(p2.x == 10)
 assert(p2.y == 20)
+
+// 10. Multi-clause pattern-matching functions
+fib 0 := 0
+fib 1 := 1
+fib n := fib(n - 1) + fib(n - 2)
+
+assert(fib(0) == 0)
+assert(fib(1) == 1)
+assert(fib(6) == 8)
+
+// 11. Multi-clause with guards
+fact n when n <= 1 := 1
+fact n := n * fact(n - 1)
+
+assert(fact(1) == 1)
+assert(fact(5) == 120)
 
 println("All alternative syntax integration tests passed!")

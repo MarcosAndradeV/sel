@@ -13,12 +13,12 @@
 //! - Dot access: `record.field` -> `(rget record 'field)`
 //! - Atoms: `:ok`, `:error`
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use crate::ast::{Ast, MatchClause, Pattern};
+use crate::ast::{Ast, MatchClause, Pattern, PipelineKind};
 use crate::diagnostics::SelError;
 use crate::lexer::Loc;
-use crate::types::intern;
+use crate::types::{intern, lookup};
 use lex_just_parse::lexer::{Lexer, NumberBase, Token, TokenKind};
 
 type Result<T> = std::result::Result<T, SelError>;
@@ -28,42 +28,66 @@ const KEYWORDS: &[&str] = &[
     "try", "catch", "yield", "pub", "import", "as", "true", "false", "nil",
 ];
 
-fn to_loc(loc: lex_just_parse::lexer::Loc, file_id: u32) -> Loc {
-    Loc {
-        file_id,
-        line: loc.line as u32,
-        col: loc.col as u32,
-    }
+struct FnClause {
+    loc: Loc,
+    is_pub: bool,
+    name: u32,
+    patterns: Vec<Pattern>,
+    guard: Option<Ast>,
+    body: Ast,
 }
 
-fn scan_escaped_identifiers(source: &str) -> (String, Vec<String>) {
-    let mut result = String::with_capacity(source.len());
-    let mut escaped = Vec::new();
-    let chars: Vec<char> = source.chars().collect();
-    let len = chars.len();
+fn tokenize_source(
+    source: &str,
+    file_id: u32,
+) -> (Vec<Token>, Vec<Loc>, HashSet<usize>) {
+    let mut line_starts = vec![0];
+    for (idx, b) in source.bytes().enumerate() {
+        if b == b'\n' {
+            line_starts.push(idx + 1);
+        }
+    }
+
+    let calc_loc = |byte_offset: usize, byte_len: usize| -> Loc {
+        let line_idx = match line_starts.binary_search(&byte_offset) {
+            Ok(idx) => idx,
+            Err(idx) => idx.saturating_sub(1),
+        };
+        let line = (line_idx + 1) as u32;
+        let line_start = line_starts[line_idx];
+        let col = if byte_offset >= line_start && byte_offset <= source.len() {
+            (source[line_start..byte_offset].chars().count() + 1) as u32
+        } else {
+            1
+        };
+        Loc::new(file_id, line, col, byte_offset as u32, byte_len as u32)
+    };
+
+    // 1. Scan for `:'...'` without changing total byte length or line structure
+    let mut escaped_spans: Vec<(usize, usize, String)> = Vec::new();
+    let bytes = source.as_bytes();
+    let len = bytes.len();
     let mut i = 0;
     let mut in_str = false;
     let mut in_line_comment = false;
     let mut in_block_comment = false;
 
     while i < len {
-        let c = chars[i];
-
+        let b = bytes[i];
         if in_str {
-            result.push(c);
-            if c == '\\' && i + 1 < len {
+            if b == b'\\' && i + 1 < len {
+                i += 2;
+            } else {
+                if b == b'"' {
+                    in_str = false;
+                }
                 i += 1;
-                result.push(chars[i]);
-            } else if c == '"' {
-                in_str = false;
             }
-            i += 1;
             continue;
         }
 
         if in_line_comment {
-            result.push(c);
-            if c == '\n' {
+            if b == b'\n' {
                 in_line_comment = false;
             }
             i += 1;
@@ -71,128 +95,309 @@ fn scan_escaped_identifiers(source: &str) -> (String, Vec<String>) {
         }
 
         if in_block_comment {
-            result.push(c);
-            if c == '*' && i + 1 < len && chars[i + 1] == '/' {
-                result.push('/');
-                i += 2;
+            if b == b'*' && i + 1 < len && bytes[i + 1] == b'/' {
                 in_block_comment = false;
-                continue;
+                i += 2;
+            } else {
+                i += 1;
             }
-            i += 1;
             continue;
         }
 
-        // Check comment starts
-        if c == '/' && i + 1 < len && chars[i + 1] == '/' {
-            result.push('/');
-            result.push('/');
-            i += 2;
+        if b == b'/' && i + 1 < len && bytes[i + 1] == b'/' {
             in_line_comment = true;
-            continue;
-        }
-        if c == '/' && i + 1 < len && chars[i + 1] == '*' {
-            result.push('/');
-            result.push('*');
             i += 2;
-            in_block_comment = true;
             continue;
         }
-
-        if c == '"' {
-            result.push('"');
+        if b == b'/' && i + 1 < len && bytes[i + 1] == b'*' {
+            in_block_comment = true;
+            i += 2;
+            continue;
+        }
+        if b == b'"' {
             in_str = true;
             i += 1;
             continue;
         }
 
-        // Check for `:'...`
-        if c == ':' && i + 1 < len && chars[i + 1] == '\'' {
-            // Find closing single quote
+        if b == b':' && i + 1 < len && bytes[i + 1] == b'\'' {
+            let start = i;
             let mut j = i + 2;
             let mut name = String::new();
             let mut closed = false;
             while j < len {
-                if chars[j] == '\\' && j + 1 < len {
-                    name.push(chars[j + 1]);
+                if bytes[j] == b'\\' && j + 1 < len {
+                    name.push(bytes[j + 1] as char);
                     j += 2;
-                } else if chars[j] == '\'' {
+                } else if bytes[j] == b'\'' {
                     closed = true;
                     j += 1;
                     break;
+                } else if bytes[j] == b'\n' {
+                    break;
                 } else {
-                    name.push(chars[j]);
+                    name.push(bytes[j] as char);
                     j += 1;
                 }
             }
-
             if closed {
-                let total_chars = j - i;
-                let id = escaped.len();
-                escaped.push(name);
-                let tag = format!("__sel_esc_{id}_");
-                let mut placeholder = tag;
-                while placeholder.chars().count() < total_chars {
-                    placeholder.push('_');
-                }
-                result.push_str(&placeholder);
+                escaped_spans.push((start, j, name));
                 i = j;
                 continue;
             }
         }
-
-        result.push(c);
         i += 1;
     }
 
-    (result, escaped)
+    // 2. Build sanitized string where each `:'...'` span is replaced by ASCII `_` repeated (j - start) times.
+    // This preserves exact byte lengths, offsets, and line/column positions.
+    let mut sanitized = String::with_capacity(len);
+    let mut last_end = 0;
+    use std::collections::HashMap;
+    let mut escaped_by_start: HashMap<usize, (usize, String)> = HashMap::new();
+
+    for (start, end, name) in escaped_spans {
+        sanitized.push_str(&source[last_end..start]);
+        let span_len = end - start;
+        for _ in 0..span_len {
+            sanitized.push('_');
+        }
+        escaped_by_start.insert(start, (end, name));
+        last_end = end;
+    }
+    sanitized.push_str(&source[last_end..]);
+
+    // 3. Single-pass lexing with Lexer over sanitized source
+    let mut lexer = Lexer::new(&sanitized).with_keywords(KEYWORDS);
+    let mut tokens = Vec::new();
+    let mut token_locs = Vec::new();
+    let mut escaped_tokens = HashSet::new();
+
+    let s_bytes = sanitized.as_bytes();
+    let s_len = s_bytes.len();
+    let mut cursor = 0;
+
+    loop {
+        let mut tok = lexer.next();
+        if tok.is_eof() {
+            let eof_loc = calc_loc(source.len(), 0);
+            tokens.push(tok);
+            token_locs.push(eof_loc);
+            break;
+        }
+
+        // Advance cursor to the start of this token by skipping whitespace & comments
+        while cursor < s_len {
+            if s_bytes[cursor].is_ascii_whitespace() {
+                cursor += 1;
+                continue;
+            }
+            if s_bytes[cursor] == b'/' && cursor + 1 < s_len && s_bytes[cursor + 1] == b'/' {
+                cursor += 2;
+                while cursor < s_len && s_bytes[cursor] != b'\n' {
+                    cursor += 1;
+                }
+                continue;
+            }
+            if s_bytes[cursor] == b'/' && cursor + 1 < s_len && s_bytes[cursor + 1] == b'*' {
+                cursor += 2;
+                while cursor + 1 < s_len && !(s_bytes[cursor] == b'*' && s_bytes[cursor + 1] == b'/') {
+                    cursor += 1;
+                }
+                if cursor + 1 < s_len {
+                    cursor += 2;
+                }
+                continue;
+            }
+            if cursor == 0 && s_bytes[0] == b'#' && s_len > 1 && s_bytes[1] == b'!' {
+                while cursor < s_len && s_bytes[cursor] != b'\n' {
+                    cursor += 1;
+                }
+                continue;
+            }
+            break;
+        }
+
+        let tok_start = cursor;
+        let tok_len = tok.source().len();
+        cursor += tok_len;
+
+        if let Some((_esc_end, orig_name)) = escaped_by_start.get(&tok_start) {
+            escaped_tokens.insert(tokens.len());
+            tok = Token::new(TokenKind::Identifier, tok.loc, orig_name.as_str().into());
+        }
+
+        let full_loc = calc_loc(tok_start, tok_len);
+        tokens.push(tok);
+        token_locs.push(full_loc);
+    }
+
+    (tokens, token_locs, escaped_tokens)
+}
+
+fn lower_clause_group(clauses: Vec<FnClause>) -> Result<Ast> {
+    let first = &clauses[0];
+    let is_pub = first.is_pub;
+    let name = first.name;
+    let loc = first.loc;
+
+    for clause in clauses.iter().skip(1) {
+        if clause.is_pub {
+            return Err(SelError::SyntaxError(
+                clause.loc,
+                format!(
+                    "`pub` modifier can only be placed on the first clause of function `{}`",
+                    lookup(name)
+                ),
+            ));
+        }
+    }
+
+    let def_ast = if clauses.len() == 1 && clauses[0].patterns.is_empty() {
+        Ast::Define(loc, name, Box::new(clauses.into_iter().next().unwrap().body))
+    } else if clauses.len() == 1
+        && clauses[0].guard.is_none()
+        && clauses[0].patterns.iter().all(|p| matches!(p, Pattern::Variable(..)))
+    {
+        let clause = clauses.into_iter().next().unwrap();
+        let params: Vec<u32> = clause
+            .patterns
+            .into_iter()
+            .map(|p| match p {
+                Pattern::Variable(_, id) => id,
+                _ => unreachable!(),
+            })
+            .collect();
+        let lambda = Ast::Lambda(loc, params, vec![clause.body]);
+        Ast::Define(loc, name, Box::new(lambda))
+    } else {
+        let arity = first.patterns.len();
+        let mut match_clauses = Vec::new();
+
+        for clause in clauses {
+            if clause.patterns.len() != arity {
+                return Err(SelError::SyntaxError(
+                    clause.loc,
+                    format!(
+                        "Clause for function `{}` has arity {}, expected {}",
+                        lookup(name),
+                        clause.patterns.len(),
+                        arity
+                    ),
+                ));
+            }
+            let pat = Pattern::List(clause.loc, clause.patterns);
+            match_clauses.push(MatchClause {
+                loc: clause.loc,
+                pattern: pat,
+                guard: clause.guard,
+                body: vec![clause.body],
+            });
+        }
+
+        let mut arg_ids = Vec::with_capacity(arity);
+        let mut arg_asts = Vec::with_capacity(arity);
+        let clean_name = lookup(name).replace(['-', ':', '\''], "_");
+        for i in 0..arity {
+            let arg_sym = intern(&format!("__sel_arg_{}_{}", clean_name, i));
+            arg_ids.push(arg_sym);
+            arg_asts.push(Ast::Symbol(loc, arg_sym));
+        }
+
+        let mut list_items = vec![Ast::Symbol(loc, intern("list"))];
+        list_items.extend(arg_asts);
+        let target = Ast::List(loc, list_items);
+        let match_ast = Ast::Match(loc, Box::new(target), match_clauses);
+        let lambda = Ast::Lambda(loc, arg_ids, vec![match_ast]);
+        Ast::Define(loc, name, Box::new(lambda))
+    };
+
+    if is_pub {
+        Ok(Ast::Begin(
+            loc,
+            vec![
+                Ast::VisibilityDirective(loc, true),
+                def_ast,
+                Ast::VisibilityDirective(loc, false),
+            ],
+        ))
+    } else {
+        Ok(def_ast)
+    }
 }
 
 pub struct AltParser<'a> {
     tokens: Vec<Token>,
+    token_locs: Vec<Loc>,
     escaped_tokens: HashSet<usize>,
     pos: usize,
-    file_id: u32,
+    _file_id: u32,
     _source: &'a str,
+    defined_fns_stack: Vec<HashMap<u32, (Loc, bool)>>,
 }
 
 impl<'a> AltParser<'a> {
     pub fn new(source: &'a str, file_id: u32) -> Self {
-        let (sanitized, escaped_list) = scan_escaped_identifiers(source);
-        let mut lexer = Lexer::new(&sanitized).with_keywords(KEYWORDS);
-        let mut tokens = Vec::new();
-        let mut escaped_tokens = HashSet::new();
-
-        loop {
-            let mut tok = lexer.next();
-            if tok.is_eof() {
-                tokens.push(tok);
-                break;
-            }
-
-            if tok.kind == TokenKind::Identifier && tok.source().starts_with("__sel_esc_") {
-                let s = tok.source();
-                if let Some(rest) = s.strip_prefix("__sel_esc_") {
-                    let num_str: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-                    if let Ok(id) = num_str.parse::<usize>()
-                        && id < escaped_list.len()
-                    {
-                        let name = &escaped_list[id];
-                        tok = Token::new(TokenKind::Identifier, tok.loc, name.as_str().into());
-                        escaped_tokens.insert(tokens.len());
-                    }
-                }
-            }
-
-            tokens.push(tok);
-        }
+        let (tokens, token_locs, escaped_tokens) = tokenize_source(source, file_id);
 
         Self {
             tokens,
+            token_locs,
             escaped_tokens,
             pos: 0,
-            file_id,
+            _file_id: file_id,
             _source: source,
+            defined_fns_stack: vec![HashMap::new()],
         }
+    }
+
+    fn enter_scope(&mut self) {
+        self.defined_fns_stack.push(HashMap::new());
+    }
+
+    fn exit_scope(&mut self) {
+        self.defined_fns_stack.pop();
+    }
+
+    fn record_definition(&mut self, name: u32, loc: Loc, is_fn: bool) -> Result<()> {
+        let scope = self
+            .defined_fns_stack
+            .last_mut()
+            .expect("scope stack should not be empty");
+
+        if let Some(&(prev_loc, prev_is_fn)) = scope.get(&name) {
+            if is_fn && prev_is_fn {
+                return Err(SelError::SyntaxError(
+                    loc,
+                    format!(
+                        "Clauses for function `{}` must be consecutive; previous clause was defined at line {}",
+                        lookup(name),
+                        prev_loc.line
+                    ),
+                ));
+            } else if is_fn && !prev_is_fn {
+                return Err(SelError::SyntaxError(
+                    loc,
+                    format!(
+                        "Function `{}` conflicts with previous variable definition at line {}",
+                        lookup(name),
+                        prev_loc.line
+                    ),
+                ));
+            } else if !is_fn && prev_is_fn {
+                return Err(SelError::SyntaxError(
+                    loc,
+                    format!(
+                        "Definition of variable `{}` conflicts with previous function clause at line {}",
+                        lookup(name),
+                        prev_loc.line
+                    ),
+                ));
+            }
+        } else {
+            scope.insert(name, (loc, is_fn));
+        }
+        Ok(())
     }
 
     fn peek(&self) -> &Token {
@@ -223,7 +428,11 @@ impl<'a> AltParser<'a> {
     }
 
     fn current_loc(&self) -> Loc {
-        to_loc(self.peek().loc, self.file_id)
+        if self.pos < self.token_locs.len() {
+            self.token_locs[self.pos]
+        } else {
+            self.token_locs.last().copied().unwrap_or_default()
+        }
     }
 
     fn at_eof(&self) -> bool {
@@ -283,11 +492,104 @@ impl<'a> AltParser<'a> {
         }
     }
 
+    fn is_at_def_clause(&self) -> bool {
+        let mut idx = self.pos;
+        if idx >= self.tokens.len() {
+            return false;
+        }
+        if (self.tokens[idx].kind == TokenKind::Keyword || self.tokens[idx].kind == TokenKind::Identifier)
+            && self.tokens[idx].source() == "pub"
+        {
+            idx += 1;
+        }
+        if idx >= self.tokens.len() {
+            return false;
+        }
+        let first = &self.tokens[idx];
+        if first.kind != TokenKind::Identifier || KEYWORDS.contains(&first.source()) {
+            return false;
+        }
+
+        let first_line = self.token_locs[idx].line;
+        let mut depth: usize = 0;
+        let mut i = idx + 1;
+        let mut seen_when = false;
+
+        while i < self.tokens.len() {
+            let tok = &self.tokens[i];
+            let tok_line = self.token_locs[i].line;
+
+            if tok.kind == TokenKind::EOF || tok.kind == TokenKind::SemiColon {
+                break;
+            }
+
+            // A function definition cannot have `(` or `.` immediately following the identifier
+            if i == idx + 1 && (tok.kind == TokenKind::OpenParen || tok.kind == TokenKind::Dot) {
+                return false;
+            }
+
+            // Cannot cross onto a new line before seeing `when` or `:=` unless inside brackets
+            if depth == 0 && !seen_when && tok_line > first_line {
+                break;
+            }
+
+            if tok.kind == TokenKind::Keyword && tok.source() == "when" && depth == 0 {
+                seen_when = true;
+            }
+
+            match tok.kind {
+                TokenKind::OpenParen | TokenKind::OpenBracket | TokenKind::OpenCurly => {
+                    depth += 1;
+                }
+                TokenKind::CloseParen | TokenKind::CloseBracket | TokenKind::CloseCurly => {
+                    depth = depth.saturating_sub(1);
+                }
+                TokenKind::Assign if depth == 0 => {
+                    return true;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
+    fn parse_def_clause(&mut self) -> Result<FnClause> {
+        let start_loc = self.current_loc();
+        let is_pub = self.eat_keyword("pub");
+        let name_tok = self.expect_token(TokenKind::Identifier, "definition name")?;
+        let name = intern(name_tok.source());
+
+        let mut patterns = Vec::new();
+        while self.peek().kind != TokenKind::Assign && !self.match_keyword("when") && !self.at_eof() {
+            patterns.push(self.parse_pattern()?);
+        }
+
+        let guard = if self.match_keyword("when") {
+            self.advance();
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+
+        self.expect_token(TokenKind::Assign, "`:=` in definition")?;
+        let body = self.parse_expr()?;
+
+        Ok(FnClause {
+            loc: start_loc,
+            is_pub,
+            name,
+            patterns,
+            guard,
+            body,
+        })
+    }
+
     pub fn parse_program(&mut self, diags: &mut Vec<SelError>) -> Vec<Ast> {
         let mut asts = Vec::new();
         self.skip_semicolons();
         while !self.at_eof() {
-            match self.parse_item() {
+            match self.parse_statement() {
                 Ok(ast) => asts.push(ast),
                 Err(err) => {
                     diags.push(err);
@@ -300,6 +602,7 @@ impl<'a> AltParser<'a> {
     }
 
     fn recover(&mut self) {
+        let current_line = self.current_loc().line;
         while !self.at_eof() {
             let tok = self.peek();
             if tok.kind == TokenKind::SemiColon {
@@ -314,7 +617,50 @@ impl<'a> AltParser<'a> {
             {
                 break;
             }
+            let tok_loc = self.current_loc();
+            if tok_loc.line > current_line && self.is_at_def_clause() {
+                break;
+            }
             self.advance();
+        }
+    }
+
+    pub fn parse_statement(&mut self) -> Result<Ast> {
+        if self.is_at_def_clause() {
+            let first = self.parse_def_clause()?;
+            let mut clauses = vec![first];
+            self.skip_semicolons();
+
+            let fn_name = clauses[0].name;
+            let fn_arity = clauses[0].patterns.len();
+            let is_fn = fn_arity > 0;
+
+            self.record_definition(fn_name, clauses[0].loc, is_fn)?;
+
+            if fn_arity > 0 {
+                while self.is_at_def_clause() {
+                    let mut next_idx = self.pos;
+                    if (self.tokens[next_idx].kind == TokenKind::Keyword
+                        || self.tokens[next_idx].kind == TokenKind::Identifier)
+                        && self.tokens[next_idx].source() == "pub"
+                    {
+                        next_idx += 1;
+                    }
+                    if next_idx < self.tokens.len()
+                        && intern(self.tokens[next_idx].source()) == fn_name
+                    {
+                        let next_clause = self.parse_def_clause()?;
+                        clauses.push(next_clause);
+                        self.skip_semicolons();
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            lower_clause_group(clauses)
+        } else {
+            self.parse_item()
         }
     }
 
@@ -338,69 +684,14 @@ impl<'a> AltParser<'a> {
             };
         }
 
-        // Check for definition: `name [params*] := expr`
-        if let Some((name_sym, params)) = self.try_parse_def_header()? {
-            self.expect_token(TokenKind::Assign, "`:=` in definition")?;
-            let body = self.parse_expr()?;
-            let def_ast = if params.is_empty() {
-                Ast::Define(start_loc, name_sym, Box::new(body))
-            } else {
-                let lambda = Ast::Lambda(start_loc, params, vec![body]);
-                Ast::Define(start_loc, name_sym, Box::new(lambda))
-            };
-
-            if is_pub {
-                Ok(Ast::Begin(
-                    start_loc,
-                    vec![
-                        Ast::VisibilityDirective(start_loc, true),
-                        def_ast,
-                        Ast::VisibilityDirective(start_loc, false),
-                    ],
-                ))
-            } else {
-                Ok(def_ast)
-            }
-        } else {
-            if is_pub {
-                return Err(SelError::SyntaxError(
-                    start_loc,
-                    "`pub` can only precede a definition or import".into(),
-                ));
-            }
-            self.parse_expr()
-        }
-    }
-
-    fn try_parse_def_header(&mut self) -> Result<Option<(u32, Vec<u32>)>> {
-        // Look ahead to see if this is an identifier sequence followed by `:=`
-        let mut offset = 0;
-        let first = self.peek_ahead(offset);
-        if first.kind != TokenKind::Identifier || KEYWORDS.contains(&first.source()) {
-            return Ok(None);
+        if is_pub {
+            return Err(SelError::SyntaxError(
+                start_loc,
+                "`pub` can only precede a definition or import".into(),
+            ));
         }
 
-        offset += 1;
-        let mut param_tokens = Vec::new();
-        loop {
-            let tok = self.peek_ahead(offset);
-            if tok.kind == TokenKind::Identifier && !KEYWORDS.contains(&tok.source()) {
-                param_tokens.push(tok.source().to_string());
-                offset += 1;
-            } else if tok.kind == TokenKind::Assign {
-                // Verified definition!
-                let name_token = self.advance();
-                let name_sym = intern(name_token.source());
-                let mut params = Vec::new();
-                for _ in 0..param_tokens.len() {
-                    let p_tok = self.advance();
-                    params.push(intern(p_tok.source()));
-                }
-                return Ok(Some((name_sym, params)));
-            } else {
-                return Ok(None);
-            }
-        }
+        self.parse_expr()
     }
 
     fn parse_import(&mut self, loc: Loc) -> Result<Ast> {
@@ -501,28 +792,23 @@ impl<'a> AltParser<'a> {
 
         while self.peek().kind == TokenKind::Pipe && self.peek_ahead(1).kind == TokenKind::Gt {
             let pipe_loc = self.current_loc();
+            let is_thread_last = self.peek_ahead(2).kind == TokenKind::Gt;
             self.advance(); // Pipe '|'
             self.advance(); // Gt '>'
+            if is_thread_last {
+                self.advance(); // Gt '>'
+            }
 
             let right = self.parse_additive()?;
-            left = self.desugar_pipe(pipe_loc, left, right);
+            let kind = if is_thread_last {
+                PipelineKind::ThreadLast
+            } else {
+                PipelineKind::ThreadFirst
+            };
+            left = Ast::Pipeline(pipe_loc, Box::new(left), Box::new(right), kind);
         }
 
         Ok(left)
-    }
-
-    fn desugar_pipe(&self, loc: Loc, val: Ast, target: Ast) -> Ast {
-        match target {
-            Ast::List(l_loc, mut items) => {
-                // Thread as last argument: f(a, b) with val -> f(a, b, val)
-                items.push(val);
-                Ast::List(l_loc, items)
-            }
-            other => {
-                // Thread into function: target(val)
-                Ast::List(loc, vec![other, val])
-            }
-        }
     }
 
     fn parse_additive(&mut self) -> Result<Ast> {
@@ -587,7 +873,8 @@ impl<'a> AltParser<'a> {
 
         loop {
             let tok = self.peek();
-            if tok.kind == TokenKind::OpenParen {
+            let tok_loc = self.current_loc();
+            if tok.kind == TokenKind::OpenParen && tok_loc.line == expr.loc().line {
                 // Call: expr(arg1, arg2, ...)
                 let loc = self.current_loc();
                 self.advance();
@@ -605,19 +892,12 @@ impl<'a> AltParser<'a> {
                 self.expect_token(TokenKind::CloseParen, "`)` after call arguments")?;
                 expr = Ast::List(loc, args);
             } else if tok.kind == TokenKind::Dot {
-                // Dot access: expr.field -> (rget expr 'field)
+                // Dot access: expr.field
                 let loc = self.current_loc();
                 self.advance();
                 let field_tok = self.expect_token(TokenKind::Identifier, "field name after `.`")?;
                 let field_sym = intern(field_tok.source());
-                expr = Ast::List(
-                    loc,
-                    vec![
-                        Ast::Symbol(loc, intern("rget")),
-                        expr,
-                        Ast::Quote(loc, Box::new(Ast::Symbol(loc, field_sym))),
-                    ],
-                );
+                expr = Ast::DotAccess(loc, Box::new(expr), field_sym);
             } else {
                 break;
             }
@@ -769,16 +1049,24 @@ impl<'a> AltParser<'a> {
     fn parse_do_block(&mut self) -> Result<Ast> {
         let loc = self.current_loc();
         self.expect_keyword("do")?;
+        self.enter_scope();
         let mut exprs = Vec::new();
         self.skip_semicolons();
 
         while !self.match_keyword("end") && !self.at_eof() {
-            let item = self.parse_item()?;
-            exprs.push(item);
+            let item = self.parse_statement();
+            match item {
+                Ok(stmt) => exprs.push(stmt),
+                Err(err) => {
+                    self.exit_scope();
+                    return Err(err);
+                }
+            }
             self.skip_semicolons();
         }
 
         self.expect_keyword("end")?;
+        self.exit_scope();
         Ok(Ast::Begin(loc, exprs))
     }
 
@@ -1159,16 +1447,7 @@ pub fn is_input_complete(input: &str) -> bool {
     }
 
     // 2. Lex input to inspect block nesting (do...end, match...end) and trailing continuation tokens
-    let (sanitized, _) = scan_escaped_identifiers(input);
-    let mut lexer = Lexer::new(&sanitized).with_keywords(KEYWORDS);
-    let mut tokens = Vec::new();
-    loop {
-        let tok = lexer.next();
-        if tok.is_eof() {
-            break;
-        }
-        tokens.push(tok);
-    }
+    let (tokens, _, _) = tokenize_source(input, 0);
 
     if tokens.is_empty() {
         return true;
@@ -1191,15 +1470,19 @@ pub fn is_input_complete(input: &str) -> bool {
     }
 
     // Check trailing continuation tokens
-    let last = tokens.last().unwrap();
-    let second_to_last = if tokens.len() >= 2 {
-        Some(&tokens[tokens.len() - 2])
+    let non_eof_tokens: Vec<&Token> = tokens.iter().filter(|t| !t.is_eof()).collect();
+    if non_eof_tokens.is_empty() {
+        return true;
+    }
+    let last = non_eof_tokens.last().unwrap();
+    let second_to_last = if non_eof_tokens.len() >= 2 {
+        Some(non_eof_tokens[non_eof_tokens.len() - 2])
     } else {
         None
     };
 
-    // Trailing pipeline `|>`
-    if last.kind == TokenKind::Gt && second_to_last.is_some_and(|t| t.kind == TokenKind::Pipe) {
+    // Trailing pipeline `|>` or `|>>`
+    if last.kind == TokenKind::Gt && second_to_last.is_some_and(|t| t.kind == TokenKind::Pipe || t.kind == TokenKind::Gt) {
         return false;
     }
 
@@ -1335,19 +1618,19 @@ mod tests {
         let code = r#"
             double := \x -> x * 2
             sub a b := a - b
-            10 |> sub(25) |> double
+            // Thread-first: 25 |> sub(10) -> sub(25, 10) = 15
+            // Thread-last: 10 |>> sub(25) -> sub(25, 10) = 15
+            (25 |> sub(10) |> double) + (10 |>> sub(25) |> double)
         "#;
-        // 10 |> sub(25) -> sub(25, 10) = 15
-        // 15 |> double -> double(15) = 30
         let val = eval_alt(code).expect("pipeline failed");
-        assert!(matches!(val, Value::Integer(30)));
+        assert!(matches!(val, Value::Integer(60)));
     }
 
     #[test]
     fn test_pipeline_and_equality_precedence() {
         let code = r#"
             sub a b := a - b
-            10 |> sub(35) == 25
+            (35 |> sub(10) == 25) && (10 |>> sub(35) == 25)
         "#;
         let val = eval_alt(code).expect("precedence failed");
         assert!(matches!(val, Value::Boolean(true)));
@@ -1452,5 +1735,64 @@ mod tests {
         assert!(!borrowed.private_bindings.contains(&exported_sym));
         assert!(borrowed.private_bindings.contains(&private_sym));
         assert!(!borrowed.private_bindings.contains(&exported_val_sym));
+    }
+
+    #[test]
+    fn test_multiclause_pattern_matching() {
+        let code = r#"
+            fib 0 := 0
+            fib 1 := 1
+            fib n := fib(n - 1) + fib(n - 2)
+
+            fact n when n <= 1 := 1
+            fact n := n * fact(n - 1)
+
+            [fib(0), fib(1), fib(6), fact(1), fact(5)]
+        "#;
+        let val = eval_alt(code).expect("evaluation failed");
+        assert_eq!(format!("{val}"), "(0 1 8 1 120)");
+    }
+
+    #[test]
+    fn test_multiclause_mismatched_arity_error() {
+        let code = r#"
+            my_fn x := x
+            my_fn x y := x + y
+        "#;
+        let mut diags = Vec::new();
+        let file_id = intern("<arity_test.sel>");
+        let _ = parse_all(code, file_id, &mut diags);
+        assert!(!diags.is_empty());
+        assert!(diags[0].to_string().contains("has arity 2, expected 1"));
+    }
+
+    #[test]
+    fn test_multiclause_pub_non_first_clause_error() {
+        let code = r#"
+            my_fn 0 := 0
+            pub my_fn n := n
+        "#;
+        let mut diags = Vec::new();
+        let file_id = intern("<pub_test.sel>");
+        let _ = parse_all(code, file_id, &mut diags);
+        assert!(!diags.is_empty());
+        assert!(diags[0].to_string().contains("can only be placed on the first clause"));
+    }
+
+    #[test]
+    fn test_multiclause_non_consecutive_broken_error() {
+        let code = r#"
+            fib 0 := 0
+            fib 1 := 1
+            a := 13123
+            fib n := fib(n - 1) + fib(n - 2)
+        "#;
+        let mut diags = Vec::new();
+        let file_id = intern("<broken_clauses.sel>");
+        let _ = parse_all(code, file_id, &mut diags);
+        assert!(!diags.is_empty());
+        let err_msg = diags[0].to_string();
+        assert!(err_msg.contains("Clauses for function `fib` must be consecutive"));
+        assert!(err_msg.contains("previous clause was defined at line 2"));
     }
 }

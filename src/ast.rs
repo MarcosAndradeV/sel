@@ -43,6 +43,12 @@ pub struct MatchClause {
     pub body: Vec<Ast>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PipelineKind {
+    ThreadFirst, // |>
+    ThreadLast,  // |>>
+}
+
 #[derive(Debug, Clone)]
 pub enum Ast {
     Define(Loc, u32, Box<Ast>),
@@ -73,6 +79,8 @@ pub enum Ast {
     Boolean(Loc, bool),
     List(Loc, Vec<Self>),
     Record(Loc, Vec<(u32, Self)>),
+    DotAccess(Loc, Box<Ast>, u32),
+    Pipeline(Loc, Box<Ast>, Box<Ast>, PipelineKind),
     Try(Loc, Box<Ast>, u32, Vec<Ast>),
     Yield(Loc, Box<Ast>),
     CoResume(Loc, Box<Ast>, Box<Ast>),
@@ -113,6 +121,8 @@ impl Ast {
             Ast::List(loc, ..) => *loc,
             Ast::Bind(loc, ..) => *loc,
             Ast::Record(loc, ..) => *loc,
+            Ast::DotAccess(loc, ..) => *loc,
+            Ast::Pipeline(loc, ..) => *loc,
             Ast::Try(loc, ..) => *loc,
             Ast::Yield(loc, ..) => *loc,
             Ast::CoResume(loc, ..) => *loc,
@@ -154,6 +164,8 @@ impl std::fmt::Display for Ast {
             Ast::Boolean(_, b) => write!(f, "{}", if *b { "#t" } else { "#f" }),
             Ast::List(..) => write!(f, "<list>"),
             Ast::Record(..) => write!(f, "<record>"),
+            Ast::DotAccess(..) => write!(f, "dot-access"),
+            Ast::Pipeline(..) => write!(f, "pipeline"),
             Ast::Bind(_, id) => write!(f, "&{}", lookup(*id)),
             Ast::Try(..) => write!(f, "try"),
             Ast::Yield(..) => write!(f, "co-yield"),
@@ -383,6 +395,21 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
             }
             (loc, Value::make_list(list))
         }
+        Ast::DotAccess(loc, expr, field_sym) => (
+            loc,
+            Value::make_list(vec![
+                Value::Symbol(intern("rget")),
+                ast_to_value(*expr).1,
+                Value::Symbol(field_sym),
+            ]),
+        ),
+        Ast::Pipeline(loc, left, right, _kind) => (
+            loc,
+            Value::make_list(vec![
+                ast_to_value(*right).1,
+                ast_to_value(*left).1,
+            ]),
+        ),
     }
 }
 

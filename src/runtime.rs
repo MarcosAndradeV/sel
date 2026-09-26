@@ -1361,6 +1361,30 @@ impl VM {
                         ));
                     }
                 }
+                54 => {
+                    let sym = read_u32(frame);
+                    let val = self.stack.pop().ok_or_else(|| {
+                        SelError::Runtime(frame.loc, "Stack underflow in RecordGet".into())
+                    })?;
+                    match val {
+                        Value::Record(rec) => {
+                            if let Some(v) = rec.fields().get(&sym) {
+                                self.stack.push(v.clone());
+                            } else {
+                                return Err(SelError::Runtime(
+                                    frame.loc,
+                                    format!("Record has no field `{}`", lookup(sym)),
+                                ));
+                            }
+                        }
+                        other => {
+                            return Err(SelError::TypeError(
+                                frame.loc,
+                                format!("Cannot access field `{}` on non-record: {}", lookup(sym), other),
+                            ));
+                        }
+                    }
+                }
                 _ => unreachable!(),
             }
         Ok(None)

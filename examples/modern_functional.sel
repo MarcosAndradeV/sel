@@ -22,8 +22,8 @@ println("Member discount on $600:", discount_rate(:member, 600))
 println("Guest discount on $100:", discount_rate(:guest, 100))
 newline()
 
-// 2. Data Structures & Pipelines (|>)
-println("--- 2. Record Access & Pipeline (|>) ---")
+// 2. Data Structures & Pipelines (|> and |>>)
+println("--- 2. Record Access & Pipelines (|>, |>>) ---")
 
 user := { id: 101, name: "Alice", tier: :vip, balance: 1500 }
 println("User name:", user.name)
@@ -31,13 +31,38 @@ println("User balance:", user.balance)
 
 double x := x * 2
 add_tax amount := amount + 15
+sub a b := a - b
+
+// |> is thread-first: x |> f(y) becomes f(x, y)
+t_first := 35 |> sub(10)
+// |>> is thread-last: x |>> f(y) becomes f(y, x)
+t_last := 10 |>> sub(35)
+println("Thread-first (35 |> sub(10)):", t_first)
+println("Thread-last  (10 |>> sub(35)):", t_last)
 
 total := 100 |> double |> add_tax
 println("Calculation (100 |> double |> add_tax):", total)
 newline()
 
-// 3. Local Scoping with `let ... in ...` and `do ... end`
-println("--- 3. Local Scoping (let and do) ---")
+// 3. Multi-Clause Pattern-Matching Functions & Guards
+println("--- 3. Multi-Clause Pattern Matching & Guards ---")
+
+fib 0 := 0
+fib 1 := 1
+fib n := fib(n - 1) + fib(n - 2)
+
+println("fib(0):", fib(0))
+println("fib(1):", fib(1))
+println("fib(7):", fib(7))
+
+fact n when n <= 1 := 1
+fact n := n * fact(n - 1)
+
+println("fact(5):", fact(5))
+newline()
+
+// 4. Local Scoping with `let ... in ...` and `do ... end`
+println("--- 4. Local Scoping (let and do) ---")
 
 result :=
     let base = 50, factor = 3 in
@@ -49,8 +74,8 @@ result :=
 println("Scoped block result:", result)
 newline()
 
-// 4. Pattern Matching with Destructuring
-println("--- 4. Pattern Matching with List Destructuring ---")
+// 5. Pattern Matching with Destructuring
+println("--- 5. Pattern Matching with List Destructuring ---")
 
 summarize_list items :=
     match items with
@@ -64,8 +89,8 @@ println("Summary of [42]:", summarize_list([42]))
 println("Summary of [1, 2, 3, 4]:", summarize_list([1, 2, 3, 4]))
 newline()
 
-// 5. Error Handling with try / catch
-println("--- 5. Error Handling (try / catch) ---")
+// 6. Error Handling with try / catch
+println("--- 6. Error Handling (try / catch) ---")
 
 safe_divide a b :=
     try

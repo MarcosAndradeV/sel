@@ -230,6 +230,10 @@ pub fn disassemble_chunk(chunk: &Chunk) -> Vec<DisassembledInstruction> {
                 ("Not", format!("arity: {}", arity))
             }
             53 => ("Load", "".into()),
+            54 => {
+                let sym = read_u32(&mut ip);
+                ("RecordGet", format!("field: '{}'", lookup(sym)))
+            }
             other => ("Unknown", format!("tag: {}", other)),
         };
 
@@ -553,6 +557,21 @@ pub fn ast_to_graph(ast: &Ast) -> AstGraphNode {
             detail: None,
             loc: *loc,
             children: vec![ast_to_graph(path)],
+        },
+        Ast::DotAccess(loc, expr, field_sym) => AstGraphNode {
+            name: "DotAccess".into(),
+            detail: Some(format!(".{}", lookup(*field_sym))),
+            loc: *loc,
+            children: vec![ast_to_graph(expr)],
+        },
+        Ast::Pipeline(loc, left, right, kind) => AstGraphNode {
+            name: "Pipeline".into(),
+            detail: Some(match kind {
+                crate::ast::PipelineKind::ThreadFirst => "|>".into(),
+                crate::ast::PipelineKind::ThreadLast => "|>>".into(),
+            }),
+            loc: *loc,
+            children: vec![ast_to_graph(left), ast_to_graph(right)],
         },
     }
 }

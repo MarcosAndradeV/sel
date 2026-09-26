@@ -831,6 +831,14 @@ impl<'a> Compiler<'a> {
                     self.chunk.write((loc, OpCode::AssocRecord(sym)));
                 }
             }
+            Ast::DotAccess(loc, expr, field_sym) => {
+                self.compile_expr(*expr, false)?;
+                self.chunk.write((loc, OpCode::RecordGet(field_sym)));
+            }
+            Ast::Pipeline(loc, left, right, kind) => {
+                let lowered = lower_pipeline(loc, *left, *right, kind);
+                self.compile_expr(lowered, is_tail)?;
+            }
             Ast::Quote(loc, expr) => {
                 let val = ast_to_value(*expr).1;
                 let idx = self.chunk.add_constant(val);
@@ -945,6 +953,14 @@ impl<'a> Compiler<'a> {
                     self.chunk.write((loc, OpCode::AssocRecord(sym)));
                 }
             }
+            Ast::DotAccess(loc, expr, field_sym) => {
+                self.compile_expr(*expr, false)?;
+                self.chunk.write((loc, OpCode::RecordGet(field_sym)));
+            }
+            Ast::Pipeline(loc, left, right, kind) => {
+                let lowered = lower_pipeline(loc, *left, *right, kind);
+                self.compile_expr(lowered, false)?;
+            }
             _ => {
                 let (loc, val) = ast_to_value(ast);
                 let idx = self.chunk.add_constant(val);
@@ -952,6 +968,30 @@ impl<'a> Compiler<'a> {
             }
         }
         Ok(())
+    }
+}
+
+pub fn lower_pipeline(loc: Loc, val: Ast, target: Ast, kind: PipelineKind) -> Ast {
+    match target {
+        Ast::List(l_loc, mut items) => {
+            if items.is_empty() {
+                Ast::List(loc, vec![Ast::List(l_loc, items), val])
+            } else {
+                match kind {
+                    PipelineKind::ThreadFirst => {
+                        // Insert as first argument after function
+                        items.insert(1, val);
+                    }
+                    PipelineKind::ThreadLast => {
+                        items.push(val);
+                    }
+                }
+                Ast::List(l_loc, items)
+            }
+        }
+        other => {
+            Ast::List(loc, vec![other, val])
+        }
     }
 }
 
@@ -1012,6 +1052,7 @@ pub enum OpCode {
     TypeOf,
     Not(u32),
     Load,
+    RecordGet(u32),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1240,6 +1281,10 @@ impl Chunk {
             }
             OpCode::Load => {
                 self.code.push(53);
+            }
+            OpCode::RecordGet(sym) => {
+                self.code.push(54);
+                self.code.extend_from_slice(&sym.to_le_bytes());
             }
         }
     }
