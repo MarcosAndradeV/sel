@@ -1,0 +1,33 @@
+// tests/test_pipe.sel
+// Pipeline Operators Test Suite
+
+square x := x * x
+add_ten x := x + 10
+
+assert(5 |> square == 25)
+assert(5 |> square |> add_ten == 35)
+
+// Thread-first: 35 |> sub(10) -> sub(35, 10) = 25
+sub a b := a - b
+assert(35 |> sub(10) == 25)
+
+// Thread-last: 10 |>> sub(35) -> sub(35, 10) = 25
+assert(10 |>> sub(35) == 25)
+
+// Pipelines with collections and lambda
+numbers := [1, 2, 3, 4, 5]
+result := numbers
+    |> map_by(\x -> x * 2)
+    |> filter_by(\x -> x > 4)
+    |> reverse
+
+assert(result == [10, 8, 6])
+
+// Record pipelines
+p := { x: 10, y: 20 }
+p2 := p |> rset(:x, 100) |> rset(:z, 300)
+assert(p2.x == 100)
+assert(p2.y == 20)
+assert(p2.z == 300)
+
+println("Pipeline tests passed successfully!")

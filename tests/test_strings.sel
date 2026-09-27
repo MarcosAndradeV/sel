@@ -1,0 +1,38 @@
+// tests/test_strings.sel
+// String Utilities and Sequence Operations
+
+// 1. String indexing & splitting & joining
+assert(string_split("apple,banana,cherry", ",") == ["apple", "banana", "cherry"])
+assert(string_split("hello", "") == ["h", "e", "l", "l", "o"])
+
+assert(string_join(["a", "b", "c"], "-") == "a-b-c")
+assert(string_join(["hello", "world"], " ") == "hello world")
+assert(string_join([], ",") == "")
+
+// 2. Trim, replace, case
+assert(string_trim("   hello world   ") == "hello world")
+assert(string_trim("   test   ") == "test")
+assert(string_trim("clean") == "clean")
+
+assert(string_replace("hello world", "world", "sel") == "hello sel")
+assert(string_replace("banana", "a", "o") == "bonono")
+
+assert(string_upcase("hello") == "HELLO")
+assert(string_downcase("HELLO WORLD") == "hello world")
+
+// 3. to_string and format
+assert(to_string(42) == "42")
+assert(to_string(3.14) == "3.14")
+assert(to_string("hello") == "hello")
+
+assert(format("Hello, {}!", "world") == "Hello, world!")
+assert(format("{} + {} = {}", 2, 3, 2 + 3) == "2 + 3 = 5")
+
+// 4. Sequence operations on strings
+assert(count("hello") == 5)
+assert(first("hello") == 'h')
+assert(rest("hello") == "ello")
+assert(is_string("hello"))
+assert(!is_string(123))
+
+println("All string tests passed successfully!")

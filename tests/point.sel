@@ -1,0 +1,2 @@
+// tests/point.sel
+pub new_point x y := { x: x, y: y }

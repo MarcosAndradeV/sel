@@ -8,8 +8,6 @@ pub mod parser;
 pub mod runtime;
 pub mod types;
 pub mod value;
-#[cfg(feature = "alt-syntax")]
-pub mod alt_parser;
 
 // Re-exports
 pub use debugger::{DebugSession, DisassembledInstruction, VmSnapshot, VmStatus};
@@ -26,12 +24,12 @@ use std::rc::Rc;
 
 use std::path::PathBuf;
 
-/// Evaluate a Scheme source string in the given environment and return the result.
+/// Evaluate a SEL source string in the given environment and return the result.
 pub fn eval(source: &str, env: Rc<RefCell<Env>>) -> std::result::Result<Value, SelError> {
     eval_sandboxed(source, env, None)
 }
 
-/// Evaluate a Scheme source string with an optional filesystem sandbox directory.
+/// Evaluate a SEL source string with an optional filesystem sandbox directory.
 pub fn eval_sandboxed(
     source: &str,
     env: Rc<RefCell<Env>>,
@@ -46,34 +44,12 @@ pub fn eval_sandboxed(
     runtime::execute_asts_sandboxed(asts, env, sandbox_root)
 }
 
-#[cfg(feature = "alt-syntax")]
-/// Evaluate an alternative modern syntax (.sel) source string in the given environment.
-pub fn eval_alt(source: &str, env: Rc<RefCell<Env>>) -> std::result::Result<Value, SelError> {
-    eval_alt_sandboxed(source, env, None)
-}
-
-#[cfg(feature = "alt-syntax")]
-/// Evaluate an alternative modern syntax (.sel) source string with an optional filesystem sandbox directory.
-pub fn eval_alt_sandboxed(
-    source: &str,
-    env: Rc<RefCell<Env>>,
-    sandbox_root: Option<PathBuf>,
-) -> std::result::Result<Value, SelError> {
-    let mut diags = Vec::new();
-    let file_id = types::intern("<embedded.sel>");
-    let asts = alt_parser::parse_all(source, file_id, &mut diags);
-    if !diags.is_empty() {
-        return Err(diags.remove(0));
-    }
-    runtime::execute_asts_sandboxed(asts, env, sandbox_root)
-}
-
-/// Evaluate a Scheme file in the given environment and return the result.
+/// Evaluate a SEL file in the given environment and return the result.
 pub fn load_file(script_path: &str, env: Rc<RefCell<Env>>) -> Result<Value, SelError> {
     load_file_sandboxed(script_path, env, None)
 }
 
-/// Evaluate a Scheme file with an optional filesystem sandbox directory.
+/// Evaluate a SEL file with an optional filesystem sandbox directory.
 pub fn load_file_sandboxed(
     script_path: &str,
     env: Rc<RefCell<Env>>,
@@ -107,26 +83,7 @@ pub fn load_file_sandboxed(
     let src = internal::read_script(script_path)?;
     let mut diags = Vec::new();
     let file_id = intern(script_path);
-    let asts = {
-        #[cfg(feature = "alt-syntax")]
-        {
-            if script_path.ends_with(".sel") {
-                alt_parser::parse_all(&src, file_id, &mut diags)
-            } else {
-                parser::parse_all(&src, file_id, &mut diags)
-            }
-        }
-        #[cfg(not(feature = "alt-syntax"))]
-        {
-            if script_path.ends_with(".sel") {
-                return Err(SelError::SyntaxError(
-                    lexer::Loc::default(),
-                    "Alternative syntax (.sel) requires the `alt-syntax` feature".into(),
-                ));
-            }
-            parser::parse_all(&src, file_id, &mut diags)
-        }
-    };
+    let asts = parser::parse_all(&src, file_id, &mut diags);
     if !diags.is_empty() {
         for diag in diags {
             eprintln!("{}", diag);
@@ -145,8 +102,7 @@ mod tests {
         let env = Rc::new(RefCell::new(Env::default()));
         env.borrow_mut().parent = Some(load_core_lib());
 
-        // Basic calculation
-        let res = eval("(define f \\() (co-yield)) (f)", env.clone()).unwrap();
+        let res = eval("f := \\ -> yield nil\nf()", env.clone()).unwrap();
         assert!(matches!(res, Value::Nil));
     }
 
@@ -156,12 +112,12 @@ mod tests {
         env.borrow_mut().parent = Some(load_core_lib());
 
         // Basic calculation
-        let res = eval("(+ 1 2 3)", env.clone()).unwrap();
+        let res = eval("1 + 2 + 3", env.clone()).unwrap();
         assert!(matches!(res, Value::Integer(6)));
 
         // Variable binding and lookup
-        eval("(define my-var 100)", env.clone()).unwrap();
-        let res2 = eval("(* my-var 2)", env.clone()).unwrap();
+        eval("my_var := 100", env.clone()).unwrap();
+        let res2 = eval("my_var * 2", env.clone()).unwrap();
         assert!(matches!(res2, Value::Integer(200)));
 
         // Injecting a custom Rust function
@@ -176,9 +132,9 @@ mod tests {
         }
 
         env.borrow_mut()
-            .insert(intern("custom-sum"), Value::NativeFunction(custom_sum));
+            .insert(intern("custom_sum"), Value::NativeFunction(custom_sum));
 
-        let res3 = eval("(custom-sum 10 20 30)", env).unwrap();
+        let res3 = eval("custom_sum(10, 20, 30)", env).unwrap();
         assert!(matches!(res3, Value::Integer(60)));
     }
 
@@ -191,7 +147,7 @@ mod tests {
         let tests_dir = current_dir.join("tests");
 
         // Loading within sandbox should succeed
-        let script_path = tests_dir.join("helper_load.scm");
+        let script_path = tests_dir.join("helper_load.sel");
         let res = load_file_sandboxed(
             script_path.to_str().unwrap(),
             env.clone(),
@@ -216,7 +172,7 @@ mod tests {
         env.borrow_mut().parent = Some(load_core_lib());
 
         // TypeError
-        let res_type = eval("(+ \"hello\" 1)", env.clone());
+        let res_type = eval("\"hello\" + 1", env.clone());
         assert!(res_type.is_err());
         let err_type = res_type.unwrap_err();
         assert_eq!(err_type.kind(), SelErrorKind::Type);
@@ -228,14 +184,14 @@ mod tests {
         );
 
         // Undefined NameError
-        let res_name = eval("(non-existent-variable)", env);
+        let res_name = eval("non_existent_variable", env);
         assert!(res_name.is_err());
         let err_name = res_name.unwrap_err();
         assert_eq!(err_name.kind(), SelErrorKind::Name);
         assert!(err_name.loc().is_some());
         assert_eq!(
             err_name.message(),
-            "Undefined variable `non-existent-variable`"
+            "Undefined variable `non_existent_variable`"
         );
     }
 
@@ -244,54 +200,51 @@ mod tests {
         let env = Rc::new(RefCell::new(Env::default()));
         env.borrow_mut().parent = Some(load_core_lib());
 
-        // Test list cdr and drop
-        let res1 = eval("(cdr '(1 2 3))", env.clone()).unwrap();
+        // Test list rest and drop
+        let res1 = eval("rest([1, 2, 3])", env.clone()).unwrap();
         assert_eq!(format!("{res1}"), "(2 3)");
 
-        let res2 = eval("(cdr (cdr '(1 2 3)))", env.clone()).unwrap();
+        let res2 = eval("rest(rest([1, 2, 3]))", env.clone()).unwrap();
         assert_eq!(format!("{res2}"), "(3)");
 
-        let res3 = eval("(cdr (cdr (cdr '(1 2 3))))", env.clone()).unwrap();
+        let res3 = eval("rest(rest(rest([1, 2, 3])))", env.clone()).unwrap();
         assert_eq!(format!("{res3}"), "()");
 
-        let res4 = eval("(drop 2 '(10 20 30 40))", env.clone()).unwrap();
+        let res4 = eval("drop(2, [10, 20, 30, 40])", env.clone()).unwrap();
         assert_eq!(format!("{res4}"), "(30 40)");
 
-        let res5 = eval("(nth (cdr '(10 20 30 40)) 1)", env.clone()).unwrap();
+        let res5 = eval("nth(rest([10, 20, 30, 40]), 1)", env.clone()).unwrap();
         assert!(matches!(res5, Value::Integer(30)));
 
-        // Test string cdr and drop
-        let s1 = eval("(cdr \"hello\")", env.clone()).unwrap();
+        // Test string rest and drop
+        let s1 = eval("rest(\"hello\")", env.clone()).unwrap();
         assert_eq!(format!("{s1}"), "ello");
 
-        let s2 = eval("(cdr (cdr \"hello\"))", env.clone()).unwrap();
+        let s2 = eval("rest(rest(\"hello\"))", env.clone()).unwrap();
         assert_eq!(format!("{s2}"), "llo");
 
-        let s3 = eval("(drop 3 \"abcdef\")", env.clone()).unwrap();
+        let s3 = eval("drop(3, \"abcdef\")", env.clone()).unwrap();
         assert_eq!(format!("{s3}"), "def");
 
-        let s4 = eval("(car (cdr \"world\"))", env.clone()).unwrap();
+        let s4 = eval("first(rest(\"world\"))", env.clone()).unwrap();
         assert!(matches!(s4, Value::Char('o')));
 
-        let s5 = eval("(nth (cdr \"world\") 2)", env.clone()).unwrap();
+        let s5 = eval("nth(rest(\"world\"), 2)", env.clone()).unwrap();
         assert!(matches!(s5, Value::Char('l')));
 
         // Test list equality with different offsets
-        let eq_test = eval("(eq? (cdr '(1 2 3)) '(2 3))", env.clone()).unwrap();
+        let eq_test = eval("rest([1, 2, 3]) == [2, 3]", env.clone()).unwrap();
         assert!(matches!(eq_test, Value::Boolean(true)));
 
         // Test string equality with different offsets
-        let s_eq_test = eval("(eq? (cdr \"abc\") \"bc\")", env.clone()).unwrap();
+        let s_eq_test = eval("rest(\"abc\") == \"bc\"", env.clone()).unwrap();
         assert!(matches!(s_eq_test, Value::Boolean(true)));
 
         // Test strings are lists and format properly
-        let str_is_list = eval("(list? \"hello\")", env.clone()).unwrap();
+        let str_is_list = eval("is_list(\"hello\")", env.clone()).unwrap();
         assert!(matches!(str_is_list, Value::Boolean(true)));
 
-        let list_of_chars_is_string = eval("(string? '(#\\h #\\i))", env.clone()).unwrap();
-        assert!(matches!(list_of_chars_is_string, Value::Boolean(true)));
-
-        let cons_str = eval("(cons #\\h \"ello\")", env).unwrap();
+        let cons_str = eval("cons('h', \"ello\")", env).unwrap();
         assert_eq!(format!("{cons_str}"), "hello");
     }
 }

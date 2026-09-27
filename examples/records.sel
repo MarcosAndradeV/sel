@@ -1,0 +1,46 @@
+// examples/records.sel
+// Record Structures and Monadic Error Handling in SEL
+
+println("=== SEL Records and Error Handling Demo ===")
+
+// Create a 2D point record
+p1 := { x: 10, y: 20 }
+println("Created record p1: ", p1)
+println("  p1 is a record? -> ", is_record(p1))
+println("  p1 keys: ", rkeys(p1))
+println("  p1 values: ", rvals(p1))
+
+// Retrieve values using dot syntax or rget
+println("  x-coord via p1.x: ", p1.x)
+println("  y-coord via rget: ", rget(p1, :y))
+
+// Functional update: rset yields a new record (the original remains immutable!)
+p2 := rset(p1, :x, 100)
+println("Updated record p2 (x=100): ", p2)
+println("Original p1 (unmodified): ", p1)
+
+// Check if a field exists
+println("  Does p2 contain field :z? -> ", rcontains(p2, :z))
+
+// Safe division using Monadic Error Values
+safe_divide num denom :=
+    if denom == 0 then
+        err("Division by zero is forbidden!")
+    else
+        ok(num / denom)
+
+println("\nTesting Monadic Error Values:")
+
+// Attempt 1: Successful division
+res1 := safe_divide(100, 4)
+if is_ok(res1) then
+    println("  Success! 100 / 4 = ", unwrap(res1))
+else
+    println("  Failed! Error: ", error_value(res1))
+
+// Attempt 2: Forbidden division
+res2 := safe_divide(100, 0)
+if is_ok(res2) then
+    println("  Success! ", unwrap(res2))
+else
+    println("  Failed! Error message: \"", error_value(res2), "\"")

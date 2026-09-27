@@ -1,0 +1,40 @@
+// tests/test_core.sel
+// Standard Library Core Functionality Test Suite
+
+nums := [1, 2, 3, 4, 5]
+
+assert(count(nums) == 5)
+assert(first(nums) == 1)
+assert(head(nums) == 1)
+assert(rest(nums) == [2, 3, 4, 5])
+assert(tail(nums) == [2, 3, 4, 5])
+assert(last(nums) == 5)
+
+// map and filter
+squared := map(\x -> x * x, nums)
+assert(squared == [1, 4, 9, 16, 25])
+
+evens := filter(\x -> is_even(x), nums)
+assert(evens == [2, 4])
+
+// foldl and foldr
+sum_val := foldl(\acc x -> acc + x, 0, nums)
+assert(sum_val == 15)
+
+// reverse
+rev := reverse(nums)
+assert(rev == [5, 4, 3, 2, 1])
+
+// range
+r := range(5)
+assert(r == [0, 1, 2, 3, 4])
+
+// Aggregations
+assert(nums |> sum == 15)
+assert(nums |> product == 120)
+assert(nums |> take(3) == [1, 2, 3])
+assert(nums |> drop(3) == [4, 5])
+assert(nums |> contains(3))
+assert(!(nums |> contains(99)))
+
+println("Core tests passed successfully!")

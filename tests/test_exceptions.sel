@@ -1,0 +1,73 @@
+// tests/test_exceptions.sel
+// Exception Handling & Monadic Error Values Test Suite
+
+// 1. Successful try-catch
+test_success _ :=
+    try
+        42
+    catch err ->
+        99
+
+assert(test_success(nil) == 42)
+
+// 2. Runtime error catching
+test_catch _ :=
+    try
+        1 + "invalid-type"
+    catch err ->
+        123
+
+assert(test_catch(nil) == 123)
+
+// 3. Deep unwinding test
+deep_f3 _ := 1 + "error-deep"
+deep_f2 _ := deep_f3(nil)
+deep_f1 _ := deep_f2(nil)
+
+test_unwind _ :=
+    try
+        deep_f1(nil)
+    catch err ->
+        777
+
+assert(test_unwind(nil) == 777)
+
+// 4. Nested try-catch
+test_nested _ :=
+    try
+        try
+            1 + "inner-error"
+        catch inner_err ->
+            555
+    catch outer_err ->
+        999
+
+assert(test_nested(nil) == 555)
+
+// 5. Monadic Result (ok / err / unwrap / is_ok / is_err / error_value)
+v1 := ok(123)
+v2 := err("something went wrong")
+
+assert(is_ok(v1))
+assert(!is_err(v1))
+assert(is_err(v2))
+assert(!is_ok(v2))
+
+assert(unwrap(v1) == 123)
+assert(error_value(v2) == "something went wrong")
+
+divide x y :=
+    if y == 0 then
+        err("Division by zero")
+    else
+        ok(x / y)
+
+d1 := divide(10, 2)
+assert(is_ok(d1))
+assert(unwrap(d1) == 5.0)
+
+d2 := divide(10, 0)
+assert(is_err(d2))
+assert(error_value(d2) == "Division by zero")
+
+println("All exception and error value tests passed successfully!")

@@ -1196,6 +1196,34 @@ pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
     }
 }
 
+#[cfg(feature = "ffi")]
+pub fn ffi_func(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 3 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 3,
+            actual: args.len(),
+        });
+    }
+    let sym = args[0].clone();
+    let ret_type = args[1].clone();
+    let arg_types = args[2].clone();
+    Ok(Value::NativeClosure(Rc::new(crate::value::NativeClosureFn(Rc::new(
+        move |call_loc, call_args| {
+            let call_args_val = Value::make_list(call_args);
+            ffi_call(
+                call_loc,
+                vec![
+                    sym.clone(),
+                    ret_type.clone(),
+                    arg_types.clone(),
+                    call_args_val,
+                ],
+            )
+        },
+    )))))
+}
+
 #[inline]
 pub fn cons(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
@@ -1841,7 +1869,7 @@ pub fn file_system(loc: Loc, mut call_args: Vec<Value>) -> Result<Value> {
     let args = call_args.split_off(1);
     if let Some(Value::Symbol(sym)) = call_args.pop() {
         match lookup(sym).as_str() {
-            "exists?" => {
+            "exists?" | "exists" => {
                 if args.len() != 1 {
                     return Err(SelError::SyntaxError(
                         loc,
@@ -2743,6 +2771,54 @@ pub fn to_string(loc: Loc, args: Vec<Value>) -> Result<Value> {
     }
 }
 
+pub fn to_int(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 1,
+            actual: args.len(),
+        });
+    }
+    match &args[0] {
+        Value::Integer(i) => Ok(Value::Integer(*i)),
+        Value::Float(f) => Ok(Value::Integer(*f as i64)),
+        v if v.to_string_lossy().is_some() => {
+            let s = v.to_string_lossy().unwrap();
+            s.trim().parse::<i64>().map(Value::Integer).map_err(|_| {
+                SelError::Runtime(loc, format!("to_int: cannot parse '{s}' as integer"))
+            })
+        }
+        ref v => Err(SelError::TypeError(
+            loc,
+            format!("to_int: cannot convert {} to integer", value_type_name(v)),
+        )),
+    }
+}
+
+pub fn to_float(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 1,
+            actual: args.len(),
+        });
+    }
+    match &args[0] {
+        Value::Float(f) => Ok(Value::Float(*f)),
+        Value::Integer(i) => Ok(Value::Float(*i as f64)),
+        v if v.to_string_lossy().is_some() => {
+            let s = v.to_string_lossy().unwrap();
+            s.trim().parse::<f64>().map(Value::Float).map_err(|_| {
+                SelError::Runtime(loc, format!("to_float: cannot parse '{s}' as float"))
+            })
+        }
+        ref v => Err(SelError::TypeError(
+            loc,
+            format!("to_float: cannot convert {} to float", value_type_name(v)),
+        )),
+    }
+}
+
 pub fn string_format(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.is_empty() {
         return Err(SelError::Runtime(
@@ -2887,7 +2963,7 @@ pub fn load(env: Rc<RefCell<Env>>) {
     e.insert(intern("mod"), Value::NativeFunction(modulo));
 
     e.insert(intern("not"), Value::NativeFunction(not));
-    e.insert(intern("eq?"), Value::NativeFunction(is_equal));
+    e.insert(intern("=="), Value::NativeFunction(is_equal));
     e.insert(intern("="), Value::NativeFunction(num_eq));
     e.insert(intern("!="), Value::NativeFunction(num_noteq));
     e.insert(intern("<"), Value::NativeFunction(num_lt));
@@ -2903,38 +2979,38 @@ pub fn load(env: Rc<RefCell<Env>>) {
     e.insert(intern("take"), Value::NativeFunction(take));
     e.insert(intern("count"), Value::NativeFunction(count));
     e.insert(intern("list"), Value::NativeFunction(list));
-    e.insert(intern("empty?"), Value::NativeFunction(empty));
+    e.insert(intern("is_empty"), Value::NativeFunction(empty));
 
     e.insert(intern("rget"), Value::NativeFunction(rget));
     e.insert(intern("rset"), Value::NativeFunction(rset));
     e.insert(intern("rdel"), Value::NativeFunction(rdel));
     e.insert(intern("rkeys"), Value::NativeFunction(rkeys));
     e.insert(intern("rvals"), Value::NativeFunction(rvals));
-    e.insert(intern("rcontains?"), Value::NativeFunction(rcontains));
+    e.insert(intern("rcontains"), Value::NativeFunction(rcontains));
 
-    e.insert(intern("nil?"), Value::NativeFunction(is_nil));
-    e.insert(intern("list?"), Value::NativeFunction(is_list));
-    e.insert(intern("number?"), Value::NativeFunction(is_number));
-    e.insert(intern("string?"), Value::NativeFunction(is_string));
+    e.insert(intern("is_nil"), Value::NativeFunction(is_nil));
+    e.insert(intern("is_list"), Value::NativeFunction(is_list));
+    e.insert(intern("is_number"), Value::NativeFunction(is_number));
+    e.insert(intern("is_string"), Value::NativeFunction(is_string));
     e.insert(
-        intern("string-contains?"),
+        intern("string_contains"),
         Value::NativeFunction(string_contains),
     );
-    e.insert(intern("symbol?"), Value::NativeFunction(is_symbol));
+    e.insert(intern("is_symbol"), Value::NativeFunction(is_symbol));
     e.insert(intern("gensym"), Value::NativeFunction(gensym));
-    e.insert(intern("function?"), Value::NativeFunction(is_function));
-    e.insert(intern("record?"), Value::NativeFunction(is_record));
-    e.insert(intern("char?"), Value::NativeFunction(is_char));
+    e.insert(intern("is_function"), Value::NativeFunction(is_function));
+    e.insert(intern("is_record"), Value::NativeFunction(is_record));
+    e.insert(intern("is_char"), Value::NativeFunction(is_char));
     e.insert(
-        intern("char->integer"),
+        intern("char_to_integer"),
         Value::NativeFunction(char_to_integer),
     );
     e.insert(
-        intern("integer->char"),
+        intern("integer_to_char"),
         Value::NativeFunction(integer_to_char),
     );
 
-    e.insert(intern("type-of"), Value::NativeFunction(type_of));
+    e.insert(intern("type_of"), Value::NativeFunction(type_of));
 
     e.insert(intern("error"), Value::NativeFunction(error));
     e.insert(intern("display"), Value::NativeFunction(display));
@@ -2943,13 +3019,14 @@ pub fn load(env: Rc<RefCell<Env>>) {
 
     #[cfg(feature = "ffi")]
     {
-        e.insert(intern("ffi-dlopen"), Value::NativeFunction(ffi_dlopen));
-        e.insert(intern("ffi-dlsym"), Value::NativeFunction(ffi_dlsym));
-        e.insert(intern("ffi-call"), Value::NativeFunction(ffi_call));
+        e.insert(intern("ffi_dlopen"), Value::NativeFunction(ffi_dlopen));
+        e.insert(intern("ffi_dlsym"), Value::NativeFunction(ffi_dlsym));
+        e.insert(intern("ffi_call"), Value::NativeFunction(ffi_call));
+        e.insert(intern("ffi_func"), Value::NativeFunction(ffi_func));
     }
 
     e.insert(intern("system"), Value::NativeFunction(system));
-    e.insert(intern("file-system"), Value::NativeFunction(file_system));
+    e.insert(intern("file_system"), Value::NativeFunction(file_system));
 
     e.insert(intern("abs"), Value::NativeFunction(math_abs));
     e.insert(intern("min"), Value::NativeFunction(math_min));
@@ -2962,39 +3039,41 @@ pub fn load(env: Rc<RefCell<Env>>) {
     e.insert(intern("sin"), Value::NativeFunction(math_sin));
     e.insert(intern("cos"), Value::NativeFunction(math_cos));
     e.insert(intern("tan"), Value::NativeFunction(math_tan));
-    e.insert(intern("bit-and"), Value::NativeFunction(bit_and));
-    e.insert(intern("bit-or"), Value::NativeFunction(bit_or));
-    e.insert(intern("bit-xor"), Value::NativeFunction(bit_xor));
-    e.insert(intern("bit-not"), Value::NativeFunction(bit_not));
-    e.insert(intern("bit-shl"), Value::NativeFunction(bit_shl));
-    e.insert(intern("bit-shr"), Value::NativeFunction(bit_shr));
+    e.insert(intern("bit_and"), Value::NativeFunction(bit_and));
+    e.insert(intern("bit_or"), Value::NativeFunction(bit_or));
+    e.insert(intern("bit_xor"), Value::NativeFunction(bit_xor));
+    e.insert(intern("bit_not"), Value::NativeFunction(bit_not));
+    e.insert(intern("bit_shl"), Value::NativeFunction(bit_shl));
+    e.insert(intern("bit_shr"), Value::NativeFunction(bit_shr));
 
-    e.insert(intern("string-split"), Value::NativeFunction(string_split));
-    e.insert(intern("string-join"), Value::NativeFunction(string_join));
-    e.insert(intern("string-trim"), Value::NativeFunction(string_trim));
+    e.insert(intern("string_split"), Value::NativeFunction(string_split));
+    e.insert(intern("string_join"), Value::NativeFunction(string_join));
+    e.insert(intern("string_trim"), Value::NativeFunction(string_trim));
     e.insert(
-        intern("string-replace"),
+        intern("string_replace"),
         Value::NativeFunction(string_replace),
     );
     e.insert(
-        intern("string-upcase"),
+        intern("string_upcase"),
         Value::NativeFunction(string_upcase),
     );
     e.insert(
-        intern("string-downcase"),
+        intern("string_downcase"),
         Value::NativeFunction(string_downcase),
     );
-    e.insert(intern("to-string"), Value::NativeFunction(to_string));
+    e.insert(intern("to_string"), Value::NativeFunction(to_string));
+    e.insert(intern("to_int"), Value::NativeFunction(to_int));
+    e.insert(intern("to_float"), Value::NativeFunction(to_float));
     e.insert(intern("format"), Value::NativeFunction(string_format));
 
-    e.insert(intern("get-env"), Value::NativeFunction(sys_get_env));
-    e.insert(intern("set-env!"), Value::NativeFunction(sys_set_env));
-    e.insert(intern("time-now-ms"), Value::NativeFunction(time_now_ms));
-    e.insert(intern("sleep-ms"), Value::NativeFunction(sleep_ms));
+    e.insert(intern("get_env"), Value::NativeFunction(sys_get_env));
+    e.insert(intern("set_env"), Value::NativeFunction(sys_set_env));
+    e.insert(intern("time_now_ms"), Value::NativeFunction(time_now_ms));
+    e.insert(intern("sleep_ms"), Value::NativeFunction(sleep_ms));
 
-    e.insert(intern("co-create"), Value::NativeFunction(co_create));
-    e.insert(intern("co-state"), Value::NativeFunction(co_state));
-    e.insert(intern("co-dead?"), Value::NativeFunction(co_dead_p));
+    e.insert(intern("co_create"), Value::NativeFunction(co_create));
+    e.insert(intern("co_state"), Value::NativeFunction(co_state));
+    e.insert(intern("co_dead"), Value::NativeFunction(co_dead_p));
 }
 
 pub fn read_script<P>(script_path: P) -> Result<String>
@@ -3016,39 +3095,18 @@ where
 pub fn load_core_lib() -> Rc<RefCell<Env>> {
     let env = Rc::new(RefCell::new(Env::default()));
     load(env.clone());
-    // Load core library if exists
-    {
-        let core_src = include_str!("core.scm");
 
-        let mut diags = Vec::new();
-        let file_id = intern("<core>");
-
-        let asts = parse_all(core_src, file_id, &mut diags);
-        if !diags.is_empty() {
-            for diag in diags {
-                eprintln!("{}", diag);
-            }
-        }
-
-        if let Err(e) = execute_asts(asts, env.clone()) {
-            eprintln!("Error loading core.scm:\n{}", e);
+    let core_sel = include_str!("core.sel");
+    let mut diags = Vec::new();
+    let file_id = intern("<core.sel>");
+    let asts = parse_all(core_sel, file_id, &mut diags);
+    if !diags.is_empty() {
+        for diag in diags {
+            eprintln!("{}", diag);
         }
     }
-
-    #[cfg(feature = "alt-syntax")]
-    {
-        let core_sel = include_str!("core.sel");
-        let mut diags = Vec::new();
-        let file_id = intern("<core.sel>");
-        let asts = crate::alt_parser::parse_all(core_sel, file_id, &mut diags);
-        if !diags.is_empty() {
-            for diag in diags {
-                eprintln!("{}", diag);
-            }
-        }
-        if let Err(e) = execute_asts(asts, env.clone()) {
-            eprintln!("Error loading core.sel:\n{}", e);
-        }
+    if let Err(e) = execute_asts(asts, env.clone()) {
+        eprintln!("Error loading core.sel:\n{}", e);
     }
 
     env

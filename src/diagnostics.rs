@@ -1,4 +1,4 @@
-use crate::lexer::{Loc, Token};
+use crate::lexer::Loc;
 use crate::types::lookup;
 
 #[derive(Debug, Clone)]
@@ -13,7 +13,7 @@ pub enum SelError {
         actual: usize,
     },
     UnboundVariable(Loc, u32),
-    InvalidNumber(Token),
+    InvalidNumber(Loc, String),
     UnterminatedString(Loc),
     Internal(String),
     Runtime(Loc, String),
@@ -98,13 +98,13 @@ impl std::fmt::Display for SelError {
                 )?;
                 format_snippet(f, *loc)
             }
-            Self::InvalidNumber(t) => {
+            Self::InvalidNumber(loc, source) => {
                 write!(
                     f,
                     "syntax error at {}:\n\nCaused by:\n    Invalid number format `{}`",
-                    t.loc, t.source
+                    loc, source
                 )?;
-                format_snippet(f, t.loc)
+                format_snippet(f, *loc)
             }
             Self::UnterminatedString(loc) => {
                 write!(
@@ -153,7 +153,7 @@ impl SelError {
             Self::UnexpectedEOF(_)
             | Self::UnexpectedToken(_, _)
             | Self::SyntaxError(_, _)
-            | Self::InvalidNumber(_)
+            | Self::InvalidNumber(..)
             | Self::UnterminatedString(_)
             | Self::Trace(_) => SelErrorKind::Syntax,
             Self::UndefinedVariable(_, _) | Self::UnboundVariable(_, _) => SelErrorKind::Name,
@@ -177,7 +177,7 @@ impl SelError {
             | Self::TypeError(loc, _)
             | Self::SandboxViolation(loc, _) => Some(*loc),
             Self::ArityMismatch { loc, .. } => Some(*loc),
-            Self::InvalidNumber(token) => Some(token.loc),
+            Self::InvalidNumber(loc, _) => Some(*loc),
             Self::Internal(_) | Self::Trace(_) => None,
         }
     }
@@ -194,7 +194,7 @@ impl SelError {
             } => {
                 format!("Arity mismatch: expected {}, got {}", expected, actual)
             }
-            Self::InvalidNumber(token) => format!("Invalid number format `{}`", token.source),
+            Self::InvalidNumber(_, source) => format!("Invalid number format `{}`", source),
             Self::UnterminatedString(_) => "Unterminated string".to_string(),
             Self::Runtime(_, msg) => msg.clone(),
             Self::TypeError(_, msg) => msg.clone(),

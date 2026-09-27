@@ -1,0 +1,51 @@
+// tests/test_coroutines.sel
+// Cooperative Coroutines Test Suite
+
+generator := co_create(\start -> do
+    next_val := yield(start + 10)
+    final_val := yield(next_val + 20)
+    final_val + 100
+end)
+
+assert(co_state(generator) == :suspended)
+assert(!co_dead(generator))
+
+res1 := co_resume(generator, 5)
+assert(res1 == 15)
+assert(co_state(generator) == :suspended)
+
+res2 := co_resume(generator, 30)
+assert(res2 == 50)
+assert(co_state(generator) == :suspended)
+
+res3 := co_resume(generator, 1000)
+assert(res3 == 1100)
+assert(co_state(generator) == :dead)
+assert(co_dead(generator))
+
+// Fibonacci generator
+make_fib_generator _ :=
+    co_create(\_ -> do
+        loop a b := do
+            yield(a)
+            loop(b, a + b)
+        end
+        loop(0, 1)
+    end)
+
+fib := make_fib_generator(nil)
+assert(co_resume(fib, nil) == 0)
+assert(co_resume(fib, nil) == 1)
+assert(co_resume(fib, nil) == 1)
+assert(co_resume(fib, nil) == 2)
+assert(co_resume(fib, nil) == 3)
+assert(co_resume(fib, nil) == 5)
+assert(co_resume(fib, nil) == 8)
+assert(co_resume(fib, nil) == 13)
+assert(co_state(fib) == :suspended)
+
+// Dead resume protection
+dead_err := try co_resume(generator, 999) catch e -> :caught
+assert(dead_err == :caught)
+
+println("Coroutine tests passed successfully!")

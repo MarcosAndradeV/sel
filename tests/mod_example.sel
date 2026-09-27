@@ -1,0 +1,8 @@
+// tests/mod_example.sel
+pub a := 10
+
+b := 20
+c := 30
+
+pub d := 40
+pub f := 50

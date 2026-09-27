@@ -1,1179 +1,1829 @@
-use crate::ast::{Ast, MatchClause, Pattern};
+//! Modern functional syntax parser for SEL using `lex-just-parse`.
+//!
+//! Features:
+//! - Definitions: `mult x y := x * y`, `pub add x y := x + y`, `x := 10`
+//! - Lambdas: `\x -> x * 2`, `\x y -> x + y`
+//! - Scoping: `let x = 10, y = 20 in x + y`, `do ... end`
+//! - Conditionals: `if cond then expr1 else expr2`
+//! - Pattern matching: `match expr with | pat [when guard] -> body`
+//! - Error handling: `try expr catch err -> handler`
+//! - Coroutines: `yield expr`, `co_resume(co, val)`
+//! - Pipeline: `x |> f(y)` (thread-last desugaring)
+//! - Infix operators: `+`, `-`, `*`, `/`, `%`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `&&`, `||`
+//! - Dot access: `record.field` -> `(rget record 'field)`
+//! - Atoms: `:ok`, `:error`
+
+use std::collections::{HashMap, HashSet};
+
+use crate::ast::{Ast, MatchClause, Pattern, PipelineKind};
 use crate::diagnostics::SelError;
-use crate::lexer::{Lexer, Loc, NumberBase, Token, TokenKind};
+use crate::lexer::Loc;
 use crate::types::{intern, lookup};
+use lex_just_parse::lexer::{Lexer, NumberBase, Token, TokenKind};
 
 type Result<T> = std::result::Result<T, SelError>;
 
-pub fn optimize_ast(list: Vec<Ast>, loc: Loc) -> Result<Ast> {
-    if list.is_empty() {
-        return Ok(Ast::Nil(loc));
-    }
+const KEYWORDS: &[&str] = &[
+    "let", "in", "do", "end", "if", "then", "else", "match", "with", "when",
+    "try", "catch", "yield", "pub", "import", "as", "true", "false", "nil",
+];
 
-    if let Some(Ast::Symbol(s_loc, id)) = list.first().cloned() {
-        match lookup(id).as_str() {
-            "co-yield" => {
-                let mut iter = list.into_iter().skip(1);
-                let expr = iter.next().unwrap_or(Ast::Nil(s_loc));
-                Ok(Ast::Yield(s_loc, Box::new(expr)))
-            }
-            "co-resume" => {
-                let mut iter = list.into_iter().skip(1);
-                let co = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Missing coroutine in co-resume".into())
-                })?;
-                let arg = iter.next().unwrap_or(Ast::Nil(s_loc));
-                Ok(Ast::CoResume(s_loc, Box::new(co), Box::new(arg)))
-            }
-            "try" => parse_try(list, s_loc),
-            "->" => {
-                let mut iter = list.into_iter().skip(1);
-                let mut first_v = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Missing first expression in `->`".into())
-                })?;
-                for ast in iter {
-                    match ast {
-                        Ast::List(loc, mut list) => {
-                            list.push(first_v);
-                            first_v = optimize_ast(list, loc)?;
-                        }
-                        s => {
-                            first_v = optimize_ast(vec![s, first_v], loc)?;
-                        }
-                    }
-                }
-                Ok(first_v)
-            }
-            "import" => {
-                let mut iter = list.into_iter().skip(1);
-                let first = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Expected module name in import".into())
-                })?;
-
-                let (symbol, mut iter) = match first {
-                    Ast::Symbol(_, symbol) => (symbol, iter),
-                    Ast::String(_, s) => (intern(&s), iter),
-                    Ast::List(_, inner_list) => {
-                        // e.g. (import (foo :as f)) or (import ("foo" :as f)) or (import (foo f))
-                        if inner_list.is_empty() {
-                            return Err(SelError::SyntaxError(s_loc, "Empty import list".into()));
-                        }
-                        let mut inner_iter = inner_list.into_iter();
-                        let first_inner = inner_iter.next().unwrap();
-                        let symbol = match first_inner {
-                            Ast::Symbol(_, symbol) => symbol,
-                            Ast::String(_, s) => intern(&s),
-                            _ => {
-                                return Err(SelError::SyntaxError(
-                                    s_loc,
-                                    "Expected module name as symbol or string in import list"
-                                        .into(),
-                                ));
-                            }
-                        };
-                        if let Some(next) = inner_iter.next() {
-                            match next {
-                                Ast::Symbol(_, as_sym) if lookup(as_sym) == ":as" => {
-                                    let alias_ast = inner_iter.next().ok_or_else(|| {
-                                        SelError::SyntaxError(
-                                            s_loc,
-                                            "Expected alias after :as".into(),
-                                        )
-                                    })?;
-                                    if let Ast::Symbol(_, alias) = alias_ast {
-                                        return Ok(Ast::Import(s_loc, symbol, Some(alias)));
-                                    } else {
-                                        return Err(SelError::SyntaxError(
-                                            s_loc,
-                                            "Expected symbol for alias".into(),
-                                        ));
-                                    }
-                                }
-                                Ast::Symbol(_, alias) => {
-                                    // e.g. (import (foo f))
-                                    return Ok(Ast::Import(s_loc, symbol, Some(alias)));
-                                }
-                                _ => {
-                                    return Err(SelError::SyntaxError(
-                                        s_loc,
-                                        "Expected alias or :as keyword".into(),
-                                    ));
-                                }
-                            }
-                        } else {
-                            return Ok(Ast::Import(s_loc, symbol, None));
-                        }
-                    }
-                    _ => {
-                        return Err(SelError::SyntaxError(
-                            s_loc,
-                            "Expected symbol, string, or list in import".into(),
-                        ));
-                    }
-                };
-
-                // Check if there's an inline :as alias, e.g. (import foo :as f) or (import "foo" :as f)
-                if let Some(next) = iter.next() {
-                    if let Ast::Symbol(_, as_sym) = next {
-                        if lookup(as_sym) == ":as" {
-                            let alias_ast = iter.next().ok_or_else(|| {
-                                SelError::SyntaxError(s_loc, "Expected alias after :as".into())
-                            })?;
-                            if let Ast::Symbol(_, alias) = alias_ast {
-                                Ok(Ast::Import(s_loc, symbol, Some(alias)))
-                            } else {
-                                Err(SelError::SyntaxError(
-                                    s_loc,
-                                    "Expected symbol for alias".into(),
-                                ))
-                            }
-                        } else {
-                            Err(SelError::SyntaxError(
-                                s_loc,
-                                "Expected :as keyword for alias".into(),
-                            ))
-                        }
-                    } else {
-                        Err(SelError::SyntaxError(
-                            s_loc,
-                            "Expected symbol for alias keyword".into(),
-                        ))
-                    }
-                } else {
-                    Ok(Ast::Import(s_loc, symbol, None))
-                }
-            }
-            "load" => {
-                let mut iter = list.into_iter().skip(1);
-                let path = iter
-                    .next()
-                    .ok_or_else(|| SelError::SyntaxError(s_loc, "Missing path in load".into()))?;
-                if iter.next().is_some() {
-                    return Err(SelError::SyntaxError(
-                        s_loc,
-                        "Expected exactly 1 argument for load".into(),
-                    ));
-                }
-                Ok(Ast::Load(s_loc, Box::new(path)))
-            }
-            "while" => {
-                let mut iter = list.into_iter().skip(1);
-                let cond = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Missing condition in while".into())
-                })?;
-                let body: Vec<Ast> = iter.collect();
-                Ok(Ast::While(
-                    s_loc,
-                    Box::new(cond),
-                    Box::new(Ast::List(loc, body)),
-                ))
-            }
-            "until" => {
-                let mut iter = list.into_iter().skip(1);
-                let cond = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Missing condition in until".into())
-                })?;
-                let body: Vec<Ast> = iter.collect();
-                Ok(Ast::Until(
-                    s_loc,
-                    Box::new(cond),
-                    Box::new(Ast::List(loc, body)),
-                ))
-            }
-            "if" => {
-                let mut iter = list.into_iter().skip(1);
-                let cond = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Missing condition in if".into())
-                })?;
-                let true_branch = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Missing true branch in if".into())
-                })?;
-                let false_branch = iter.next();
-                Ok(Ast::If(
-                    s_loc,
-                    Box::new(cond),
-                    Box::new(true_branch),
-                    false_branch.map(Box::new),
-                ))
-            }
-            // "cond" => {
-            //     let mut iter = list.into_iter().skip(1);
-            //     let mut branches = Vec::new();
-            //     while let Some(cond) = iter.next() {
-            //         let expr = iter.next().ok_or_else(|| {
-            //             SelError::SyntaxError(s_loc, "Missing expr in cond".into())
-            //         })?;
-            //         branches.push((cond, expr));
-            //     }
-            //     Ok(Ast::Cond(s_loc, branches))
-            // }
-            "ffi-func" => {
-                // (define puts (ffi-func 'i32 '('*u8)))
-                let mut iter = list.into_iter().skip(1);
-                let sym = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Missing ffi-sym in ffi-func".into())
-                })?;
-                let ret = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Missing return type in ffi-func".into())
-                })?;
-                let arg_types = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Missing argument types in ffi-func".into())
-                })?;
-                // ffi-call ~sym ~ret ~arg-types args
-                Ok(Ast::Lambda(
-                    s_loc,
-                    vec![intern("&args")],
-                    vec![Ast::List(
-                        s_loc,
-                        vec![
-                            Ast::Symbol(s_loc, intern("ffi-call")),
-                            sym,
-                            ret,
-                            arg_types,
-                            Ast::Symbol(s_loc, intern("args")),
-                        ],
-                    )],
-                ))
-            }
-            "unless" => {
-                let mut iter = list.into_iter().skip(1);
-                let cond = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Missing condition in unless".into())
-                })?;
-                let false_branch = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Missing false branch in unless".into())
-                })?;
-                let true_branch = iter.next();
-                Ok(Ast::Unless(
-                    s_loc,
-                    Box::new(cond),
-                    Box::new(false_branch),
-                    true_branch.map(Box::new),
-                ))
-            }
-            "when" => {
-                let mut iter = list.into_iter().skip(1);
-                let cond = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Missing condition in when".into())
-                })?;
-                let body = iter.collect();
-                Ok(Ast::When(s_loc, Box::new(cond), body))
-            }
-            "lambda" => {
-                let mut iter = list.into_iter().skip(1);
-                let params_ast = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Missing parameters in lambda".into())
-                })?;
-                let mut params = Vec::new();
-                match params_ast {
-                    Ast::List(loc, p) => {
-                        for param in p {
-                            if let Ast::Symbol(_, id) = param {
-                                params.push(id);
-                            } else if let Ast::Bind(_, id) = param {
-                                let name = lookup(id);
-                                params.push(intern(&format!("&{}", name)));
-                            } else {
-                                return Err(SelError::SyntaxError(
-                                    loc,
-                                    "Expected identifier in lambda parameters".into(),
-                                ));
-                            }
-                        }
-                    }
-                    Ast::Nil(_) => {}
-                    _ => {
-                        return Err(SelError::SyntaxError(
-                            s_loc,
-                            "Expected parameter list in lambda".into(),
-                        ));
-                    }
-                }
-                let body = iter.collect();
-                Ok(Ast::Lambda(s_loc, params, body))
-            }
-            "begin" => {
-                let iter = list.into_iter().skip(1);
-                Ok(Ast::Begin(s_loc, iter.collect()))
-            }
-            "define" => {
-                let mut iter = list.into_iter().skip(1);
-                let name_ast = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Expected identifier in define".into())
-                })?;
-                if let Ast::List(l_loc, mut p_list) = name_ast {
-                    if p_list.is_empty() {
-                        return Err(SelError::SyntaxError(
-                            l_loc,
-                            "Empty parameter list in define".into(),
-                        ));
-                    }
-                    let head = p_list.remove(0);
-                    let Ast::Symbol(_, name_id) = head else {
-                        return Err(SelError::SyntaxError(
-                            l_loc,
-                            "Expected identifier at head of parameter list in define".into(),
-                        ));
-                    };
-                    let mut params = Vec::new();
-                    for p in p_list {
-                        match p {
-                            Ast::Symbol(_, id) => params.push(id),
-                            Ast::Bind(_, id) => {
-                                let name = lookup(id);
-                                params.push(intern(&format!("&{}", name)));
-                            }
-                            _ => {
-                                return Err(SelError::SyntaxError(
-                                    l_loc,
-                                    "Expected identifier in parameter list".into(),
-                                ));
-                            }
-                        }
-                    }
-                    let body: Vec<Ast> = iter.collect();
-                    if body.is_empty() {
-                        return Err(SelError::SyntaxError(
-                            s_loc,
-                            "Missing body in define".into(),
-                        ));
-                    }
-                    return Ok(Ast::Define(
-                        s_loc,
-                        name_id,
-                        Box::new(Ast::Lambda(s_loc, params, body)),
-                    ));
-                }
-
-                let value_ast = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Expected expression in define".into())
-                })?;
-                let Ast::Symbol(_, name_id) = name_ast else {
-                    return Err(SelError::SyntaxError(
-                        s_loc,
-                        "Expected identifier in define".into(),
-                    ));
-                };
-                Ok(Ast::Define(s_loc, name_id, Box::new(value_ast)))
-            }
-            "defmacro" => {
-                let mut iter = list.into_iter().skip(1);
-                let name_ast = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Expected identifier in defmacro".into())
-                })?;
-                let params_ast = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Expected parameters in defmacro".into())
-                })?;
-
-                let mut params = Vec::new();
-                match params_ast {
-                    Ast::List(_, p) => {
-                        for param in p {
-                            if let Ast::Symbol(_, id) = param {
-                                params.push(id);
-                            } else if let Ast::Bind(_, id) = param {
-                                let name = lookup(id);
-                                params.push(intern(&format!("&{}", name)));
-                            } else {
-                                return Err(SelError::SyntaxError(
-                                    param.loc(),
-                                    "Expected identifier in defmacro parameters".into(),
-                                ));
-                            }
-                        }
-                    }
-                    Ast::Nil(_) => {}
-                    _ => {
-                        return Err(SelError::SyntaxError(
-                            s_loc,
-                            "Expected parameter list in defmacro".into(),
-                        ));
-                    }
-                }
-                let body: Vec<Ast> = iter.collect();
-                let Ast::Symbol(_, name_id) = name_ast else {
-                    return Err(SelError::SyntaxError(
-                        s_loc,
-                        "Expected identifier in defmacro".into(),
-                    ));
-                };
-                Ok(Ast::DefMacro(
-                    s_loc,
-                    name_id,
-                    Box::new(Ast::Lambda(s_loc, params, body)),
-                ))
-            }
-            "set!" => {
-                let mut iter = list.into_iter().skip(1);
-                let Some(Ast::Symbol(_, name_id)) = iter.next() else {
-                    return Err(SelError::SyntaxError(
-                        s_loc,
-                        "Expected identifier in set!".into(),
-                    ));
-                };
-                let value_ast = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Expected expression in set!".into())
-                })?;
-                Ok(Ast::Set(s_loc, name_id, Box::new(value_ast)))
-            }
-            "let" => {
-                let mut iter = list.into_iter().skip(1);
-                let bindings_ast = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Expected bindings in let".into())
-                })?;
-                let mut bindings = Vec::new();
-                match bindings_ast {
-                    Ast::List(loc, b) => {
-                        for bind in b {
-                            if let Ast::List(loc, mut pair) = bind {
-                                if pair.len() != 2 {
-                                    return Err(SelError::SyntaxError(
-                                        loc,
-                                        "Invalid binding pair in let".into(),
-                                    ));
-                                }
-                                let val = pair.pop().unwrap();
-                                let name = pair.pop().unwrap();
-                                if let Ast::Symbol(_, name_id) = name {
-                                    bindings.push((name_id, val));
-                                } else {
-                                    return Err(SelError::SyntaxError(
-                                        loc,
-                                        "Expected identifier in let binding".into(),
-                                    ));
-                                }
-                            } else {
-                                return Err(SelError::SyntaxError(
-                                    loc,
-                                    "Expected binding pair in let".into(),
-                                ));
-                            }
-                        }
-                    }
-                    Ast::Nil(_) => {}
-                    _ => {
-                        return Err(SelError::SyntaxError(
-                            s_loc,
-                            "Expected binding list in let".into(),
-                        ));
-                    }
-                }
-                let body = iter.collect();
-                Ok(Ast::Let(s_loc, bindings, body))
-            }
-            "quote" => {
-                let mut iter = list.into_iter().skip(1);
-                let expr = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Expected expression in quote".into())
-                })?;
-                Ok(Ast::Quote(s_loc, Box::new(expr)))
-            }
-            "quasiquote" => {
-                let mut iter = list.into_iter().skip(1);
-                let expr = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Expected expression in quasiquote".into())
-                })?;
-                Ok(Ast::Quasiquote(s_loc, Box::new(expr)))
-            }
-            "and" => {
-                let iter = list.into_iter().skip(1);
-                Ok(Ast::And(s_loc, iter.collect()))
-            }
-            "or" => {
-                let iter = list.into_iter().skip(1);
-                Ok(Ast::Or(s_loc, iter.collect()))
-            }
-            "match" => {
-                let mut iter = list.into_iter().skip(1);
-                let target = iter.next().ok_or_else(|| {
-                    SelError::SyntaxError(s_loc, "Expected target expression in match".into())
-                })?;
-                let mut clauses = Vec::new();
-                for clause_ast in iter {
-                    clauses.push(parse_match_clause(clause_ast)?);
-                }
-                if clauses.is_empty() {
-                    return Err(SelError::SyntaxError(
-                        s_loc,
-                        "Expected at least one clause in match".into(),
-                    ));
-                }
-                Ok(Ast::Match(s_loc, Box::new(target), clauses))
-            }
-            _ => Ok(Ast::List(loc, list)),
-        }
-    } else {
-        Ok(Ast::List(loc, list))
-    }
+struct FnClause {
+    loc: Loc,
+    is_pub: bool,
+    name: u32,
+    patterns: Vec<Pattern>,
+    guard: Option<Ast>,
+    body: Ast,
 }
 
-pub fn parse_all(line: &str, file_id: u32, diags: &mut Vec<SelError>) -> Vec<Ast> {
-    let mut lex = Lexer::new(line, file_id);
+fn tokenize_source(
+    source: &str,
+    file_id: u32,
+) -> (Vec<Token>, Vec<Loc>, HashSet<usize>) {
+    let mut line_starts = vec![0];
+    for (idx, b) in source.bytes().enumerate() {
+        if b == b'\n' {
+            line_starts.push(idx + 1);
+        }
+    }
+
+    let calc_loc = |byte_offset: usize, byte_len: usize| -> Loc {
+        let line_idx = match line_starts.binary_search(&byte_offset) {
+            Ok(idx) => idx,
+            Err(idx) => idx.saturating_sub(1),
+        };
+        let line = (line_idx + 1) as u32;
+        let line_start = line_starts[line_idx];
+        let col = if byte_offset >= line_start && byte_offset <= source.len() {
+            (source[line_start..byte_offset].chars().count() + 1) as u32
+        } else {
+            1
+        };
+        Loc::new(file_id, line, col, byte_offset as u32, byte_len as u32)
+    };
+
+    // 1. Scan for `:'...'` without changing total byte length or line structure
+    let mut escaped_spans: Vec<(usize, usize, String)> = Vec::new();
+    let bytes = source.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    let mut in_str = false;
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
+
+    while i < len {
+        let b = bytes[i];
+        if in_str {
+            if b == b'\\' && i + 1 < len {
+                i += 2;
+            } else {
+                if b == b'"' {
+                    in_str = false;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        if in_line_comment {
+            if b == b'\n' {
+                in_line_comment = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_block_comment {
+            if b == b'*' && i + 1 < len && bytes[i + 1] == b'/' {
+                in_block_comment = false;
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+
+        if b == b'/' && i + 1 < len && bytes[i + 1] == b'/' {
+            in_line_comment = true;
+            i += 2;
+            continue;
+        }
+        if b == b'/' && i + 1 < len && bytes[i + 1] == b'*' {
+            in_block_comment = true;
+            i += 2;
+            continue;
+        }
+        if b == b'"' {
+            in_str = true;
+            i += 1;
+            continue;
+        }
+
+        if b == b':' && i + 1 < len && bytes[i + 1] == b'\'' {
+            let start = i;
+            let mut j = i + 2;
+            let mut name = String::new();
+            let mut closed = false;
+            while j < len {
+                if bytes[j] == b'\\' && j + 1 < len {
+                    name.push(bytes[j + 1] as char);
+                    j += 2;
+                } else if bytes[j] == b'\'' {
+                    closed = true;
+                    j += 1;
+                    break;
+                } else if bytes[j] == b'\n' {
+                    break;
+                } else {
+                    name.push(bytes[j] as char);
+                    j += 1;
+                }
+            }
+            if closed {
+                escaped_spans.push((start, j, name));
+                i = j;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    // 2. Build sanitized string where each `:'...'` span is replaced by ASCII `_` repeated (j - start) times.
+    // This preserves exact byte lengths, offsets, and line/column positions.
+    let mut sanitized = String::with_capacity(len);
+    let mut last_end = 0;
+    use std::collections::HashMap;
+    let mut escaped_by_start: HashMap<usize, (usize, String)> = HashMap::new();
+
+    for (start, end, name) in escaped_spans {
+        sanitized.push_str(&source[last_end..start]);
+        let span_len = end - start;
+        for _ in 0..span_len {
+            sanitized.push('_');
+        }
+        escaped_by_start.insert(start, (end, name));
+        last_end = end;
+    }
+    sanitized.push_str(&source[last_end..]);
+
+    // 3. Single-pass lexing with Lexer over sanitized source
+    let mut lexer = Lexer::new(&sanitized).with_keywords(KEYWORDS);
     let mut tokens = Vec::new();
+    let mut token_locs = Vec::new();
+    let mut escaped_tokens = HashSet::new();
+
+    let s_bytes = sanitized.as_bytes();
+    let s_len = s_bytes.len();
+    let mut cursor = 0;
+
     loop {
-        match lex.next_token() {
-            Ok(Some(t)) => tokens.push(t),
-            Ok(None) => break,
-            Err(e) => {
-                diags.push(e);
-            }
+        let mut tok = lexer.next();
+        if tok.is_eof() {
+            let eof_loc = calc_loc(source.len(), 0);
+            tokens.push(tok);
+            token_locs.push(eof_loc);
+            break;
         }
-    }
-    let mut pos = 0;
-    let mut asts = Vec::new();
-    while pos < tokens.len() {
-        match parse_expr(&tokens, &mut pos, diags) {
-            Ok(ast) => asts.push(ast),
-            Err(e) => {
-                diags.push(e);
-                recover_parser_state(&tokens, &mut pos);
-            }
-        }
-    }
-    asts
-}
 
-pub fn parse_expr(tokens: &[Token], pos: &mut usize, diags: &mut Vec<SelError>) -> Result<Ast> {
-    if *pos >= tokens.len() {
-        return Err(SelError::UnexpectedEOF(
-            tokens.last().map(|t| t.loc).unwrap_or_default(),
-        ));
-    }
-    let t = &tokens[*pos];
-    *pos += 1;
-
-    match t.kind {
-        TokenKind::Bind => Err(SelError::SyntaxError(t.loc, "Unexpected `:=`".to_string())),
-        TokenKind::BackSlash => parse_lambda_shorthand(tokens, pos, t, diags),
-        TokenKind::OpenCurly => parse_record(tokens, pos, t, diags),
-        TokenKind::OpenParen => parse_list(tokens, pos, t, diags),
-        TokenKind::CloseParen => Err(SelError::SyntaxError(t.loc, "Unexpected `)`".to_string())),
-        TokenKind::CloseCurly => Err(SelError::SyntaxError(t.loc, "Unexpected `}`".to_string())),
-        TokenKind::Quote => {
-            let expr = parse_expr(tokens, pos, diags)?;
-            Ok(Ast::Quote(t.loc, Box::new(expr)))
-        }
-        TokenKind::Ampersand => {
-            let expr = parse_expr(tokens, pos, diags)?;
-            if let Ast::Symbol(loc, id) = expr {
-                return Ok(Ast::Bind(loc, id));
-            }
-            Err(SelError::SyntaxError(
-                t.loc,
-                "Expected identifier after &".into(),
-            ))
-        }
-        TokenKind::QuasiQuote => {
-            let expr = parse_expr(tokens, pos, diags)?;
-            Ok(Ast::Quasiquote(t.loc, Box::new(expr)))
-        }
-        TokenKind::Unquote => {
-            let expr = parse_expr(tokens, pos, diags)?;
-            Ok(Ast::Unquote(t.loc, Box::new(expr)))
-        }
-        TokenKind::UnquoteSplicing => {
-            let expr = parse_expr(tokens, pos, diags)?;
-            Ok(Ast::UnquoteSplicing(t.loc, Box::new(expr)))
-        }
-        TokenKind::Identifier => match t.source.as_str() {
-            "nil" => Ok(Ast::Nil(t.loc)),
-            ":private" => Ok(Ast::VisibilityDirective(t.loc, false)),
-            ":public" => Ok(Ast::VisibilityDirective(t.loc, true)),
-            _ => {
-                if let Some(tb) = tokens.get(*pos)
-                    && tb.kind == TokenKind::Bind
-                {
-                    *pos += 1;
-                    let expr = parse_expr(tokens, pos, diags)?;
-                    Ok(Ast::Define(t.loc, intern(&t.source), Box::new(expr)))
-                } else {
-                    Ok(Ast::Symbol(t.loc, intern(&t.source)))
-                }
-            }
-        },
-        TokenKind::Number(base) => {
-            let s = match base {
-                NumberBase::X => t.source.trim_start_matches("0x").trim_start_matches("0X"),
-                NumberBase::B => t.source.trim_start_matches("0b").trim_start_matches("0B"),
-                NumberBase::O => t.source.trim_start_matches("0o").trim_start_matches("0O"),
-                NumberBase::D => &t.source,
-            };
-
-            if let Ok(i) = i64::from_str_radix(s, base.radix()) {
-                return Ok(Ast::Integer(t.loc, i));
-            } else if base == NumberBase::D
-                && let Ok(f) = t.source.parse::<f64>()
-            {
-                return Ok(Ast::Float(t.loc, f));
-            }
-            Err(SelError::InvalidNumber(t.clone()))
-        }
-        TokenKind::String => Ok(Ast::String(t.loc, t.source.clone())),
-        TokenKind::Boolean => Ok(Ast::Boolean(t.loc, t.source == "#t" || t.source == "#true")),
-        TokenKind::Char(c) => Ok(Ast::Char(t.loc, c)),
-    }
-}
-
-fn parse_lambda_shorthand(
-    tokens: &[Token],
-    pos: &mut usize,
-    open_token: &Token,
-    diags: &mut Vec<SelError>,
-) -> Result<Ast> {
-    let args = parse_expr(tokens, pos, diags)?;
-    let body = parse_expr(tokens, pos, diags)?;
-    Ok(Ast::List(
-        open_token.loc,
-        vec![Ast::Symbol(open_token.loc, intern("lambda")), args, body],
-    ))
-}
-
-fn parse_record(
-    tokens: &[Token],
-    pos: &mut usize,
-    open_token: &Token,
-    diags: &mut Vec<SelError>,
-) -> Result<Ast> {
-    let mut record = Vec::new();
-    while *pos < tokens.len() && tokens[*pos].kind != TokenKind::CloseCurly {
-        let sym_expr = match parse_expr(tokens, pos, diags) {
-            Ok(ast) => ast,
-            Err(e) => {
-                diags.push(e);
-                recover_parser_state(tokens, pos);
+        // Advance cursor to the start of this token by skipping whitespace & comments
+        while cursor < s_len {
+            if s_bytes[cursor].is_ascii_whitespace() {
+                cursor += 1;
                 continue;
             }
-        };
-        let sym = match sym_expr {
-            Ast::Symbol(_, sym) => sym,
-            ast => {
-                diags.push(SelError::SyntaxError(
-                    ast.loc(),
-                    format!("Expected identifier-value pair in records found {ast}"),
+            if s_bytes[cursor] == b'/' && cursor + 1 < s_len && s_bytes[cursor + 1] == b'/' {
+                cursor += 2;
+                while cursor < s_len && s_bytes[cursor] != b'\n' {
+                    cursor += 1;
+                }
+                continue;
+            }
+            if s_bytes[cursor] == b'/' && cursor + 1 < s_len && s_bytes[cursor + 1] == b'*' {
+                cursor += 2;
+                while cursor + 1 < s_len && !(s_bytes[cursor] == b'*' && s_bytes[cursor + 1] == b'/') {
+                    cursor += 1;
+                }
+                if cursor + 1 < s_len {
+                    cursor += 2;
+                }
+                continue;
+            }
+            if cursor == 0 && s_bytes[0] == b'#' && s_len > 1 && s_bytes[1] == b'!' {
+                while cursor < s_len && s_bytes[cursor] != b'\n' {
+                    cursor += 1;
+                }
+                continue;
+            }
+            break;
+        }
+
+        let tok_start = cursor;
+        let tok_len = tok.source().len();
+        cursor += tok_len;
+
+        if let Some((_esc_end, orig_name)) = escaped_by_start.get(&tok_start) {
+            escaped_tokens.insert(tokens.len());
+            tok = Token::new(TokenKind::Identifier, tok.loc, orig_name.as_str().into());
+        }
+
+        let full_loc = calc_loc(tok_start, tok_len);
+        tokens.push(tok);
+        token_locs.push(full_loc);
+    }
+
+    (tokens, token_locs, escaped_tokens)
+}
+
+fn lower_clause_group(clauses: Vec<FnClause>) -> Result<Ast> {
+    let first = &clauses[0];
+    let is_pub = first.is_pub;
+    let name = first.name;
+    let loc = first.loc;
+
+    for clause in clauses.iter().skip(1) {
+        if clause.is_pub {
+            return Err(SelError::SyntaxError(
+                clause.loc,
+                format!(
+                    "`pub` modifier can only be placed on the first clause of function `{}`",
+                    lookup(name)
+                ),
+            ));
+        }
+    }
+
+    let def_ast = if clauses.len() == 1 && clauses[0].patterns.is_empty() {
+        Ast::Define(loc, name, Box::new(clauses.into_iter().next().unwrap().body))
+    } else if clauses.len() == 1
+        && clauses[0].guard.is_none()
+        && clauses[0].patterns.iter().all(|p| matches!(p, Pattern::Variable(..)))
+    {
+        let clause = clauses.into_iter().next().unwrap();
+        let params: Vec<u32> = clause
+            .patterns
+            .into_iter()
+            .map(|p| match p {
+                Pattern::Variable(_, id) => id,
+                _ => unreachable!(),
+            })
+            .collect();
+        let lambda = Ast::Lambda(loc, params, vec![clause.body]);
+        Ast::Define(loc, name, Box::new(lambda))
+    } else {
+        let arity = first.patterns.len();
+        let mut match_clauses = Vec::new();
+
+        for clause in clauses {
+            if clause.patterns.len() != arity {
+                return Err(SelError::SyntaxError(
+                    clause.loc,
+                    format!(
+                        "Clause for function `{}` has arity {}, expected {}",
+                        lookup(name),
+                        clause.patterns.len(),
+                        arity
+                    ),
                 ));
-                recover_parser_state(tokens, pos);
-                continue;
             }
-        };
-        let v_expr = match parse_expr(tokens, pos, diags) {
-            Ok(ast) => ast,
-            Err(e) => {
-                diags.push(e);
-                recover_parser_state(tokens, pos);
-                continue;
-            }
-        };
-        record.push((sym, v_expr));
-    }
-    if *pos >= tokens.len() {
-        return Err(SelError::SyntaxError(
-            open_token.loc,
-            "Missing closing curly brace".into(),
-        ));
-    }
-    *pos += 1; // consume '}'
-    Ok(Ast::Record(open_token.loc, record))
-}
+            let pat = Pattern::List(clause.loc, clause.patterns);
+            match_clauses.push(MatchClause {
+                loc: clause.loc,
+                pattern: pat,
+                guard: clause.guard,
+                body: vec![clause.body],
+            });
+        }
 
-fn parse_list(
-    tokens: &[Token],
-    pos: &mut usize,
-    open_token: &Token,
-    diags: &mut Vec<SelError>,
-) -> Result<Ast> {
-    let list = parse_list_expr(tokens, pos, open_token, diags)?;
-    Ok(Ast::List(open_token.loc, list))
-}
+        let mut arg_ids = Vec::with_capacity(arity);
+        let mut arg_asts = Vec::with_capacity(arity);
+        let clean_name = lookup(name).replace(['-', ':', '\''], "_");
+        for i in 0..arity {
+            let arg_sym = intern(&format!("__sel_arg_{}_{}", clean_name, i));
+            arg_ids.push(arg_sym);
+            arg_asts.push(Ast::Symbol(loc, arg_sym));
+        }
 
-fn parse_list_expr(
-    tokens: &[Token],
-    pos: &mut usize,
-    open_token: &Token,
-    diags: &mut Vec<SelError>,
-) -> Result<Vec<Ast>> {
-    let mut list = Vec::new();
-    while *pos < tokens.len() && tokens[*pos].kind != TokenKind::CloseParen {
-        match parse_expr(tokens, pos, diags) {
-            Ok(ast) => list.push(ast),
-            Err(e) => {
-                diags.push(e);
-                recover_parser_state(tokens, pos);
-            }
-        }
-    }
-    if *pos >= tokens.len() {
-        return Err(SelError::SyntaxError(
-            open_token.loc,
-            "Missing closing parenthesis".into(),
-        ));
-    }
-    *pos += 1;
-    Ok(list)
-}
+        let mut list_items = vec![Ast::Symbol(loc, intern("list"))];
+        list_items.extend(arg_asts);
+        let target = Ast::List(loc, list_items);
+        let match_ast = Ast::Match(loc, Box::new(target), match_clauses);
+        let lambda = Ast::Lambda(loc, arg_ids, vec![match_ast]);
+        Ast::Define(loc, name, Box::new(lambda))
+    };
 
-fn recover_parser_state(tokens: &[Token], pos: &mut usize) {
-    let mut depth = 0;
-    while *pos < tokens.len() {
-        let t = &tokens[*pos];
-        match t.kind {
-            TokenKind::OpenParen | TokenKind::OpenCurly => {
-                depth += 1;
-                *pos += 1;
-            }
-            TokenKind::CloseParen | TokenKind::CloseCurly => {
-                if depth == 0 {
-                    break;
-                }
-                depth -= 1;
-                *pos += 1;
-            }
-            _ => {
-                if depth == 0 {
-                    break;
-                }
-                *pos += 1;
-            }
-        }
-    }
-}
-
-pub fn resolve_ast(ast: Ast) -> Result<Ast> {
-    match ast {
-        Ast::List(loc, list) => {
-            if list.is_empty() {
-                return Ok(Ast::Nil(loc));
-            }
-            if let Some(Ast::Symbol(_, sym_id)) = list.first() {
-                let s = lookup(*sym_id);
-                if s == "match" || s == "try" {
-                    let opt_ast = optimize_ast(list, loc)?;
-                    return resolve_ast(opt_ast);
-                }
-            }
-            let mut resolved_list = Vec::with_capacity(list.len());
-            for item in list {
-                resolved_list.push(resolve_ast(item)?);
-            }
-            optimize_ast(resolved_list, loc)
-        }
-        Ast::Quasiquote(loc, expr) => {
-            Ok(Ast::Quasiquote(loc, Box::new(resolve_quasiquote(*expr)?)))
-        }
-        Ast::Unquote(loc, expr) => Ok(Ast::Unquote(loc, Box::new(resolve_ast(*expr)?))),
-        Ast::UnquoteSplicing(loc, expr) => {
-            Ok(Ast::UnquoteSplicing(loc, Box::new(resolve_ast(*expr)?)))
-        }
-        Ast::Record(loc, fields) => {
-            let mut resolved_fields = Vec::with_capacity(fields.len());
-            for (k, v) in fields {
-                resolved_fields.push((k, resolve_ast(v)?));
-            }
-            Ok(Ast::Record(loc, resolved_fields))
-        }
-        Ast::Define(loc, id, expr) => Ok(Ast::Define(loc, id, Box::new(resolve_ast(*expr)?))),
-        Ast::Set(loc, id, expr) => Ok(Ast::Set(loc, id, Box::new(resolve_ast(*expr)?))),
-        Ast::Let(loc, bindings, body) => {
-            let mut resolved_bindings = Vec::with_capacity(bindings.len());
-            for (id, val) in bindings {
-                resolved_bindings.push((id, resolve_ast(val)?));
-            }
-            let mut resolved_body = Vec::with_capacity(body.len());
-            for expr in body {
-                resolved_body.push(resolve_ast(expr)?);
-            }
-            Ok(Ast::Let(loc, resolved_bindings, resolved_body))
-        }
-        Ast::When(loc, cond, body) => {
-            let resolved_cond = resolve_ast(*cond)?;
-            let mut resolved_body = Vec::with_capacity(body.len());
-            for expr in body {
-                resolved_body.push(resolve_ast(expr)?);
-            }
-            Ok(Ast::When(loc, Box::new(resolved_cond), resolved_body))
-        }
-        Ast::Unless(loc, cond, false_branch, true_branch) => {
-            let resolved_cond = resolve_ast(*cond)?;
-            let resolved_false = resolve_ast(*false_branch)?;
-            let resolved_true = match true_branch {
-                Some(b) => Some(Box::new(resolve_ast(*b)?)),
-                None => None,
-            };
-            Ok(Ast::Unless(
-                loc,
-                Box::new(resolved_cond),
-                Box::new(resolved_false),
-                resolved_true,
-            ))
-        }
-        Ast::If(loc, cond, true_branch, false_branch) => {
-            let resolved_cond = resolve_ast(*cond)?;
-            let resolved_true = resolve_ast(*true_branch)?;
-            let resolved_false = match false_branch {
-                Some(b) => Some(Box::new(resolve_ast(*b)?)),
-                None => None,
-            };
-            Ok(Ast::If(
-                loc,
-                Box::new(resolved_cond),
-                Box::new(resolved_true),
-                resolved_false,
-            ))
-        }
-        Ast::Try(loc, body, err_var, catch_body) => {
-            let resolved_body = resolve_ast(*body)?;
-            let mut resolved_catch = Vec::with_capacity(catch_body.len());
-            for expr in catch_body {
-                resolved_catch.push(resolve_ast(expr)?);
-            }
-            Ok(Ast::Try(
-                loc,
-                Box::new(resolved_body),
-                err_var,
-                resolved_catch,
-            ))
-        }
-        Ast::Lambda(loc, params, body) => {
-            let mut resolved_body = Vec::with_capacity(body.len());
-            for expr in body {
-                resolved_body.push(resolve_ast(expr)?);
-            }
-            Ok(Ast::Lambda(loc, params, resolved_body))
-        }
-        Ast::DefMacro(loc, id, expr) => Ok(Ast::DefMacro(loc, id, Box::new(resolve_ast(*expr)?))),
-        Ast::Begin(loc, body) => {
-            let mut resolved_body = Vec::with_capacity(body.len());
-            for expr in body {
-                resolved_body.push(resolve_ast(expr)?);
-            }
-            Ok(Ast::Begin(loc, resolved_body))
-        }
-        Ast::Cond(loc, branches) => {
-            let mut resolved_branches = Vec::with_capacity(branches.len());
-            for (c, e) in branches {
-                resolved_branches.push((resolve_ast(c)?, resolve_ast(e)?));
-            }
-            Ok(Ast::Cond(loc, resolved_branches))
-        }
-        Ast::Yield(loc, expr) => Ok(Ast::Yield(loc, Box::new(resolve_ast(*expr)?))),
-        Ast::CoResume(loc, co, arg) => Ok(Ast::CoResume(
+    if is_pub {
+        Ok(Ast::Begin(
             loc,
-            Box::new(resolve_ast(*co)?),
-            Box::new(resolve_ast(*arg)?),
-        )),
-        Ast::Load(loc, path) => Ok(Ast::Load(loc, Box::new(resolve_ast(*path)?))),
-        Ast::Match(loc, target, clauses) => {
-            let resolved_target = resolve_ast(*target)?;
-            let mut resolved_clauses = Vec::with_capacity(clauses.len());
-            for c in clauses {
-                let resolved_guard = match c.guard {
-                    Some(g) => Some(resolve_ast(g)?),
-                    None => None,
-                };
-                let mut resolved_body = Vec::with_capacity(c.body.len());
-                for b in c.body {
-                    resolved_body.push(resolve_ast(b)?);
-                }
-                resolved_clauses.push(MatchClause {
-                    loc: c.loc,
-                    pattern: c.pattern,
-                    guard: resolved_guard,
-                    body: resolved_body,
-                });
-            }
-            Ok(Ast::Match(loc, Box::new(resolved_target), resolved_clauses))
-        }
-        other => Ok(other),
+            vec![
+                Ast::VisibilityDirective(loc, true),
+                def_ast,
+                Ast::VisibilityDirective(loc, false),
+            ],
+        ))
+    } else {
+        Ok(def_ast)
     }
 }
 
-pub fn parse_pattern(ast: Ast) -> Result<Pattern> {
-    match ast {
-        Ast::Symbol(loc, id) => {
-            let name = lookup(id);
-            if name == "_" {
-                Ok(Pattern::Wildcard(loc))
-            } else if name == "nil" {
-                Ok(Pattern::Literal(loc, Box::new(Ast::Nil(loc))))
+pub struct AltParser<'a> {
+    tokens: Vec<Token>,
+    token_locs: Vec<Loc>,
+    escaped_tokens: HashSet<usize>,
+    pos: usize,
+    _file_id: u32,
+    _source: &'a str,
+    defined_fns_stack: Vec<HashMap<u32, (Loc, bool)>>,
+}
+
+impl<'a> AltParser<'a> {
+    pub fn new(source: &'a str, file_id: u32) -> Self {
+        let (tokens, token_locs, escaped_tokens) = tokenize_source(source, file_id);
+
+        Self {
+            tokens,
+            token_locs,
+            escaped_tokens,
+            pos: 0,
+            _file_id: file_id,
+            _source: source,
+            defined_fns_stack: vec![HashMap::new()],
+        }
+    }
+
+    fn enter_scope(&mut self) {
+        self.defined_fns_stack.push(HashMap::new());
+    }
+
+    fn exit_scope(&mut self) {
+        self.defined_fns_stack.pop();
+    }
+
+    fn record_definition(&mut self, name: u32, loc: Loc, is_fn: bool) -> Result<()> {
+        let scope = self
+            .defined_fns_stack
+            .last_mut()
+            .expect("scope stack should not be empty");
+
+        if let Some(&(prev_loc, prev_is_fn)) = scope.get(&name) {
+            if is_fn && prev_is_fn {
+                return Err(SelError::SyntaxError(
+                    loc,
+                    format!(
+                        "Clauses for function `{}` must be consecutive; previous clause was defined at line {}",
+                        lookup(name),
+                        prev_loc.line
+                    ),
+                ));
+            } else if is_fn && !prev_is_fn {
+                return Err(SelError::SyntaxError(
+                    loc,
+                    format!(
+                        "Function `{}` conflicts with previous variable definition at line {}",
+                        lookup(name),
+                        prev_loc.line
+                    ),
+                ));
+            } else if !is_fn && prev_is_fn {
+                return Err(SelError::SyntaxError(
+                    loc,
+                    format!(
+                        "Definition of variable `{}` conflicts with previous function clause at line {}",
+                        lookup(name),
+                        prev_loc.line
+                    ),
+                ));
+            }
+        } else {
+            scope.insert(name, (loc, is_fn));
+        }
+        Ok(())
+    }
+
+    fn peek(&self) -> &Token {
+        if self.pos >= self.tokens.len() {
+            self.tokens.last().unwrap()
+        } else {
+            &self.tokens[self.pos]
+        }
+    }
+
+    fn peek_ahead(&self, offset: usize) -> &Token {
+        let idx = self.pos + offset;
+        if idx >= self.tokens.len() {
+            self.tokens.last().unwrap()
+        } else {
+            &self.tokens[idx]
+        }
+    }
+
+    fn advance(&mut self) -> Token {
+        if self.pos < self.tokens.len() {
+            let tok = self.tokens[self.pos].clone();
+            self.pos += 1;
+            tok
+        } else {
+            self.tokens.last().cloned().unwrap()
+        }
+    }
+
+    fn current_loc(&self) -> Loc {
+        if self.pos < self.token_locs.len() {
+            self.token_locs[self.pos]
+        } else {
+            self.token_locs.last().copied().unwrap_or_default()
+        }
+    }
+
+    fn at_eof(&self) -> bool {
+        self.peek().is_eof()
+    }
+
+    fn match_keyword(&self, kw: &str) -> bool {
+        let tok = self.peek();
+        (tok.kind == TokenKind::Keyword || tok.kind == TokenKind::Identifier) && tok.source() == kw
+    }
+
+    fn eat_keyword(&mut self, kw: &str) -> bool {
+        if self.match_keyword(kw) {
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn expect_keyword(&mut self, kw: &str) -> Result<Loc> {
+        let loc = self.current_loc();
+        if self.eat_keyword(kw) {
+            Ok(loc)
+        } else {
+            Err(SelError::SyntaxError(
+                loc,
+                format!("Expected keyword `{kw}`, found `{}`", self.peek().source()),
+            ))
+        }
+    }
+
+    fn eat_token(&mut self, kind: TokenKind) -> bool {
+        if self.peek().kind == kind {
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn expect_token(&mut self, kind: TokenKind, expected_desc: &str) -> Result<Token> {
+        let tok = self.peek();
+        if tok.kind == kind {
+            Ok(self.advance())
+        } else {
+            Err(SelError::SyntaxError(
+                self.current_loc(),
+                format!("Expected {expected_desc}, found `{}`", tok.source()),
+            ))
+        }
+    }
+
+    fn skip_semicolons(&mut self) {
+        while self.peek().kind == TokenKind::SemiColon {
+            self.advance();
+        }
+    }
+
+    fn is_at_def_clause(&self) -> bool {
+        let mut idx = self.pos;
+        if idx >= self.tokens.len() {
+            return false;
+        }
+        if (self.tokens[idx].kind == TokenKind::Keyword || self.tokens[idx].kind == TokenKind::Identifier)
+            && self.tokens[idx].source() == "pub"
+        {
+            idx += 1;
+        }
+        if idx >= self.tokens.len() {
+            return false;
+        }
+        let first = &self.tokens[idx];
+        if first.kind != TokenKind::Identifier || KEYWORDS.contains(&first.source()) {
+            return false;
+        }
+
+        let first_line = self.token_locs[idx].line;
+        let mut depth: usize = 0;
+        let mut i = idx + 1;
+        let mut seen_when = false;
+
+        while i < self.tokens.len() {
+            let tok = &self.tokens[i];
+            let tok_line = self.token_locs[i].line;
+
+            if tok.kind == TokenKind::EOF || tok.kind == TokenKind::SemiColon {
+                break;
+            }
+
+            // A function definition cannot have `(` or `.` immediately following the identifier
+            if i == idx + 1 && (tok.kind == TokenKind::OpenParen || tok.kind == TokenKind::Dot) {
+                return false;
+            }
+
+            // Cannot cross onto a new line before seeing `when` or `:=` unless inside brackets
+            if depth == 0 && !seen_when && tok_line > first_line {
+                break;
+            }
+
+            if tok.kind == TokenKind::Keyword && tok.source() == "when" && depth == 0 {
+                seen_when = true;
+            }
+
+            match tok.kind {
+                TokenKind::OpenParen | TokenKind::OpenBracket | TokenKind::OpenCurly => {
+                    depth += 1;
+                }
+                TokenKind::CloseParen | TokenKind::CloseBracket | TokenKind::CloseCurly => {
+                    depth = depth.saturating_sub(1);
+                }
+                TokenKind::Assign if depth == 0 => {
+                    return true;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
+    fn parse_def_clause(&mut self) -> Result<FnClause> {
+        let start_loc = self.current_loc();
+        let is_pub = self.eat_keyword("pub");
+        let name_tok = self.expect_token(TokenKind::Identifier, "definition name")?;
+        let name = intern(name_tok.source());
+
+        let mut patterns = Vec::new();
+        while self.peek().kind != TokenKind::Assign && !self.match_keyword("when") && !self.at_eof() {
+            patterns.push(self.parse_pattern()?);
+        }
+
+        let guard = if self.match_keyword("when") {
+            self.advance();
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+
+        self.expect_token(TokenKind::Assign, "`:=` in definition")?;
+        let body = self.parse_expr()?;
+
+        Ok(FnClause {
+            loc: start_loc,
+            is_pub,
+            name,
+            patterns,
+            guard,
+            body,
+        })
+    }
+
+    pub fn parse_program(&mut self, diags: &mut Vec<SelError>) -> Vec<Ast> {
+        let mut asts = Vec::new();
+        self.skip_semicolons();
+        while !self.at_eof() {
+            match self.parse_statement() {
+                Ok(ast) => asts.push(ast),
+                Err(err) => {
+                    diags.push(err);
+                    self.recover();
+                }
+            }
+            self.skip_semicolons();
+        }
+        asts
+    }
+
+    fn recover(&mut self) {
+        let current_line = self.current_loc().line;
+        while !self.at_eof() {
+            let tok = self.peek();
+            if tok.kind == TokenKind::SemiColon {
+                self.advance();
+                break;
+            }
+            if self.match_keyword("pub")
+                || self.match_keyword("import")
+                || self.match_keyword("let")
+                || self.match_keyword("do")
+                || self.match_keyword("end")
+            {
+                break;
+            }
+            let tok_loc = self.current_loc();
+            if tok_loc.line > current_line && self.is_at_def_clause() {
+                break;
+            }
+            self.advance();
+        }
+    }
+
+    pub fn parse_statement(&mut self) -> Result<Ast> {
+        if self.is_at_def_clause() {
+            let first = self.parse_def_clause()?;
+            let mut clauses = vec![first];
+            self.skip_semicolons();
+
+            let fn_name = clauses[0].name;
+            let fn_arity = clauses[0].patterns.len();
+            let is_fn = fn_arity > 0;
+
+            self.record_definition(fn_name, clauses[0].loc, is_fn)?;
+
+            if fn_arity > 0 {
+                while self.is_at_def_clause() {
+                    let mut next_idx = self.pos;
+                    if (self.tokens[next_idx].kind == TokenKind::Keyword
+                        || self.tokens[next_idx].kind == TokenKind::Identifier)
+                        && self.tokens[next_idx].source() == "pub"
+                    {
+                        next_idx += 1;
+                    }
+                    if next_idx < self.tokens.len()
+                        && intern(self.tokens[next_idx].source()) == fn_name
+                    {
+                        let next_clause = self.parse_def_clause()?;
+                        clauses.push(next_clause);
+                        self.skip_semicolons();
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            lower_clause_group(clauses)
+        } else {
+            self.parse_item()
+        }
+    }
+
+    fn parse_item(&mut self) -> Result<Ast> {
+        let is_pub = self.eat_keyword("pub");
+        let start_loc = self.current_loc();
+
+        if self.match_keyword("import") {
+            let import_ast = self.parse_import(start_loc)?;
+            return if is_pub {
+                Ok(Ast::Begin(
+                    start_loc,
+                    vec![
+                        Ast::VisibilityDirective(start_loc, true),
+                        import_ast,
+                        Ast::VisibilityDirective(start_loc, false),
+                    ],
+                ))
             } else {
-                Ok(Pattern::Variable(loc, id))
-            }
+                Ok(import_ast)
+            };
         }
-        Ast::Bind(loc, id) => {
-            let name = lookup(id);
-            if name == "_" {
-                Ok(Pattern::Wildcard(loc))
+
+        if is_pub {
+            return Err(SelError::SyntaxError(
+                start_loc,
+                "`pub` can only precede a definition or import".into(),
+            ));
+        }
+
+        self.parse_expr()
+    }
+
+    fn parse_import(&mut self, loc: Loc) -> Result<Ast> {
+        self.expect_keyword("import")?;
+        let name_tok = self.peek().clone();
+        let mod_id = if name_tok.kind == TokenKind::StringLiteral {
+            self.advance();
+            intern(&name_tok.unescape())
+        } else if name_tok.kind == TokenKind::Identifier {
+            self.advance();
+            let mut s = name_tok.source().to_string();
+            while self.peek().kind == TokenKind::Slash {
+                self.advance();
+                let next = self.expect_token(TokenKind::Identifier, "module subpath identifier")?;
+                s.push('/');
+                s.push_str(next.source());
+            }
+            intern(&s)
+        } else {
+            return Err(SelError::SyntaxError(
+                loc,
+                format!("Expected module name in import, found `{}`", name_tok.source()),
+            ));
+        };
+
+        let alias = if self.eat_keyword("as") {
+            let alias_tok = self.expect_token(TokenKind::Identifier, "alias identifier")?;
+            Some(intern(alias_tok.source()))
+        } else {
+            None
+        };
+
+        Ok(Ast::Import(loc, mod_id, alias))
+    }
+
+    pub fn parse_expr(&mut self) -> Result<Ast> {
+        self.parse_logical_or()
+    }
+
+    fn parse_logical_or(&mut self) -> Result<Ast> {
+        let mut left = self.parse_logical_and()?;
+        while self.peek().kind == TokenKind::DoublePipe {
+            let loc = self.current_loc();
+            self.advance();
+            let right = self.parse_logical_and()?;
+            left = Ast::Or(loc, vec![left, right]);
+        }
+        Ok(left)
+    }
+
+    fn parse_logical_and(&mut self) -> Result<Ast> {
+        let mut left = self.parse_equality()?;
+        while self.peek().kind == TokenKind::DoubleAmpersand {
+            let loc = self.current_loc();
+            self.advance();
+            let right = self.parse_equality()?;
+            left = Ast::And(loc, vec![left, right]);
+        }
+        Ok(left)
+    }
+
+    fn parse_equality(&mut self) -> Result<Ast> {
+        let mut left = self.parse_relational()?;
+        loop {
+            let kind = self.peek().kind;
+            if kind == TokenKind::EqEq {
+                let loc = self.current_loc();
+                self.advance();
+                let right = self.parse_relational()?;
+                left = Ast::List(loc, vec![Ast::Symbol(loc, intern("==")), left, right]);
+            } else if kind == TokenKind::NotEq {
+                let loc = self.current_loc();
+                self.advance();
+                let right = self.parse_relational()?;
+                let eq_ast = Ast::List(loc, vec![Ast::Symbol(loc, intern("==")), left, right]);
+                left = Ast::List(loc, vec![Ast::Symbol(loc, intern("not")), eq_ast]);
             } else {
-                Ok(Pattern::Variable(loc, id))
+                break;
             }
         }
-        Ast::Nil(loc) => Ok(Pattern::Literal(loc, Box::new(Ast::Nil(loc)))),
-        Ast::Integer(loc, i) => Ok(Pattern::Literal(loc, Box::new(Ast::Integer(loc, i)))),
-        Ast::Float(loc, f) => Ok(Pattern::Literal(loc, Box::new(Ast::Float(loc, f)))),
-        Ast::String(loc, s) => Ok(Pattern::Literal(loc, Box::new(Ast::String(loc, s)))),
-        Ast::Boolean(loc, b) => Ok(Pattern::Literal(loc, Box::new(Ast::Boolean(loc, b)))),
-        Ast::Char(loc, c) => Ok(Pattern::Literal(loc, Box::new(Ast::Char(loc, c)))),
-        Ast::Quote(loc, val) => Ok(Pattern::Literal(loc, Box::new(Ast::Quote(loc, val)))),
-        Ast::Record(loc, fields) => {
-            let mut parsed_fields = Vec::with_capacity(fields.len());
-            for (k, v_ast) in fields {
-                parsed_fields.push((k, parse_pattern(v_ast)?));
-            }
-            Ok(Pattern::Record(loc, parsed_fields))
+        Ok(left)
+    }
+
+    fn parse_relational(&mut self) -> Result<Ast> {
+        let mut left = self.parse_pipeline()?;
+        loop {
+            let kind = self.peek().kind;
+            let op_name = match kind {
+                TokenKind::Lt => "<",
+                TokenKind::LtEq => "<=",
+                TokenKind::Gt => ">",
+                TokenKind::GtEq => ">=",
+                _ => break,
+            };
+            let loc = self.current_loc();
+            self.advance();
+            let right = self.parse_pipeline()?;
+            left = Ast::List(loc, vec![Ast::Symbol(loc, intern(op_name)), left, right]);
         }
-        Ast::List(loc, items) => {
-            if items.is_empty() {
-                return Ok(Pattern::Literal(loc, Box::new(Ast::Nil(loc))));
+        Ok(left)
+    }
+
+    fn parse_pipeline(&mut self) -> Result<Ast> {
+        let mut left = self.parse_additive()?;
+
+        while self.peek().kind == TokenKind::Pipe && self.peek_ahead(1).kind == TokenKind::Gt {
+            let pipe_loc = self.current_loc();
+            let is_thread_last = self.peek_ahead(2).kind == TokenKind::Gt;
+            self.advance(); // Pipe '|'
+            self.advance(); // Gt '>'
+            if is_thread_last {
+                self.advance(); // Gt '>'
             }
-            let head_sym = if let Ast::Symbol(s_loc, id) = items[0] {
-                Some((s_loc, id))
+
+            let right = self.parse_additive()?;
+            let kind = if is_thread_last {
+                PipelineKind::ThreadLast
+            } else {
+                PipelineKind::ThreadFirst
+            };
+            left = Ast::Pipeline(pipe_loc, Box::new(left), Box::new(right), kind);
+        }
+
+        Ok(left)
+    }
+
+    fn parse_additive(&mut self) -> Result<Ast> {
+        let mut left = self.parse_multiplicative()?;
+        loop {
+            let kind = self.peek().kind;
+            let op_name = match kind {
+                TokenKind::Plus => "+",
+                TokenKind::Minus => "-",
+                _ => break,
+            };
+            let loc = self.current_loc();
+            self.advance();
+            let right = self.parse_multiplicative()?;
+            left = Ast::List(loc, vec![Ast::Symbol(loc, intern(op_name)), left, right]);
+        }
+        Ok(left)
+    }
+
+    fn parse_multiplicative(&mut self) -> Result<Ast> {
+        let mut left = self.parse_unary()?;
+        loop {
+            let kind = self.peek().kind;
+            let op_name = match kind {
+                TokenKind::Asterisk => "*",
+                TokenKind::Slash => "/",
+                TokenKind::Mod => "mod",
+                _ => break,
+            };
+            let loc = self.current_loc();
+            self.advance();
+            let right = self.parse_unary()?;
+            left = Ast::List(loc, vec![Ast::Symbol(loc, intern(op_name)), left, right]);
+        }
+        Ok(left)
+    }
+
+    fn parse_unary(&mut self) -> Result<Ast> {
+        let tok = self.peek();
+        let loc = self.current_loc();
+        if tok.kind == TokenKind::Minus {
+            self.advance();
+            let operand = self.parse_postfix()?;
+            Ok(Ast::List(
+                loc,
+                vec![Ast::Symbol(loc, intern("-")), Ast::Integer(loc, 0), operand],
+            ))
+        } else if tok.kind == TokenKind::Bang {
+            self.advance();
+            let operand = self.parse_postfix()?;
+            Ok(Ast::List(
+                loc,
+                vec![Ast::Symbol(loc, intern("not")), operand],
+            ))
+        } else {
+            self.parse_postfix()
+        }
+    }
+
+    fn parse_postfix(&mut self) -> Result<Ast> {
+        let mut expr = self.parse_primary()?;
+
+        loop {
+            let tok = self.peek();
+            let tok_loc = self.current_loc();
+            if tok.kind == TokenKind::OpenParen && tok_loc.line == expr.loc().line {
+                // Call: expr(arg1, arg2, ...)
+                let loc = self.current_loc();
+                self.advance();
+                let mut args = vec![expr];
+                if self.peek().kind != TokenKind::CloseParen {
+                    loop {
+                        args.push(self.parse_expr()?);
+                        if self.peek().kind == TokenKind::Comma {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                self.expect_token(TokenKind::CloseParen, "`)` after call arguments")?;
+                if let Ast::Symbol(_, sym_id) = &args[0] {
+                    let s = lookup(*sym_id);
+                    if s == "co_resume" || s == "co-resume" {
+                        if args.len() == 2 {
+                            let co = args.remove(1);
+                            expr = Ast::CoResume(loc, Box::new(co), Box::new(Ast::Nil(loc)));
+                            continue;
+                        } else if args.len() == 3 {
+                            let arg = args.remove(2);
+                            let co = args.remove(1);
+                            expr = Ast::CoResume(loc, Box::new(co), Box::new(arg));
+                            continue;
+                        }
+                    } else if s == "load" && args.len() == 2 {
+                        let path = args.remove(1);
+                        expr = Ast::Load(loc, Box::new(path));
+                        continue;
+                    }
+                }
+                expr = Ast::List(loc, args);
+            } else if tok.kind == TokenKind::Dot {
+                // Dot access: expr.field
+                let loc = self.current_loc();
+                self.advance();
+                let field_tok = self.expect_token(TokenKind::Identifier, "field name after `.`")?;
+                let field_sym = intern(field_tok.source());
+                expr = Ast::DotAccess(loc, Box::new(expr), field_sym);
+            } else {
+                break;
+            }
+        }
+
+        Ok(expr)
+    }
+
+    fn parse_primary(&mut self) -> Result<Ast> {
+        let loc = self.current_loc();
+
+        if self.match_keyword("if") {
+            return self.parse_if();
+        }
+        if self.match_keyword("match") {
+            return self.parse_match();
+        }
+        if self.match_keyword("let") {
+            return self.parse_let();
+        }
+        if self.match_keyword("do") {
+            return self.parse_do_block();
+        }
+        if self.match_keyword("try") {
+            return self.parse_try();
+        }
+        if self.match_keyword("yield") {
+            self.advance();
+            let val = self.parse_expr()?;
+            return Ok(Ast::Yield(loc, Box::new(val)));
+        }
+        if self.peek().kind == TokenKind::BackSlash {
+            return self.parse_lambda();
+        }
+
+        let tok = self.advance();
+        match tok.kind {
+            TokenKind::Number(base) => {
+                let s = tok.source();
+                if let Ok(i) = i64::from_str_radix(s, base.radix()) {
+                    Ok(Ast::Integer(loc, i))
+                } else if base == NumberBase::D && let Ok(f) = s.parse::<f64>() {
+                    Ok(Ast::Float(loc, f))
+                } else {
+                    Err(SelError::SyntaxError(loc, format!("Invalid number: {s}")))
+                }
+            }
+            TokenKind::RealNumber => {
+                let s = tok.source();
+                if let Ok(f) = s.parse::<f64>() {
+                    Ok(Ast::Float(loc, f))
+                } else {
+                    Err(SelError::SyntaxError(loc, format!("Invalid float: {s}")))
+                }
+            }
+            TokenKind::StringLiteral => Ok(Ast::String(loc, tok.unescape())),
+            TokenKind::CharacterLiteral => {
+                let s = tok.unescape();
+                let c = s.chars().next().unwrap_or('\0');
+                Ok(Ast::Char(loc, c))
+            }
+            TokenKind::Colon => {
+                // Atom literal: `:ident` -> 'ident
+                let ident_tok = self.expect_token(TokenKind::Identifier, "atom identifier after `:`")?;
+                let sym_ast = Ast::Symbol(loc, intern(ident_tok.source()));
+                Ok(Ast::Quote(loc, Box::new(sym_ast)))
+            }
+            TokenKind::OpenParen => {
+                let expr = self.parse_expr()?;
+                self.expect_token(TokenKind::CloseParen, "`)`")?;
+                Ok(expr)
+            }
+            TokenKind::OpenBracket => self.parse_list_literal(loc),
+            TokenKind::OpenCurly => self.parse_record_literal(loc),
+            TokenKind::Keyword | TokenKind::Identifier => {
+                match tok.source() {
+                    "true" => Ok(Ast::Boolean(loc, true)),
+                    "false" => Ok(Ast::Boolean(loc, false)),
+                    "nil" => Ok(Ast::Nil(loc)),
+                    name => Ok(Ast::Symbol(loc, intern(name))),
+                }
+            }
+            _ => Err(SelError::SyntaxError(
+                loc,
+                format!("Unexpected token in expression: `{}`", tok.source()),
+            )),
+        }
+    }
+
+    fn parse_lambda(&mut self) -> Result<Ast> {
+        let loc = self.current_loc();
+        self.expect_token(TokenKind::BackSlash, "`\\` for lambda")?;
+
+        let mut params = Vec::new();
+        while self.peek().kind == TokenKind::Identifier && !KEYWORDS.contains(&self.peek().source()) {
+            let p = self.advance();
+            params.push(intern(p.source()));
+        }
+
+        self.expect_token(TokenKind::Arrow, "`->` after lambda parameters")?;
+        let body = self.parse_expr()?;
+        Ok(Ast::Lambda(loc, params, vec![body]))
+    }
+
+    fn parse_if(&mut self) -> Result<Ast> {
+        let loc = self.current_loc();
+        self.expect_keyword("if")?;
+        let cond = self.parse_expr()?;
+        self.expect_keyword("then")?;
+        let then_branch = self.parse_expr()?;
+        let else_branch = if self.eat_keyword("else") {
+            Some(Box::new(self.parse_expr()?))
+        } else {
+            None
+        };
+        Ok(Ast::If(loc, Box::new(cond), Box::new(then_branch), else_branch))
+    }
+
+    fn parse_let(&mut self) -> Result<Ast> {
+        let loc = self.current_loc();
+        self.expect_keyword("let")?;
+
+        let mut bindings = Vec::new();
+        loop {
+            let var_tok = self.expect_token(TokenKind::Identifier, "variable name in let")?;
+            let var_id = intern(var_tok.source());
+
+            if self.peek().kind == TokenKind::Assign {
+                self.advance();
+            } else {
+                self.expect_token(TokenKind::Eq, "`=` or `:=` in let binding")?;
+            }
+
+            let val = self.parse_expr()?;
+            bindings.push((var_id, val));
+
+            if self.peek().kind == TokenKind::Comma {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        self.expect_keyword("in")?;
+        let body = self.parse_expr()?;
+        Ok(Ast::Let(loc, bindings, vec![body]))
+    }
+
+    fn parse_do_block(&mut self) -> Result<Ast> {
+        let loc = self.current_loc();
+        self.expect_keyword("do")?;
+        self.enter_scope();
+        let mut exprs = Vec::new();
+        self.skip_semicolons();
+
+        while !self.match_keyword("end") && !self.at_eof() {
+            let item = self.parse_statement();
+            match item {
+                Ok(stmt) => exprs.push(stmt),
+                Err(err) => {
+                    self.exit_scope();
+                    return Err(err);
+                }
+            }
+            self.skip_semicolons();
+        }
+
+        self.expect_keyword("end")?;
+        self.exit_scope();
+        Ok(Ast::Begin(loc, exprs))
+    }
+
+    fn parse_try(&mut self) -> Result<Ast> {
+        let loc = self.current_loc();
+        self.expect_keyword("try")?;
+        let body = self.parse_expr()?;
+        self.expect_keyword("catch")?;
+        let err_tok = self.expect_token(TokenKind::Identifier, "error variable after catch")?;
+        let err_id = intern(err_tok.source());
+        self.expect_token(TokenKind::Arrow, "`->` after catch variable")?;
+        let handler = self.parse_expr()?;
+        Ok(Ast::Try(loc, Box::new(body), err_id, vec![handler]))
+    }
+
+    fn parse_list_literal(&mut self, loc: Loc) -> Result<Ast> {
+        let mut elements = Vec::new();
+        let mut tail_expr = None;
+
+        if self.peek().kind != TokenKind::CloseBracket {
+            loop {
+                elements.push(self.parse_expr()?);
+                if self.peek().kind == TokenKind::Pipe {
+                    self.advance();
+                    tail_expr = Some(self.parse_expr()?);
+                    break;
+                }
+                if self.peek().kind == TokenKind::Comma {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+        self.expect_token(TokenKind::CloseBracket, "`]`")?;
+
+        if let Some(tail) = tail_expr {
+            // [a, b | rest] -> (cons a (cons b rest))
+            let mut result = tail;
+            for elem in elements.into_iter().rev() {
+                result = Ast::List(loc, vec![Ast::Symbol(loc, intern("cons")), elem, result]);
+            }
+            Ok(result)
+        } else {
+            let mut items = vec![Ast::Symbol(loc, intern("list"))];
+            items.extend(elements);
+            Ok(Ast::List(loc, items))
+        }
+    }
+
+    fn parse_record_literal(&mut self, loc: Loc) -> Result<Ast> {
+        let mut fields = Vec::new();
+        if self.peek().kind != TokenKind::CloseCurly {
+            loop {
+                let key_tok = if self.peek().kind == TokenKind::Colon {
+                    self.advance();
+                    self.expect_token(TokenKind::Identifier, "field name")?
+                } else {
+                    self.expect_token(TokenKind::Identifier, "field name")?
+                };
+                let key_id = intern(key_tok.source());
+
+                let val = if self.peek().kind == TokenKind::Colon || self.peek().kind == TokenKind::Eq {
+                    self.advance();
+                    self.parse_expr()?
+                } else if self.peek().kind == TokenKind::Comma || self.peek().kind == TokenKind::CloseCurly {
+                    // Punned field: `{ x }` -> `{ x: x }`
+                    Ast::Symbol(loc, key_id)
+                } else {
+                    self.parse_expr()?
+                };
+
+                fields.push((key_id, val));
+
+                if self.peek().kind == TokenKind::Comma {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+        self.expect_token(TokenKind::CloseCurly, "`}`")?;
+        Ok(Ast::Record(loc, fields))
+    }
+
+    fn parse_match(&mut self) -> Result<Ast> {
+        let loc = self.current_loc();
+        self.expect_keyword("match")?;
+        let target = self.parse_expr()?;
+        self.expect_keyword("with")?;
+
+        let mut clauses = Vec::new();
+        self.skip_semicolons();
+
+        let mut first = true;
+        while !self.at_eof() && !self.match_keyword("end") {
+            let has_pipe = self.eat_token(TokenKind::Pipe);
+            if !has_pipe && !first {
+                break;
+            }
+            if !has_pipe && !self.is_pattern_start() {
+                break;
+            }
+            first = false;
+
+            let clause_loc = self.current_loc();
+            let pat = self.parse_pattern()?;
+
+            let guard = if self.eat_keyword("when") {
+                Some(self.parse_expr()?)
             } else {
                 None
             };
-            if let Some((s_loc, id)) = head_sym {
-                match lookup(id).as_str() {
-                    "quote" => {
-                        let mut iter = items.into_iter().skip(1);
-                        let expr = iter.next().ok_or_else(|| {
-                            SelError::SyntaxError(
-                                s_loc,
-                                "Expected expression in quote pattern".into(),
-                            )
-                        })?;
-                        return Ok(Pattern::Literal(
-                            loc,
-                            Box::new(Ast::Quote(loc, Box::new(expr))),
-                        ));
-                    }
-                    "cons" => {
-                        if items.len() != 3 {
-                            return Err(SelError::SyntaxError(
-                                s_loc,
-                                "Expected 2 arguments for cons pattern: (cons head tail)".into(),
-                            ));
-                        }
-                        let mut iter = items.into_iter().skip(1);
-                        let h = parse_pattern(iter.next().unwrap())?;
-                        let t = parse_pattern(iter.next().unwrap())?;
-                        return Ok(Pattern::Cons(loc, Box::new(h), Box::new(t)));
-                    }
-                    "or" => {
-                        let sub_pats = items
-                            .into_iter()
-                            .skip(1)
-                            .map(parse_pattern)
-                            .collect::<Result<Vec<_>>>()?;
-                        if sub_pats.is_empty() {
-                            return Err(SelError::SyntaxError(
-                                s_loc,
-                                "Expected at least 1 pattern in or pattern".into(),
-                            ));
-                        }
-                        return Ok(Pattern::Or(loc, sub_pats));
-                    }
-                    "list" => {
-                        let inner_items: Vec<Ast> = items.into_iter().skip(1).collect();
-                        return parse_list_or_rest_pattern(loc, inner_items);
-                    }
-                    _ => {}
+
+            self.expect_token(TokenKind::Arrow, "`->` after pattern")?;
+            let body_expr = self.parse_expr()?;
+
+            clauses.push(MatchClause {
+                loc: clause_loc,
+                pattern: pat,
+                guard,
+                body: vec![body_expr],
+            });
+
+            self.skip_semicolons();
+        }
+
+        self.eat_keyword("end");
+
+        if clauses.is_empty() {
+            return Err(SelError::SyntaxError(
+                loc,
+                "Expected at least one match clause in `match`".into(),
+            ));
+        }
+
+        Ok(Ast::Match(loc, Box::new(target), clauses))
+    }
+
+    fn is_pattern_start(&self) -> bool {
+        let tok = self.peek();
+        matches!(
+            tok.kind,
+            TokenKind::Identifier
+                | TokenKind::Number(_)
+                | TokenKind::RealNumber
+                | TokenKind::StringLiteral
+                | TokenKind::CharacterLiteral
+                | TokenKind::OpenBracket
+                | TokenKind::OpenCurly
+                | TokenKind::Colon
+        )
+    }
+
+    fn parse_pattern(&mut self) -> Result<Pattern> {
+        let loc = self.current_loc();
+        let tok = self.advance();
+
+        match tok.kind {
+            TokenKind::Keyword | TokenKind::Identifier => {
+                let is_escaped = self.pos > 0 && self.escaped_tokens.contains(&(self.pos - 1));
+                if is_escaped {
+                    let sym_ast = Ast::Symbol(loc, intern(tok.source()));
+                    Ok(Pattern::Literal(loc, Box::new(Ast::Quote(loc, Box::new(sym_ast)))))
+                } else if tok.source() == "_" {
+                    Ok(Pattern::Wildcard(loc))
+                } else if tok.source() == "true" {
+                    Ok(Pattern::Literal(loc, Box::new(Ast::Boolean(loc, true))))
+                } else if tok.source() == "false" {
+                    Ok(Pattern::Literal(loc, Box::new(Ast::Boolean(loc, false))))
+                } else if tok.source() == "nil" {
+                    Ok(Pattern::Literal(loc, Box::new(Ast::Nil(loc))))
+                } else {
+                    Ok(Pattern::Variable(loc, intern(tok.source())))
                 }
             }
-            parse_list_or_rest_pattern(loc, items)
+            TokenKind::Colon => {
+                let id_tok = self.expect_token(TokenKind::Identifier, "atom in pattern")?;
+                let sym_ast = Ast::Symbol(loc, intern(id_tok.source()));
+                Ok(Pattern::Literal(loc, Box::new(Ast::Quote(loc, Box::new(sym_ast)))))
+            }
+            TokenKind::Number(base) => {
+                let s = tok.source();
+                if let Ok(i) = i64::from_str_radix(s, base.radix()) {
+                    Ok(Pattern::Literal(loc, Box::new(Ast::Integer(loc, i))))
+                } else {
+                    Err(SelError::SyntaxError(loc, format!("Invalid number in pattern: {s}")))
+                }
+            }
+            TokenKind::RealNumber => {
+                let s = tok.source();
+                if let Ok(f) = s.parse::<f64>() {
+                    Ok(Pattern::Literal(loc, Box::new(Ast::Float(loc, f))))
+                } else {
+                    Err(SelError::SyntaxError(loc, format!("Invalid float in pattern: {s}")))
+                }
+            }
+            TokenKind::StringLiteral => {
+                Ok(Pattern::Literal(loc, Box::new(Ast::String(loc, tok.unescape()))))
+            }
+            TokenKind::CharacterLiteral => {
+                let s = tok.unescape();
+                let c = s.chars().next().unwrap_or('\0');
+                Ok(Pattern::Literal(loc, Box::new(Ast::Char(loc, c))))
+            }
+            TokenKind::OpenBracket => {
+                // List pattern: `[]`, `[p1, p2]`, `[head | tail]`, `[p1, p2 | rest]`
+                if self.peek().kind == TokenKind::CloseBracket {
+                    self.advance();
+                    return Ok(Pattern::List(loc, Vec::new()));
+                }
+
+                let mut prefix = Vec::new();
+                let mut tail = None;
+
+                loop {
+                    prefix.push(self.parse_pattern()?);
+                    if self.peek().kind == TokenKind::Pipe {
+                        self.advance();
+                        tail = Some(Box::new(self.parse_pattern()?));
+                        break;
+                    }
+                    if self.peek().kind == TokenKind::Comma {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect_token(TokenKind::CloseBracket, "`]` in list pattern")?;
+
+                if let Some(t) = tail {
+                    if prefix.len() == 1 {
+                        Ok(Pattern::Cons(loc, Box::new(prefix.pop().unwrap()), t))
+                    } else {
+                        Ok(Pattern::Rest(loc, prefix, t))
+                    }
+                } else {
+                    Ok(Pattern::List(loc, prefix))
+                }
+            }
+            TokenKind::OpenCurly => {
+                // Record pattern: `{ key: pat, key2 }`
+                let mut fields = Vec::new();
+                if self.peek().kind != TokenKind::CloseCurly {
+                    loop {
+                        let key_tok = if self.peek().kind == TokenKind::Colon {
+                            self.advance();
+                            self.expect_token(TokenKind::Identifier, "field name in pattern")?
+                        } else {
+                            self.expect_token(TokenKind::Identifier, "field name in pattern")?
+                        };
+                        let key_id = intern(key_tok.source());
+
+                        let pat = if self.peek().kind == TokenKind::Colon || self.peek().kind == TokenKind::Eq {
+                            self.advance();
+                            self.parse_pattern()?
+                        } else {
+                            // Punned: `{ x }` binds variable `x`
+                            Pattern::Variable(loc, key_id)
+                        };
+
+                        fields.push((key_id, pat));
+
+                        if self.peek().kind == TokenKind::Comma {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                self.expect_token(TokenKind::CloseCurly, "`}` in record pattern")?;
+                Ok(Pattern::Record(loc, fields))
+            }
+            _ => Err(SelError::SyntaxError(
+                loc,
+                format!("Expected pattern, found `{}`", tok.source()),
+            )),
         }
-        other => Err(SelError::SyntaxError(
-            other.loc(),
-            format!("Invalid pattern: {}", other),
-        )),
     }
 }
 
-fn parse_list_or_rest_pattern(loc: Loc, items: Vec<Ast>) -> Result<Pattern> {
-    if items.is_empty() {
-        return Ok(Pattern::List(loc, Vec::new()));
-    }
-    // Check if the last item is Ast::Bind (which is &identifier from lexer)
-    if let Some(Ast::Bind(b_loc, id)) = items.last() {
-        let b_loc = *b_loc;
-        let id = *id;
-        let prefix_items = &items[..items.len() - 1];
-        let mut prefix = Vec::with_capacity(prefix_items.len());
-        for item in prefix_items {
-            prefix.push(parse_pattern(item.clone())?);
-        }
-        let rest = if lookup(id) == "_" {
-            Pattern::Wildcard(b_loc)
-        } else {
-            Pattern::Variable(b_loc, id)
-        };
-        return Ok(Pattern::Rest(loc, prefix, Box::new(rest)));
-    }
-    // Check if second-to-last item is symbol "&"
-    if items.len() >= 2
-        && let Ast::Symbol(_, id) = &items[items.len() - 2]
-        && lookup(*id) == "&"
-    {
-        let prefix_items = &items[..items.len() - 2];
-        let mut prefix = Vec::with_capacity(prefix_items.len());
-        for item in prefix_items {
-            prefix.push(parse_pattern(item.clone())?);
-        }
-        let rest = parse_pattern(items.last().unwrap().clone())?;
-        return Ok(Pattern::Rest(loc, prefix, Box::new(rest)));
-    }
-    let mut pats = Vec::with_capacity(items.len());
-    for item in items {
-        pats.push(parse_pattern(item)?);
-    }
-    Ok(Pattern::List(loc, pats))
+pub fn parse_all(source: &str, file_id: u32, diags: &mut Vec<SelError>) -> Vec<Ast> {
+    let mut parser = AltParser::new(source, file_id);
+    parser.parse_program(diags)
 }
 
-pub fn parse_match_clause(ast: Ast) -> Result<MatchClause> {
-    let Ast::List(c_loc, mut items) = ast else {
-        return Err(SelError::SyntaxError(
-            ast.loc(),
-            "Expected clause to be a list in match".into(),
-        ));
-    };
-    if items.is_empty() {
-        return Err(SelError::SyntaxError(c_loc, "Empty clause in match".into()));
+/// Check if an alternative syntax source string represents a complete statement or expression.
+/// Used by the REPL to determine whether to evaluate or continue reading multi-line input.
+pub fn is_input_complete(input: &str) -> bool {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return true;
     }
-    let pat_ast = items.remove(0);
-    let pattern = parse_pattern(pat_ast)?;
 
-    let mut guard = None;
-    if !items.is_empty() {
-        if let Ast::Symbol(_, sym_id) = &items[0] {
-            let sym_name = lookup(*sym_id);
-            if sym_name == ":where" || sym_name == ":when" {
-                items.remove(0);
-                if items.is_empty() {
-                    return Err(SelError::SyntaxError(
-                        c_loc,
-                        "Expected guard condition after guard keyword".into(),
-                    ));
-                }
-                guard = Some(items.remove(0));
+    // 1. Check for unclosed literals, block comments, or escapes
+    let chars: Vec<char> = input.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+    let mut in_str = false;
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
+    let mut in_escaped_ident = false;
+
+    let mut paren_count: i32 = 0;
+    let mut bracket_count: i32 = 0;
+    let mut brace_count: i32 = 0;
+
+    while i < len {
+        let c = chars[i];
+
+        if in_str {
+            if c == '\\' && i + 1 < len {
+                i += 2;
+                continue;
+            } else if c == '"' {
+                in_str = false;
             }
-        } else if let Ast::When(_, cond, b) = &items[0] {
-            if b.is_empty() {
-                guard = Some((**cond).clone());
-                items.remove(0);
+            i += 1;
+            continue;
+        }
+
+        if in_line_comment {
+            if c == '\n' {
+                in_line_comment = false;
             }
-        } else if let Ast::List(g_loc, g_items) = &items[0]
-            && !g_items.is_empty()
-            && let Ast::Symbol(_, sym_id) = &g_items[0]
-        {
-            let sym_name = lookup(*sym_id);
-            if sym_name == "where" || sym_name == "when" {
-                if g_items.len() != 2 {
-                    return Err(SelError::SyntaxError(
-                        *g_loc,
-                        "Expected (where condition) or (when condition)".into(),
-                    ));
-                }
-                guard = Some(g_items[1].clone());
-                items.remove(0);
+            i += 1;
+            continue;
+        }
+
+        if in_block_comment {
+            if c == '*' && i + 1 < len && chars[i + 1] == '/' {
+                in_block_comment = false;
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
+        if in_escaped_ident {
+            if c == '\\' && i + 1 < len {
+                i += 2;
+                continue;
+            } else if c == '\'' {
+                in_escaped_ident = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        // Check comment starts
+        if c == '/' && i + 1 < len && chars[i + 1] == '/' {
+            in_line_comment = true;
+            i += 2;
+            continue;
+        }
+        if c == '/' && i + 1 < len && chars[i + 1] == '*' {
+            in_block_comment = true;
+            i += 2;
+            continue;
+        }
+
+        if c == '"' {
+            in_str = true;
+            i += 1;
+            continue;
+        }
+
+        if c == ':' && i + 1 < len && chars[i + 1] == '\'' {
+            in_escaped_ident = true;
+            i += 2;
+            continue;
+        }
+
+        match c {
+            '(' => paren_count += 1,
+            ')' => paren_count -= 1,
+            '[' => bracket_count += 1,
+            ']' => bracket_count -= 1,
+            '{' => brace_count += 1,
+            '}' => brace_count -= 1,
+            _ => {}
+        }
+
+        i += 1;
+    }
+
+    if in_str || in_block_comment || in_escaped_ident {
+        return false;
+    }
+
+    if paren_count > 0 || bracket_count > 0 || brace_count > 0 {
+        return false;
+    }
+
+    // 2. Lex input to inspect block nesting (do...end, match...end) and trailing continuation tokens
+    let (tokens, _, _) = tokenize_source(input, 0);
+
+    if tokens.is_empty() {
+        return true;
+    }
+
+    // Track block depth
+    let mut block_depth: i32 = 0;
+    for tok in &tokens {
+        if tok.kind == TokenKind::Keyword {
+            match tok.source() {
+                "do" | "match" => block_depth += 1,
+                "end" => block_depth = (block_depth - 1).max(0),
+                _ => {}
             }
         }
     }
 
-    if !items.is_empty()
-        && let Ast::Symbol(_, sym_id) = &items[0]
-        && lookup(*sym_id) == ":do"
-    {
-        items.remove(0);
+    if block_depth > 0 {
+        return false;
     }
 
-    let body = if items.is_empty() {
-        vec![Ast::Nil(c_loc)]
+    // Check trailing continuation tokens
+    let non_eof_tokens: Vec<&Token> = tokens.iter().filter(|t| !t.is_eof()).collect();
+    if non_eof_tokens.is_empty() {
+        return true;
+    }
+    let last = non_eof_tokens.last().unwrap();
+    let second_to_last = if non_eof_tokens.len() >= 2 {
+        Some(non_eof_tokens[non_eof_tokens.len() - 2])
     } else {
-        items
+        None
     };
-    Ok(MatchClause {
-        loc: c_loc,
-        pattern,
-        guard,
-        body,
-    })
+
+    // Trailing pipeline `|>` or `|>>`
+    if last.kind == TokenKind::Gt && second_to_last.is_some_and(|t| t.kind == TokenKind::Pipe || t.kind == TokenKind::Gt) {
+        return false;
+    }
+
+    match last.kind {
+        TokenKind::Assign
+        | TokenKind::Arrow
+        | TokenKind::Pipe
+        | TokenKind::BackSlash
+        | TokenKind::Comma
+        | TokenKind::Dot
+        | TokenKind::Plus
+        | TokenKind::Minus
+        | TokenKind::Asterisk
+        | TokenKind::Slash
+        | TokenKind::Mod
+        | TokenKind::EqEq
+        | TokenKind::NotEq
+        | TokenKind::Lt
+        | TokenKind::LtEq
+        | TokenKind::Gt
+        | TokenKind::GtEq
+        | TokenKind::DoubleAmpersand
+        | TokenKind::DoublePipe => return false,
+        TokenKind::Keyword => {
+            match last.source() {
+                "let" | "in" | "if" | "then" | "else" | "match" | "with" | "when"
+                | "try" | "catch" | "pub" | "import" | "as" => return false,
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+
+    true
 }
 
-pub fn resolve_quasiquote(ast: Ast) -> Result<Ast> {
-    match ast {
-        Ast::Unquote(loc, expr) => Ok(Ast::Unquote(loc, Box::new(resolve_ast(*expr)?))),
-        Ast::UnquoteSplicing(loc, expr) => {
-            Ok(Ast::UnquoteSplicing(loc, Box::new(resolve_ast(*expr)?)))
-        }
-        Ast::List(loc, list) => {
-            let mut resolved = Vec::with_capacity(list.len());
-            for item in list {
-                resolved.push(resolve_quasiquote(item)?);
-            }
-            Ok(Ast::List(loc, resolved))
-        }
-        Ast::Record(loc, fields) => {
-            let mut resolved = Vec::with_capacity(fields.len());
-            for (k, v) in fields {
-                resolved.push((k, resolve_quasiquote(v)?));
-            }
-            Ok(Ast::Record(loc, resolved))
-        }
-        Ast::Load(loc, path) => Ok(Ast::Load(loc, Box::new(resolve_quasiquote(*path)?))),
-        other => Ok(other),
-    }
+pub fn resolve_ast(ast: Ast) -> Result<Ast> {
+    Ok(ast)
 }
 
-fn parse_try(list: Vec<Ast>, s_loc: Loc) -> Result<Ast> {
-    let all_items: Vec<Ast> = list.into_iter().skip(1).collect();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::internal::load_core_lib;
+    use crate::runtime::{execute_asts, Env};
+    use crate::value::Value;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
-    let mut iter = all_items.into_iter();
-    let mut first = iter
-        .next()
-        .ok_or_else(|| SelError::SyntaxError(s_loc, "Missing body in try".into()))?;
-    if let Ast::Symbol(_, s) = &first
-        && lookup(*s) == ":do"
-    {
-        first = iter
-            .next()
-            .ok_or_else(|| SelError::SyntaxError(s_loc, "Missing body after :do in try".into()))?;
-    }
-    let catch_clause = iter
-        .next()
-        .ok_or_else(|| SelError::SyntaxError(s_loc, "Missing catch clause in try".into()))?;
-
-    match catch_clause {
-        Ast::List(c_loc, c_list) => {
-            let mut c_iter = c_list.into_iter();
-            let c_first = c_iter.next().ok_or_else(|| {
-                SelError::SyntaxError(c_loc, "Expected (catch err-var ...) clause".into())
-            })?;
-            match c_first {
-                Ast::Symbol(_, catch_sym_id) if lookup(catch_sym_id) == "catch" => {
-                    let err_var = c_iter.next().ok_or_else(|| {
-                        SelError::SyntaxError(
-                            c_loc,
-                            "Expected error variable in catch clause".into(),
-                        )
-                    })?;
-                    let err_var_id = match err_var {
-                        Ast::Symbol(_, id) => id,
-                        _ => {
-                            return Err(SelError::SyntaxError(
-                                c_loc,
-                                "Expected symbol for error variable".into(),
-                            ));
-                        }
-                    };
-                    let catch_body: Vec<Ast> = c_iter.collect();
-                    Ok(Ast::Try(s_loc, Box::new(first), err_var_id, catch_body))
-                }
-                _ => Err(SelError::SyntaxError(
-                    c_loc,
-                    "Expected catch keyword as first element of catch clause".into(),
-                )),
-            }
+    fn eval_alt(source: &str) -> std::result::Result<Value, SelError> {
+        let mut diags = Vec::new();
+        let file_id = intern("<test.sel>");
+        let asts = parse_all(source, file_id, &mut diags);
+        if !diags.is_empty() {
+            return Err(diags.remove(0));
         }
-        _ => Err(SelError::SyntaxError(
-            s_loc,
-            "Expected catch clause to be a list".into(),
-        )),
+        let env = Rc::new(RefCell::new(Env::default()));
+        env.borrow_mut().parent = Some(load_core_lib());
+        execute_asts(asts, env)
+    }
+
+    #[test]
+    fn test_escaped_identifiers() {
+        let code = r#"
+            // Defining a function with an escaped name
+            :'add-and-double' x y := (x + y) * 2
+            res := :'add-and-double'(3, 4)
+
+            // Let binding with an escaped name
+            let_res := let :'hyphen-var' = 50 in :'hyphen-var' + 10
+
+            // Record with escaped field name
+            rec := { :'user-id': 999 }
+            field_val := rec.:'user-id'
+
+            [res, let_res, field_val]
+        "#;
+        let val = eval_alt(code).expect("escaped identifiers evaluation failed");
+        let s = format!("{val}");
+        assert!(s.contains("14"));
+        assert!(s.contains("60"));
+        assert!(s.contains("999"));
+    }
+
+    #[test]
+    fn test_alt_is_input_complete() {
+        assert!(is_input_complete("add x y := x + y"));
+        assert!(!is_input_complete("add x y :="));
+        assert!(!is_input_complete("10 |>"));
+        assert!(!is_input_complete("do\n  x := 10"));
+        assert!(is_input_complete("do\n  x := 10\nend"));
+        assert!(!is_input_complete("match x with\n| :ok -> 1"));
+        assert!(is_input_complete("match x with\n| :ok -> 1\nend"));
+        assert!(!is_input_complete("let x = 10,"));
+        assert!(!is_input_complete("let x = 10 in"));
+        assert!(is_input_complete("let x = 10 in x + 1"));
+        assert!(!is_input_complete("if x > 0 then"));
+        assert!(!is_input_complete("if x > 0 then 1 else"));
+        assert!(is_input_complete("if x > 0 then 1 else 2"));
+        assert!(!is_input_complete("try error(\"fail\") catch e ->"));
+        assert!(is_input_complete("try error(\"fail\") catch e -> 0"));
+        assert!(!is_input_complete(":'type-"));
+        assert!(is_input_complete(":'type-of'(42)"));
+        assert!(!is_input_complete("/* unclosed"));
+        assert!(is_input_complete("/* closed */ 42"));
+        assert!(is_input_complete("// line comment\n42"));
+    }
+
+    #[test]
+    fn test_variable_and_function_defs() {
+        let code = r#"
+            x := 40
+            add a b := a + b
+            add(x, 2)
+        "#;
+        let val = eval_alt(code).expect("evaluation failed");
+        assert!(matches!(val, Value::Integer(42)));
+    }
+
+    #[test]
+    fn test_lambda_and_pipeline() {
+        let code = r#"
+            double := \x -> x * 2
+            sub a b := a - b
+            // Thread-first: 25 |> sub(10) -> sub(25, 10) = 15
+            // Thread-last: 10 |>> sub(25) -> sub(25, 10) = 15
+            (25 |> sub(10) |> double) + (10 |>> sub(25) |> double)
+        "#;
+        let val = eval_alt(code).expect("pipeline failed");
+        assert!(matches!(val, Value::Integer(60)));
+    }
+
+    #[test]
+    fn test_pipeline_and_equality_precedence() {
+        let code = r#"
+            sub a b := a - b
+            (35 |> sub(10) == 25) && (10 |>> sub(35) == 25)
+        "#;
+        let val = eval_alt(code).expect("precedence failed");
+        assert!(matches!(val, Value::Boolean(true)));
+    }
+
+    #[test]
+    fn test_conditionals_and_let() {
+        let code = r#"
+            let a = 15, b = 25 in
+                if a > b then a else b
+        "#;
+        let val = eval_alt(code).expect("let/if failed");
+        assert!(matches!(val, Value::Integer(25)));
+    }
+
+    #[test]
+    fn test_do_block() {
+        let code = r#"
+            do
+                x := 10
+                y := 20
+                x * y
+            end
+        "#;
+        let val = eval_alt(code).expect("do block failed");
+        assert!(matches!(val, Value::Integer(200)));
+    }
+
+    #[test]
+    fn test_record_literal_and_dot_access() {
+        let code = r#"
+            user := { id: 101, name: "Alice", active: true }
+            user.name
+        "#;
+        let val = eval_alt(code).expect("record failed");
+        assert_eq!(format!("{val}"), "Alice");
+    }
+
+    #[test]
+    fn test_match_pattern() {
+        let code = r#"
+            classify status :=
+                match status with
+                | :ok -> "success"
+                | :error -> "failure"
+                | _ -> "unknown"
+
+            classify(:ok)
+        "#;
+        let val = eval_alt(code).expect("match failed");
+        assert_eq!(format!("{val}"), "success");
+    }
+
+    #[test]
+    fn test_list_and_match_destructure() {
+        let code = r#"
+            sum_first_two list :=
+                match list with
+                | [a, b | rest] -> a + b
+                | [a] -> a
+                | [] -> 0
+
+            sum_first_two([10, 20, 30, 40])
+        "#;
+        let val = eval_alt(code).expect("list match failed");
+        assert!(matches!(val, Value::Integer(30)));
+    }
+
+    #[test]
+    fn test_try_catch() {
+        let code = r#"
+            try
+                error("boom")
+            catch err ->
+                999
+        "#;
+        let val = eval_alt(code).expect("try/catch failed");
+        assert!(matches!(val, Value::Integer(999)));
+    }
+
+    #[test]
+    fn test_pub_visibility_scoping() {
+        let code = r#"
+            pub exported_fn x := x + 10
+            private_val := 42
+            pub exported_val := 100
+        "#;
+        let mut diags = Vec::new();
+        let file_id = intern("<vis_test.sel>");
+        let asts = parse_all(code, file_id, &mut diags);
+        assert!(diags.is_empty());
+        let env = Rc::new(RefCell::new(Env::default()));
+        env.borrow_mut().parent = Some(load_core_lib());
+        env.borrow_mut().current_visibility_public = false;
+        execute_asts(asts, env.clone()).expect("exec failed");
+
+        let borrowed = env.borrow();
+        let exported_sym = intern("exported_fn");
+        let private_sym = intern("private_val");
+        let exported_val_sym = intern("exported_val");
+
+        assert!(!borrowed.private_bindings.contains(&exported_sym));
+        assert!(borrowed.private_bindings.contains(&private_sym));
+        assert!(!borrowed.private_bindings.contains(&exported_val_sym));
+    }
+
+    #[test]
+    fn test_multiclause_pattern_matching() {
+        let code = r#"
+            fib 0 := 0
+            fib 1 := 1
+            fib n := fib(n - 1) + fib(n - 2)
+
+            fact n when n <= 1 := 1
+            fact n := n * fact(n - 1)
+
+            [fib(0), fib(1), fib(6), fact(1), fact(5)]
+        "#;
+        let val = eval_alt(code).expect("evaluation failed");
+        assert_eq!(format!("{val}"), "(0 1 8 1 120)");
+    }
+
+    #[test]
+    fn test_multiclause_mismatched_arity_error() {
+        let code = r#"
+            my_fn x := x
+            my_fn x y := x + y
+        "#;
+        let mut diags = Vec::new();
+        let file_id = intern("<arity_test.sel>");
+        let _ = parse_all(code, file_id, &mut diags);
+        assert!(!diags.is_empty());
+        assert!(diags[0].to_string().contains("has arity 2, expected 1"));
+    }
+
+    #[test]
+    fn test_multiclause_pub_non_first_clause_error() {
+        let code = r#"
+            my_fn 0 := 0
+            pub my_fn n := n
+        "#;
+        let mut diags = Vec::new();
+        let file_id = intern("<pub_test.sel>");
+        let _ = parse_all(code, file_id, &mut diags);
+        assert!(!diags.is_empty());
+        assert!(diags[0].to_string().contains("can only be placed on the first clause"));
+    }
+
+    #[test]
+    fn test_multiclause_non_consecutive_broken_error() {
+        let code = r#"
+            fib 0 := 0
+            fib 1 := 1
+            a := 13123
+            fib n := fib(n - 1) + fib(n - 2)
+        "#;
+        let mut diags = Vec::new();
+        let file_id = intern("<broken_clauses.sel>");
+        let _ = parse_all(code, file_id, &mut diags);
+        assert!(!diags.is_empty());
+        let err_msg = diags[0].to_string();
+        assert!(err_msg.contains("Clauses for function `fib` must be consecutive"));
+        assert!(err_msg.contains("previous clause was defined at line 2"));
     }
 }

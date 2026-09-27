@@ -1,0 +1,33 @@
+// tests/test_modules.sel
+// Module System Integration Tests
+
+// 1. Basic module import and visibility
+import mod_example
+
+assert(mod_example.a == 10)
+assert(mod_example.d == 40)
+assert(mod_example.f == 50)
+
+// Test that private binding b is NOT exported (throws error)
+test_private_b _ :=
+    try
+        mod_example.b
+    catch err ->
+        :caught_private_b
+
+assert(test_private_b(nil) == :caught_private_b)
+
+// 2. Subdirectory import with path
+import modules_test/math/geom as geom
+assert(geom.square(4) == 16)
+assert(geom.hypot(3, 4) == 5.0)
+
+// 3. Package mod.sel import
+import modules_test/pkg as pkg
+assert(pkg.greet("Alice") == "Hello from pkg, Alice!")
+
+// 4. String literal path import with alias
+import "modules_test/math/geom" as g
+assert(g.square(5) == 25)
+
+println("Module tests passed successfully!")

@@ -1,0 +1,6 @@
+// tests/helper_load.sel
+pub loaded_var := "hello-from-helper"
+
+pub loaded_func x := x * 10
+
+42

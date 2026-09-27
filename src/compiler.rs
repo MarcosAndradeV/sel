@@ -426,7 +426,7 @@ impl<'a> Compiler<'a> {
                 let next = iter.next();
                 if let Some(Ast::Symbol(loc, sym)) = next {
                     match lookup(sym).as_str() {
-                        "eq?" => {
+                        "==" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -672,7 +672,7 @@ impl<'a> Compiler<'a> {
                             self.chunk.write((loc, OpCode::MakeList(arg_count)));
                             return Ok(());
                         }
-                        "empty?" => {
+                        "is_empty" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -681,13 +681,13 @@ impl<'a> Compiler<'a> {
                             if arg_count != 1 {
                                 return Err(SelError::SyntaxError(
                                     loc,
-                                    "Expected exactly 1 arguments for empty?".into(),
+                                    "Expected exactly 1 arguments for is_empty".into(),
                                 ));
                             }
                             self.chunk.write((loc, OpCode::Empty));
                             return Ok(());
                         }
-                        "nil?" => {
+                        "is_nil" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -696,13 +696,13 @@ impl<'a> Compiler<'a> {
                             if arg_count != 1 {
                                 return Err(SelError::SyntaxError(
                                     loc,
-                                    "Expected exactly 1 arguments for nil?".into(),
+                                    "Expected exactly 1 arguments for is_nil".into(),
                                 ));
                             }
                             self.chunk.write((loc, OpCode::IsNil));
                             return Ok(());
                         }
-                        "list?" => {
+                        "is_list" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -711,13 +711,13 @@ impl<'a> Compiler<'a> {
                             if arg_count != 1 {
                                 return Err(SelError::SyntaxError(
                                     loc,
-                                    "Expected exactly 1 arguments for list?".into(),
+                                    "Expected exactly 1 arguments for is_list".into(),
                                 ));
                             }
                             self.chunk.write((loc, OpCode::IsList));
                             return Ok(());
                         }
-                        "number?" => {
+                        "is_number" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -726,13 +726,13 @@ impl<'a> Compiler<'a> {
                             if arg_count != 1 {
                                 return Err(SelError::SyntaxError(
                                     loc,
-                                    "Expected exactly 1 arguments for number?".into(),
+                                    "Expected exactly 1 arguments for is_number".into(),
                                 ));
                             }
                             self.chunk.write((loc, OpCode::IsNumber));
                             return Ok(());
                         }
-                        "string?" => {
+                        "is_string" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -741,13 +741,13 @@ impl<'a> Compiler<'a> {
                             if arg_count != 1 {
                                 return Err(SelError::SyntaxError(
                                     loc,
-                                    "Expected exactly 1 arguments for string?".into(),
+                                    "Expected exactly 1 arguments for is_string".into(),
                                 ));
                             }
                             self.chunk.write((loc, OpCode::IsString));
                             return Ok(());
                         }
-                        "symbol?" => {
+                        "is_symbol" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -756,13 +756,13 @@ impl<'a> Compiler<'a> {
                             if arg_count != 1 {
                                 return Err(SelError::SyntaxError(
                                     loc,
-                                    "Expected exactly 1 arguments for symbol?".into(),
+                                    "Expected exactly 1 arguments for is_symbol".into(),
                                 ));
                             }
                             self.chunk.write((loc, OpCode::IsSymbol));
                             return Ok(());
                         }
-                        "function?" => {
+                        "is_function" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -771,13 +771,13 @@ impl<'a> Compiler<'a> {
                             if arg_count != 1 {
                                 return Err(SelError::SyntaxError(
                                     loc,
-                                    "Expected exactly 1 arguments for function?".into(),
+                                    "Expected exactly 1 arguments for is_function".into(),
                                 ));
                             }
                             self.chunk.write((loc, OpCode::IsFunction));
                             return Ok(());
                         }
-                        "type-of" => {
+                        "type_of" => {
                             let mut arg_count = 0;
                             for arg in iter {
                                 self.compile(arg)?;
@@ -786,7 +786,7 @@ impl<'a> Compiler<'a> {
                             if arg_count != 1 {
                                 return Err(SelError::SyntaxError(
                                     loc,
-                                    "Expected exactly 1 arguments for type-of".into(),
+                                    "Expected exactly 1 arguments for type_of".into(),
                                 ));
                             }
                             self.chunk.write((loc, OpCode::TypeOf));
@@ -1338,18 +1338,18 @@ fn compile_pattern(
         Pattern::Literal(loc, ast) => {
             conditions.push(Ast::List(
                 *loc,
-                vec![Ast::Symbol(*loc, intern("eq?")), curr_expr, (**ast).clone()],
+                vec![Ast::Symbol(*loc, intern("==")), curr_expr, (**ast).clone()],
             ));
             Ok(())
         }
         Pattern::Cons(loc, head_pat, tail_pat) => {
             conditions.push(Ast::List(
                 *loc,
-                vec![Ast::Symbol(*loc, intern("list?")), curr_expr.clone()],
+                vec![Ast::Symbol(*loc, intern("is_list")), curr_expr.clone()],
             ));
             let empty_expr = Ast::List(
                 *loc,
-                vec![Ast::Symbol(*loc, intern("empty?")), curr_expr.clone()],
+                vec![Ast::Symbol(*loc, intern("is_empty")), curr_expr.clone()],
             );
             conditions.push(Ast::List(
                 *loc,
@@ -1367,12 +1367,12 @@ fn compile_pattern(
         Pattern::List(loc, sub_pats) => {
             conditions.push(Ast::List(
                 *loc,
-                vec![Ast::Symbol(*loc, intern("list?")), curr_expr.clone()],
+                vec![Ast::Symbol(*loc, intern("is_list")), curr_expr.clone()],
             ));
             if sub_pats.is_empty() {
                 conditions.push(Ast::List(
                     *loc,
-                    vec![Ast::Symbol(*loc, intern("empty?")), curr_expr],
+                    vec![Ast::Symbol(*loc, intern("is_empty")), curr_expr],
                 ));
             } else {
                 let count_expr = Ast::List(
@@ -1382,7 +1382,7 @@ fn compile_pattern(
                 let len_ast = Ast::Integer(*loc, sub_pats.len() as i64);
                 conditions.push(Ast::List(
                     *loc,
-                    vec![Ast::Symbol(*loc, intern("=")), count_expr, len_ast],
+                    vec![Ast::Symbol(*loc, intern("==")), count_expr, len_ast],
                 ));
                 for (i, p) in sub_pats.iter().enumerate() {
                     let elem_expr = Ast::List(
@@ -1401,7 +1401,7 @@ fn compile_pattern(
         Pattern::Rest(loc, prefix_pats, rest_pat) => {
             conditions.push(Ast::List(
                 *loc,
-                vec![Ast::Symbol(*loc, intern("list?")), curr_expr.clone()],
+                vec![Ast::Symbol(*loc, intern("is_list")), curr_expr.clone()],
             ));
             let count_expr = Ast::List(
                 *loc,
@@ -1436,14 +1436,14 @@ fn compile_pattern(
         Pattern::Record(loc, fields) => {
             conditions.push(Ast::List(
                 *loc,
-                vec![Ast::Symbol(*loc, intern("record?")), curr_expr.clone()],
+                vec![Ast::Symbol(*loc, intern("is_record")), curr_expr.clone()],
             ));
             for (key_sym, p) in fields {
                 let quote_key = Ast::Quote(*loc, Box::new(Ast::Symbol(*loc, *key_sym)));
                 conditions.push(Ast::List(
                     *loc,
                     vec![
-                        Ast::Symbol(*loc, intern("rcontains?")),
+                        Ast::Symbol(*loc, intern("rcontains")),
                         curr_expr.clone(),
                         quote_key.clone(),
                     ],

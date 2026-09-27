@@ -1,0 +1,36 @@
+// tests/test_system.sel
+// Test System & OS Primitives
+
+// Environment variables
+set_env("SEL_TEST_VAR", "sel_value_123")
+assert(get_env("SEL_TEST_VAR") == "sel_value_123")
+assert(get_env("SEL_NON_EXISTENT_VAR_XYZ") == nil)
+
+// Time primitives
+t1 := time_now_ms()
+assert(t1 > 1000000)
+sleep_ms(10)
+t2 := time_now_ms()
+assert(t2 >= t1)
+
+// Filesystem helpers
+test_file := "tests/temp_test_file.txt"
+if fs_exists(test_file) then
+    fs_delete(test_file)
+else
+    nil
+
+assert(!fs_exists(test_file))
+fs_write(test_file, "Hello Sel Filesystem!")
+assert(fs_exists(test_file))
+assert(fs_read(test_file) == "Hello Sel Filesystem!")
+
+// Listing directory
+entries := fs_list("tests")
+assert(count(entries) > 0)
+
+// Cleanup
+fs_delete(test_file)
+assert(!fs_exists(test_file))
+
+println("System tests passed successfully!")

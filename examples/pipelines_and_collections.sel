@@ -32,6 +32,6 @@ println("Any > 8?", any_greater_than_eight)
 println("Sum:", numbers |> sum)
 println("Product of [1, 2, 3, 4, 5]:", [1, 2, 3, 4, 5] |> product)
 
-// Escaped Scheme identifier interop
-type_tag := :'type-of'(numbers)
-println("Scheme type tag of numbers:", type_tag)
+// Type introspection
+type_tag := type_of(numbers)
+println("Type tag of numbers:", type_tag)

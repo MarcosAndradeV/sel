@@ -1,9 +1,9 @@
 ---
 title: Standard & Core Library
-description: Comprehensive reference for all native built-in functions (implemented in Rust) and Scheme standard library routines loaded inside the core runtime.
+description: Comprehensive reference for all native built-in functions (implemented in Rust) and the standard library prelude routines loaded inside the core runtime.
 ---
 
-This document describes all functions, macros, and operators available globally in the `sel` Lisp runtime environment. They are divided into **Native Built-in Functions** (implemented directly in the Rust interpreter core) and the **Scheme Standard Library** (defined in `core.scm`).
+This document describes all functions and operators available globally in the `SEL` runtime environment. They are divided into **Native Built-in Functions** (implemented directly in the Rust interpreter core) and the **Standard Library Prelude** (defined in `core.sel`).
 
 ---
 
@@ -15,349 +15,192 @@ These core primitives are registered directly inside the environment by the inte
 
 | Function | Arity | Description | Example |
 | :--- | :--- | :--- | :--- |
-| `+` | Variadic | Sums all numeric arguments. | `(+ 1 2 3)` -> `6` |
-| `-` | > 1 | Subtraction. If 1 argument is passed, returns its negation. | `(- 10 3)` -> `7`, `(- 5)` -> `-5` |
-| `*` | Variadic | Multiplies all numeric arguments. | `(* 2 3 4)` -> `24` |
-| `/` | > 2 | Performs division. Supports integers and floats. | `(/ 10 2)` -> `5`, `(/ 5.0 2.0)` -> `2.5` |
-| `mod` | 2 | Computes the remainder of dividing the first argument by the second. | `(mod 10 3)` -> `1` |
+| `+` | Variadic | Sums numeric arguments. | `1 + 2 + 3` -> `6` |
+| `-` | > 1 | Subtraction or unary negation. | `10 - 3` -> `7`, `-5` -> `-5` |
+| `*` | Variadic | Multiplies numeric arguments. | `2 * 3 * 4` -> `24` |
+| `/` | 2 | Performs division (supports integers and floats). | `10 / 2` -> `5`, `5.0 / 2.0` -> `2.5` |
+| `%` / `mod` | 2 | Remainder of dividing first argument by second. | `10 % 3` -> `1`, `mod(10, 3)` -> `1` |
 
 ### Equalities & Comparators
 
-| Function | Arity | Description | Example |
+| Operator / Function | Arity | Description | Example |
 | :--- | :--- | :--- | :--- |
-| `eq?` | 2 | Checks identity equality. Evaluates symbols, nil, booleans, and numbers. | `(eq? 'a 'a)` -> `#t`, `(eq? 1 1)` -> `#t` |
-| `=` | 2 | Numeric value equality check. | `(= 5 5.0)` -> `#t` |
-| `!=` | 2 | Numeric value inequality check. | `(!= 5 10)` -> `#t` |
-| `<` | 2 | Evaluates if the first number is strictly less than the second. | `(< 2 3)` -> `#t` |
-| `>` | 2 | Evaluates if the first number is strictly greater than the second. | `(> 5 3)` -> `#t` |
-| `<=` | 2 | Evaluates if the first number is less than or equal to the second. | `(<= 3 3)` -> `#t` |
-| `>=` | 2 | Evaluates if the first number is greater than or equal to the second. | `(>= 5 2)` -> `#t` |
-| `not` | 1 | Logically negates the boolean argument. | `(not #f)` -> `#t`, `(not nil)` -> `#t` |
+| `==` | 2 | Checks structural equality (atoms, numbers, strings, lists, records). | `:a == :a` -> `true`, `[1, 2] == [1, 2]` -> `true` |
+| `!=` | 2 | Structural inequality check. | `5 != 10` -> `true` |
+| `<` | 2 | Strictly less than. | `2 < 3` -> `true` |
+| `>` | 2 | Strictly greater than. | `5 > 3` -> `true` |
+| `<=` | 2 | Less than or equal to. | `3 <= 3` -> `true` |
+| `>=` | 2 | Greater than or equal to. | `5 >= 2` -> `true` |
+| `!` / `not` | 1 | Logically negates the boolean value. | `!false` -> `true`, `not(nil)` -> `true` |
 
 ### Type Query & Reflection
 
-These predicates allow runtime type introspection. They all take **1 argument** and return a boolean (`#t` or `#f`).
+Predicates that return `true` or `false`:
 
-- `(nil? x)`: Returns `#t` if `x` is `nil`.
-- `(list? x)`: Returns `#t` if `x` is a sequence list.
-- `(number? x)`: Returns `#t` if `x` is an integer or floating-point number.
-- `(string? x)`: Returns `#t` if `x` is a string.
-- `(string-contains? str substr)`: Returns `#t` if `str` contains substring `substr`, else `#f`.
-- `(symbol? x)`: Returns `#t` if `x` is an interned symbol.
-- `(function? x)`: Returns `#t` if `x` is a native function or compiled Scheme closure.
-- `(record? x)`: Returns `#t` if `x` is a record mapping.
-- `(char? x)`: Returns `#t` if `x` is a first-class character.
-- `(type-of x)`: Evaluates `x` and returns its type name as an interned symbol:
-  ```lisp
-  (type-of 10)       ; 'integer
-  (type-of "hello")  ; 'string
-  (type-of {a 1})    ; 'record
-  (type-of #\a)      ; 'char
+- `is_nil(x)`: Returns `true` if `x` is `nil`.
+- `is_list(x)`: Returns `true` if `x` is a sequence list.
+- `is_number(x)`: Returns `true` if `x` is an integer or float.
+- `is_string(x)`: Returns `true` if `x` is a string.
+- `string_contains(str, substr)`: Returns `true` if `str` contains `substr`.
+- `is_symbol(x)`: Returns `true` if `x` is a symbol or atom.
+- `is_function(x)`: Returns `true` if `x` is a function or closure.
+- `is_record(x)`: Returns `true` if `x` is a record mapping.
+- `is_char(x)`: Returns `true` if `x` is a character value.
+- `type_of(x)`: Evaluates `x` and returns its type name as an atom:
+  ```sel
+  type_of(10)      // :int
+  type_of("hello") // :string
+  type_of({a: 1})  // :record
+  type_of(#\a)     // :char
   ```
-- `(gensym [prefix])`: Generates a globally unique interned symbol with an optional prefix (defaults to `"g"`). Indispensable for generating non-colliding variable names inside macros:
-  ```lisp
-  (gensym)        ; 'g0
-  (gensym "temp") ; 'temp1
-  ```
+- `gensym([prefix])`: Generates a globally unique identifier (e.g. `g0`, `temp1`).
 
 ### Character Conversions
 
-These functions convert between character values and their corresponding integer Unicode scalar values.
-
-- `(char->integer char)`: Returns the Unicode scalar value integer of the character `char`.
-  ```lisp
-  (char->integer #\a) ; 97
+- `char_to_integer(ch)`: Returns the Unicode scalar integer for character `ch`.
+  ```sel
+  char_to_integer(#\a) // 97
   ```
-- `(integer->char int)`: Returns the first-class character corresponding to the Unicode scalar value integer `int`.
-  ```lisp
-  (integer->char 97)  ; #\a
+- `integer_to_char(int)`: Returns the character for Unicode scalar integer `int`.
+  ```sel
+  integer_to_char(97) // #\a
   ```
 
 ### List Manipulation Primitives
 
-- `(cons head tail)`: Prepend `head` to the front of the list `tail`. If `tail` is not a list, constructs a new list containing `(head tail)`.
-  ```lisp
-  (cons 1 '(2 3)) ; (1 2 3)
-  ```
-- `(car list)`: Returns the first element of `list`. Triggers an error if empty.
-  ```lisp
-  (car '(10 20 30)) ; 10
-  ```
-- `(cdr list)`: Returns a new list containing all elements of `list` except the first. If the list has only one element, returns `nil`.
-  ```lisp
-  (cdr '(10 20 30)) ; (20 30)
-  ```
-- `(drop n list)`: Drops the first `n` elements from `list` and returns the remaining sublist in $O(1)$ time without copying. If `n >= (count list)`, returns `nil`.
-  ```lisp
-  (drop 2 '(10 20 30 40)) ; (30 40)
-  ```
-- `(nth list index)`: Accesses the element at 0-indexed position `index` in `list`. Returns `nil` if out of bounds.
-  ```lisp
-  (nth '(a b c) 1) ; 'b
-  ```
-- `(count x)`: Returns the integer length of list `x`, string `x`, or `0` for `nil`.
-  ```lisp
-  (count "hello") ; 5
-  (count '(1 2))  ; 2
-  ```
-- `(list &args)`: Constructs a new list containing the evaluated arguments.
-  ```lisp
-  (list 1 2 3) ; (1 2 3)
-  ```
-- `(empty? x)`: Evaluates to `#t` if `x` is `nil`, an empty list `()`, or an empty string `""`.
-  ```lisp
-  (empty? '()) ; #t
-  ```
+- `cons(head, tail)`: Prepend `head` to front of `tail`.
+- `car(list)`: Returns the first element of `list`.
+- `cdr(list)`: Returns the list without its first element.
+- `drop(n, list)`: Drops first `n` elements in $O(1)$ time without copying.
+- `take(n, list)`: Takes first `n` elements.
+- `nth(list, index)`: Retrieves element at 0-indexed position.
+- `count(x)`: Returns length of a list, string, or `0` for `nil`.
+- `list(...args)`: Constructs a list from arguments.
+- `is_empty(x)`: Returns `true` if `x` is `nil`, `[]`, or `""`.
 
 ### Record Primitives
 
-Records (`{key val}`) are manipulated using these functional primitives. They return a new, updated record, maintaining persistent immutable semantics.
+Records (`{ key: value }`) are immutable maps:
 
-- `(rget record symbol)`: Retrieves the value associated with `symbol` key from `record`. Returns `nil` if missing.
-  ```lisp
-  (rget {a 10} 'a) ; 10
-  ```
-- `(rset record symbol value)`: Returns a new copy of `record` with the key `symbol` bound to `value`.
-  ```lisp
-  (rset {a 1} 'b 2) ; {a 1 b 2}
-  ```
-- `(rdel record symbol)`: Returns a copy of `record` with the key `symbol` removed.
-  ```lisp
-  (rdel {a 1 b 2} 'a) ; {b 2}
-  ```
-- `(rkeys record)`: Returns a list containing all the symbol keys of the record.
-  ```lisp
-  (rkeys {a 1 b 2}) ; (a b)
-  ```
-- `(rvals record)`: Returns a list containing all the values inside the record.
-  ```lisp
-  (rvals {a 1 b 2}) ; (1 2)
-  ```
-- `(rcontains? record symbol)`: Evaluates to `#t` if `symbol` is a key present inside `record`.
-  ```lisp
-  (rcontains? {a 1} 'a) ; #t
+- `rget(record, key)`: Retrieves value by atom or string key.
+- `rset(record, key, value)`: Returns updated record with key set.
+- `rdel(record, key)`: Returns record with key removed.
+- `rkeys(record)`: Returns list of keys.
+- `rvals(record)`: Returns list of values.
+- `rcontains(record, key)`: Returns `true` if key is present in record.
+
+### String Manipulation Primitives
+
+- `string_split(str, delimiter)`: Splits string by delimiter into a list of strings.
+- `string_join(list, separator)`: Joins list of strings with separator.
+- `string_trim(str)`: Trims leading and trailing whitespace.
+- `string_replace(str, pattern, replacement)`: Replaces occurrences of pattern.
+- `string_upcase(str)`: Converts string to uppercase.
+- `string_downcase(str)`: Converts string to lowercase.
+- `to_string(x)`: Converts value `x` to its string representation.
+- `to_int(x)`: Converts integer, float, or numeric string to integer.
+- `to_float(x)`: Converts integer, float, or numeric string to float.
+- `format(fmt, ...args)`: Formats string using `{}` placeholders:
+  ```sel
+  format("Hello, {}! You have {} points.", "Alice", 100)
   ```
 
-### System & File I/O (Message Passing)
+### Math Functions
 
-`sel` provides direct interfaces to OS primitives and the host filesystem via message-passing dispatch symbols.
+- `abs(x)`: Absolute value.
+- `min(a, b)` / `max(a, b)`: Minimum / maximum.
+- `sqrt(x)`: Square root.
+- `pow(base, exp)`: Power exponentiation.
+- `floor(x)`, `ceil(x)`, `round(x)`: Rounding operations.
+- `sin(x)`, `cos(x)`, `tan(x)`: Trigonometric functions.
+- `bit_and`, `bit_or`, `bit_xor`, `bit_not`, `bit_shl`, `bit_shr`: Bitwise operations.
 
-- `(system message &args)`:
-  - `(system 'args)`: Returns a list of strings representing the CLI arguments passed to the script.
-  - `(system 'getenv key-str)`: Retrieves an OS environment variable by key string. Returns `nil` if missing.
-  - `(system 'sleep secs-int)`: Pauses process execution for `secs-int` seconds.
-  - `(system 'exit code-int)`: Immediately terminates the `sel` process returning `code-int` status.
-- `(file-system message &args)`:
-  - `(file-system 'exists? path-str)`: Returns `#t` if file exists at `path-str`.
-  - `(file-system 'read path-str)`: Reads the entire contents of a file at `path-str` and returns it as a string.
-  - `(file-system 'write path-str content-str)`: Writes `content-str` to a file at `path-str`. Returns `nil` if successful.
+### System & Environment
+
+- `system(:args)`: CLI arguments list.
+- `system(:exit, code)`: Terminate process with exit code.
+- `get_env(key)`: Read environment variable.
+- `set_env(key, val)`: Set environment variable.
+- `time_now_ms()`: Current Unix timestamp in milliseconds.
+- `sleep_ms(ms)`: Pause execution for specified milliseconds.
+- `file_system(:exists, path)`: Checks if file exists.
+- `file_system(:read, path)`: Reads file contents as string.
+- `file_system(:write, path, content)`: Writes content to file.
+- `file_system(:list, path)`: Lists directory contents.
+- `file_system(:delete, path)`: Deletes file.
 
 ### Output & Logging
 
-- `(display x)`: Prints the string representation of `x` to standard output without a newline.
-- `(println x)`: Prints `x` followed by a newline.
-- `(newline)`: Prints a single newline.
-- `(error msg &args)`: Immediately halts evaluation and throws a runtime exception with a descriptive error message.
+- `display(x)`: Prints representation to standard output without newline.
+- `println(x)`: Prints followed by newline.
+- `newline()`: Prints newline.
+- `error(msg)`: Throws runtime error with message.
 
 ---
 
-## 2. Scheme Standard Library (core.scm)
+## 2. Standard Library Prelude (`core.sel`)
 
-These routines and macros are defined in the standard library file `core.scm` and loaded during interpreter initialization.
+These functions are defined in `src/core.sel` and automatically available in every SEL program.
 
-### Logical Control & Assertions
+### Type Helpers
 
-- `(when test &body)`: If `test` is truthy, executes `body` expressions sequentially inside a `begin` block.
-  ```lisp
-  (when (= 1 1)
-    (println "Math holds")
-    (println "True!"))
-  ```
-- `(unless test &body)`: If `test` is falsy, executes `body` expressions sequentially.
-  ```lisp
-  (unless (= 1 2)
-    (println "Inequal"))
-  ```
-- `(cond &xs)`: Multi-branch conditional selection. Takes pairs of test/consequent expressions. Runs the first matching condition. If the final test is `#t`, it acts as a default block.
-  ```lisp
-  (cond
-    (= x 1) "One"
-    (= x 2) "Two"
-    #t      "Other")
-  ```
-- `(assert test &args)`: Evaluates `test`. If it evaluates to `#f` or `nil`, throws a runtime error. Optionally prints additional argument context.
-  ```lisp
-  (assert (= 2 2) "Math is broken!")
-  ```
+- `is_even(x)`: Returns `true` if `x % 2 == 0`.
+- `is_odd(x)`: Returns `true` if `x % 2 != 0`.
+- `is_int(x)`: Checks if `type_of(x) == :int`.
+- `is_float(x)`: Checks if `type_of(x) == :float`.
+- `is_bool(x)`: Checks if `type_of(x) == :bool`.
 
-### Iteration Loops
+### List Processing & Functional Utilities
 
-These macros allow sequential looping constructs natively using TCO recursions.
+- `first(list)` / `head(list)`: Returns first element (or `nil` if empty).
+- `rest(list)` / `tail(list)`: Returns tail (or `[]` if empty).
+- `last(list)`: Returns final element.
+- `append(l1, l2)`: Concatenates two lists.
+- `map(fn, list)`: Applies `fn` to each element.
+- `filter(pred, list)`: Filters elements satisfying `pred`.
+- `foldl(fn, acc, list)`: Left fold (reduce).
+- `foldr(fn, acc, list)`: Right fold.
+- `reverse(list)`: Reverses list elements.
 
-- `(while test &body)`: Loops and executes `body` continuously as long as `test` evaluates to truthy.
-  ```lisp
-  (define i 0)
-  (while (< i 5)
-    (println i)
-    (set! i (+ i 1)))
-  ```
-- `(until test &body)`: Loops and executes `body` continuously until `test` evaluates to truthy.
-  ```lisp
-  (define i 0)
-  (until (= i 5)
-    (println i)
-    (set! i (+ i 1)))
-  ```
-- `(repeat f n)`: Executes a zero-argument function `f` exactly `n` times recursive-style.
+### Pipeline Helpers (Collection-First)
 
-### Functional List Utilities
+- `map_by(list, fn)`: `list |> map_by(\x -> x * 2)`
+- `filter_by(list, pred)`: `list |> filter_by(\x -> is_even(x))`
+- `reduce(list, acc, fn)`: `list |> reduce(0, \acc x -> acc + x)`
 
-- `(map f l)`: Applies a one-argument function `f` to each element in list `l`, returning a new list of results.
-  ```lisp
-  (map \(x) (* x x) '(1 2 3)) ; (1 4 9)
-  ```
-- `(filter f l)`: Returns a new list containing elements from list `l` for which `(f element)` evaluates to truthy.
-  ```lisp
-  (filter even? '(1 2 3 4)) ; (2 4)
-  ```
-- `(foldl f acc l)`: Left-associative list fold (reduce). Accumulates list values starting from the left.
-  ```lisp
-  (foldl + 0 '(1 2 3)) ; 6
-  ```
-- `(foldr f acc l)`: Right-associative list fold (reduce). Accumulates list values starting from the right.
-- `(reverse l)`: Reverses the elements of list `l`.
-- `(range &args)`: Convenient number sequence generator.
-  - `(range end)`: Evaluates sequence from `0` to `end - 1` with step `1`.
-  - `(range end begin)`: Evaluates from `begin` to `end - 1` with step `1`.
-  - `(range end begin step)`: Evaluates from `begin` to `end - 1` in increments of `step`.
-  ```lisp
-  (range 5)       ; (0 1 2 3 4)
-  (range 5 2)     ; (2 3 4)
-  (range 10 2 2)  ; (2 4 6 8)
-  ```
-- `(even? x)`: Returns `#t` if `x` is divisible by `2`.
+### Search & Aggregations
 
-### List Manipulation
+- `sum(list)`: Sums numeric list.
+- `product(list)`: Multiplies numeric list.
+- `contains(list, target)`: Returns `true` if target is in list.
+- `find(list, pred)`: Returns first element matching `pred`, or `nil`.
+- `any(list, pred)`: Returns `true` if any element matches `pred`.
+- `all(list, pred)`: Returns `true` if all elements match `pred`.
+- `repeat(fn, n)`: Runs zero-argument function `fn` `n` times.
+- `range(limit)`: Sequence `[0, 1, ..., limit - 1]`.
+- `range_from(start, limit)`: Sequence `[start, ..., limit - 1]`.
+- `range_step(start, limit, step)`: Sequence in increments of `step`.
 
-- `(last l)`: Returns the final element of list `l`.
-- `(append l1 l2)`: Concatenates list `l1` and `l2` into a single list.
-  ```lisp
-  (append '(1 2) '(3 4)) ; (1 2 3 4)
-  ```
+### Result / Monadic Helpers
 
-### Promises & Laziness
+- `ok(val)`: Wraps successful value `[:ok, val]`.
+- `err(msg)`: Wraps error value `[:err, msg]`.
+- `is_ok(result)`: Returns `true` if result is ok.
+- `is_err(result)`: Returns `true` if result is err.
+- `unwrap(result)`: Extracts value or throws error.
+- `unwrap_or(result, default)`: Extracts value or returns default.
+- `error_value(result)`: Extracts error message from err container.
 
-Allows deferred lazy evaluation patterns.
+### Mathematical Constants
 
-- `(delay expr)`: *Macro*. Wraps `expr` inside a zero-argument lambda promise to avoid immediate evaluation.
-- `(force promise)`: Forces evaluation of a lazy promise.
-  ```lisp
-  (define lazy-value (delay (+ 10 20))) ; Not evaluated yet
-  (force lazy-value)                    ; Evaluates and returns 30
-  ```
+- `pi`: `3.141592653589793`
+- `tau`: `6.283185307179586`
+- `e`: `2.718281828459045`
 
-### Monadic Error Types
+### Filesystem Helpers
 
-Allows functional error-handling patterns without stack-unwinding `try/catch` clauses. Monads return structures tagged with `'ok` or `'err`.
-
-- `(ok val)`: Wraps a successful value into `(ok val)`.
-- `(err msg)`: Wraps an error message into `(err msg)`.
-- `(ok? x)`: Evaluates to `#t` if `x` is an ok container.
-- `(err? x)`: Evaluates to `#t` if `x` is an error container.
-- `(unwrap x)`: Extracts the value inside an ok container. Throws an exception if `x` is an error container.
-- `(error-value x)`: Extracts the error message inside an err container.
-- `(attempt expr)`: *Macro*. Wraps the evaluation of `expr` inside a try-catch, returning `(ok result)` if successful, or `(err exception)` if it failed.
-  ```lisp
-  (define res (attempt (/ 1 0))) ; (err "Called division by zero")
-  ```
-- `(try-bind val var body)`: *Macro*. Evaluates monadic `val`. If it is an error container, immediately returns that container; if it is successful, binds the unwrapped value to `var` and evaluates the `body` block. Perfect for chaining monadic calls.
-
-### Record Extensions
-
-- `(assoc record k v)`: Wrapper for native `rset`. Binds key `k` to value `v` inside `record`.
-- `(dissoc record k)`: Wrapper for native `rdel`. Removes key `k` from `record`.
-
-### Syntactic Helpers
-
-- `(ffi-func symbol return-type argument-types)`: Conveniently maps a raw FFI symbol pointer to an anonymous Scheme lambda, allowing the library symbol to be called like any standard Scheme function.
-  ```lisp
-  (define puts-fn (ffi-func (ffi-dlsym libc "puts") 'i32 '(*u8)))
-  (puts-fn "Called easily via Scheme wrapper!")
-  ```
-
-### Pattern Matching Helpers
-
-- `(match-lambda &clauses)`: *Macro*. Creates an anonymous lambda of one argument that immediately pattern matches the argument against `clauses`:
-  ```lisp
-  (define describe-num
-    (match-lambda
-      (0 "zero")
-      (1 "one")
-      (n (+ n 100))))
-
-  (describe-num 0) ; "zero"
-  (describe-num 5) ; 105
-  ```
-
-- `(defn head &clauses)`: *Macro*. Defines a named function using multi-clause pattern matching (Elixir/Erlang style). Supports `:where` / `:when` guards and `:do` markers:
-  ```lisp
-  (defn fib
-    (0 :do 0)
-    (1 :do 1)
-    (n :do (+ (fib (- n 1)) (fib (- n 2)))))
-
-  (defn (classify-age age)
-    (n :where (< n 0) :do "invalid")
-    (n :when (< n 18) :do "minor")
-    (_ :do "adult"))
-  ```
-
-### Pipelines
-
-- `(|> val &forms)`: *Macro*. Elixir/OCaml-style thread-last pipeline operator. Pipes `val` into subsequent function calls as the **last** argument (or as the sole argument if given a bare function identifier). Ideal for collection workflows with `map`, `filter`, and `foldr`:
-  ```lisp
-  (|> (range 10)
-      (filter even?)
-      (map \(x) (* x x))
-      reverse)
-  ```
-
-- `(-> val &forms)`: *Macro*. Thread-first pipeline operator. Injects `val` as the **first** argument after the function name in each subsequent form. Ideal for record transformations:
-  ```lisp
-  (-> user
-      (assoc 'balance 500)
-      (dissoc 'temporary-token))
-  ```
-
-### Railway-Oriented Programming
-
-- `(with [clauses] :do body ... [:else (err-pat err-body ...) ...])`: *Macro*. Chains pattern matching operations where each step must match its pattern to proceed. If any step fails to match, execution short-circuits immediately. If `:else` clauses are provided, the mismatched value is dispatched to the matching `:else` clause; if no `:else` is given, the non-matching value is returned directly:
-  ```lisp
-  (with (((list 'ok user) (fetch-user id))
-         ((list 'ok perms) (fetch-perms user)))
-    :do
-    (list user perms)
-    :else
-    ((list 'error 'not-found) "User not found")
-    ((list 'error 'no-perms) "Permissions missing"))
-  ```
-
-### List Comprehensions
-
-- `(for (var seq) ... [:let (bindings)] [:when cond] :do body ...)`: *Macro*. Expressive list comprehension over one or more generators. Supports nested cartesian product traversals, intermediate `:let` bindings, conditional filtering with `:when` or `:where`, and structural pattern matching on generator items:
-  ```lisp
-  ;; Filtered square calculation
-  (for (x (range 10))
-    :when (= (mod x 2) 0)
-    :do (* x x))
-  ;; => (0 4 16 36 64)
-
-  ;; Cartesian product with local bindings
-  (for (x '(1 2 3))
-       (y '(10 20))
-    :let ((sum (+ x y)))
-    :when (> sum 15)
-    :do sum)
-  ;; => (21 22 23)
-  ```
-
+- `fs_exists(path)`: Checks if file exists.
+- `fs_read(path)`: Reads file content as string.
+- `fs_write(path, content)`: Writes content to file.
+- `fs_list(path)`: Returns list of file names in directory.
+- `fs_delete(path)`: Deletes file at path.

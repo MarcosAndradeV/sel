@@ -34,10 +34,10 @@ You can start the interactive REPL shell immediately using Cargo:
 cargo run
 ```
 
-### Running Scheme Scripts
-Run any `.scm` script file using the compiled binary:
+### Running SEL Scripts
+Run any `.sel` script file using the compiled binary:
 ```bash
-cargo run -- examples/hello.scm
+cargo run -- examples/modern_functional.sel
 ```
 
 ---
@@ -47,8 +47,8 @@ cargo run -- examples/hello.scm
 The source code is organized into modular components under `src/`:
 
 - **`src/main.rs`**: System entry point, argument parsing via the CLI module, and the core rustyline-powered REPL loop.
-- **`src/lexer.rs`**: Tokenizer that converts raw S-expression string buffers into streamable lexical tokens.
-- **`src/parser.rs` & `src/ast.rs`**: S-expression AST generator. Handles structural parenthesis matching, quotes, and literal types.
+- **`src/lexer.rs`**: Source location definitions (`Loc`).
+- **`src/parser.rs` & `src/ast.rs`**: Modern functional syntax parser (powered by `lex-just-parse`). Handles statements, multi-clause pattern-matching function definitions, pipelines (`|>`, `|>>`), records, and try/catch.
 - **`src/compiler.rs`**: Bytecode compiler. Lowers parsed AST forms into linear VM bytecode instruction chunks (`Chunk` / `OpCode`). Bytecode is serialized into a flat linear byte buffer (`Vec<u8>`) with explicit compile-time jump patching to resolve control flow offsets, reducing execution overhead.
 - **`src/runtime.rs`**: Stack-based virtual machine evaluator. Contains the main instruction dispatch loop, environment binding maps, scope structures, tail call optimization (TCO), try/catch blocks, and coroutines. Local variables are compiled into stack index offsets and resolved via highly efficient `LoadLocal` and `StoreLocal` opcodes, bypassing dynamic environment map lookups.
 - **`src/value.rs`**: Primitive and compound value types (e.g. Lists, Records, Closures, Macros, Coroutines) and their coercion utilities.
@@ -58,14 +58,14 @@ The source code is organized into modular components under `src/`:
 
 ## 4. Running the Test Suite
 
-`sel` uses a dynamic integration test runner. Tests are written in Scheme and located in the `tests/` directory:
+`sel` uses a dynamic integration test runner. Tests are written in SEL (`.sel`) and located in the `tests/` directory:
 
-- Run all unit and Lisp integration tests:
+- Run all unit and integration tests:
   ```bash
   cargo test
   ```
 
-*Note: The test suite dynamically scans `tests/` for all `.scm` files and executes them in fresh sandbox environments. It also validates negative cases in `tests/errors/` to ensure syntax and runtime errors are thrown correctly.*
+*Note: The test suite dynamically scans `tests/` for all `.sel` files and executes them in fresh sandbox environments. It also validates negative cases in `tests/errors/` to ensure syntax and runtime errors are thrown correctly.*
 
 ---
 

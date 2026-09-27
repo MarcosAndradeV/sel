@@ -1,0 +1,43 @@
+// tests/test_records.sel
+// Records Integration Test Suite
+
+r := { a: 1, b: 2 }
+
+// 1. Basic dot access and rget
+assert(r.a == 1)
+assert(r.b == 2)
+assert(rget(r, :a) == 1)
+assert(rget(r, :b) == 2)
+assert(rget(r, :c) == nil)
+
+// 2. rset (functional update & insertion)
+r2 := rset(r, :a, 10)
+assert(r2.a == 10)
+assert(r2.b == 2)
+assert(r.a == 1) // verify immutability
+
+r3 := rset(r, :c, 3)
+assert(r3.c == 3)
+assert(r3.a == 1)
+assert(r3.b == 2)
+assert(rget(r, :c) == nil)
+
+// 3. rdel, rcontains?, rkeys, rvals
+r6 := rdel(r3, :b)
+assert(rget(r6, :b) == nil)
+assert(r6.a == 1)
+assert(r6.c == 3)
+
+assert(rcontains(r, :a))
+assert(!rcontains(r, :c))
+
+assert(rkeys(r) == [:a, :b])
+assert(rvals(r) == [1, 2])
+
+// 4. Type predicate
+assert(is_record(r))
+assert(!is_record(:a))
+assert(!is_record(123))
+assert(!is_record([]))
+
+println("All record tests passed successfully!")

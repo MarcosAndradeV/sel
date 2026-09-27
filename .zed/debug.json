@@ -10,7 +10,7 @@
     "adapter": "CodeLLDB",
     "pid": 0,
     "program": "target/debug/sel",
-    "args": ["temp/temp.scm"],
+    "args": ["examples/modern_functional.sel"],
     "build": {
       "command": "cargo",
       "args": ["build"]

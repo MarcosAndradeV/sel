@@ -1,0 +1,28 @@
+// tests/test_tco.sel
+// Tail Call Optimization (TCO) Test Suite
+
+// 1. Basic tail-recursive accumulator
+sum 0 acc := acc
+sum n acc := sum(n - 1, n + acc)
+
+assert(sum(100000, 0) == 5000050000)
+
+// 2. Mutual recursion test (10,000 iterations)
+even_rec 0 := true
+even_rec n := odd_rec(n - 1)
+
+odd_rec 0 := false
+odd_rec n := even_rec(n - 1)
+
+assert(even_rec(10000))
+assert(!odd_rec(10000))
+
+// 3. TCO with let
+sum_let 0 acc := acc
+sum_let n acc :=
+    let next_n = n - 1, next_acc = n + acc in
+    sum_let(next_n, next_acc)
+
+assert(sum_let(10000, 0) == 50005000)
+
+println("TCO tests passed successfully!")

@@ -1,0 +1,2 @@
+// tests/modules_test/pkg/mod.sel
+pub greet name := format("Hello from pkg, {}!", name)

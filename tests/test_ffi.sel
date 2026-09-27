@@ -1,0 +1,21 @@
+// tests/test_ffi.sel
+// Foreign Function Interface (FFI) Test Suite
+
+libc := ffi_dlopen("libc.so.6")
+
+// using raw ffi_call
+puts := ffi_dlsym(libc, "puts")
+ffi_call(puts, :i32, [:string], ["This string is printed using the C puts function."])
+
+// using ffi_func wrapper
+strlen_sym := ffi_dlsym(libc, "strlen")
+c_strlen := ffi_func(strlen_sym, :u64, [:string])
+
+assert(c_strlen("Hello, FFI!") == 11)
+
+// math library
+libm := ffi_dlopen("libm.so.6")
+my_pow := ffi_dlsym(libm, "pow")
+assert(ffi_call(my_pow, :f64, [:f64, :f64], [2.0, 3.0]) == 8.0)
+
+println("FFI tests passed successfully!")

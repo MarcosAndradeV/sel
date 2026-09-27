@@ -1,0 +1,17 @@
+// tests/test_load.sel
+// Test the load builtin function
+
+res := load("helper_load.sel")
+assert(res == 42)
+assert(loaded_var == "hello-from-helper")
+assert(loaded_func(5) == 50)
+
+// Non-existent file error handling
+err_res := try do
+    load("does_not_exist.sel")
+    false
+end catch err -> true
+
+assert(err_res)
+
+println("Load builtin test passed successfully!")

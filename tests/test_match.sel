@@ -1,0 +1,76 @@
+// tests/test_match.sel
+// Pattern Matching Test Suite
+
+// 1. Literal matching
+test_literals x :=
+    match x with
+    | 42 -> "integer"
+    | 3.14 -> "float"
+    | "hello" -> "string"
+    | true -> "bool-true"
+    | false -> "bool-false"
+    | 'a' -> "char-a"
+    | :foo -> "symbol-foo"
+    | nil -> "nil-val"
+    | _ -> "other"
+    end
+
+assert(test_literals(42) == "integer")
+assert(test_literals(3.14) == "float")
+assert(test_literals("hello") == "string")
+assert(test_literals(true) == "bool-true")
+assert(test_literals(false) == "bool-false")
+assert(test_literals('a') == "char-a")
+assert(test_literals(:foo) == "symbol-foo")
+assert(test_literals(nil) == "nil-val")
+assert(test_literals(999) == "other")
+
+// 2. Wildcard and Variable Binding
+test_bindings x :=
+    match x with
+    | 0 -> "zero"
+    | n -> n + 10
+    end
+
+assert(test_bindings(0) == "zero")
+assert(test_bindings(5) == 15)
+
+// 3. List patterns
+test_list x :=
+    match x with
+    | [] -> "empty"
+    | [1, 2, 3] -> "onetwothree"
+    | [a, b] -> a + b
+    | [h | t] -> h
+    | _ -> "other"
+    end
+
+assert(test_list([]) == "empty")
+assert(test_list([1, 2, 3]) == "onetwothree")
+assert(test_list([10, 20]) == 30)
+assert(test_list([99, 100, 101]) == 99)
+
+// 4. Guards
+test_guards x :=
+    match x with
+    | n when n < 0 -> "negative"
+    | n when n == 0 -> "zero"
+    | n when n > 0 && n < 10 -> "small-positive"
+    | _ -> "large-positive"
+    end
+
+assert(test_guards(-5) == "negative")
+assert(test_guards(0) == "zero")
+assert(test_guards(7) == "small-positive")
+assert(test_guards(42) == "large-positive")
+
+// 5. Multi-clause functions
+fib 0 := 0
+fib 1 := 1
+fib n := fib(n - 1) + fib(n - 2)
+
+assert(fib(0) == 0)
+assert(fib(1) == 1)
+assert(fib(7) == 13)
+
+println("Match tests passed successfully!")

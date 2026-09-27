@@ -869,7 +869,7 @@ mod tests {
     #[test]
     fn test_stepping_basic_arithmetic() {
         let env = load_core_lib();
-        let mut session = DebugSession::new("(+ 10 20)", env).expect("valid code");
+        let mut session = DebugSession::new("10 + 20", env).expect("valid code");
         assert_eq!(session.status, VmStatus::Ready);
 
         let snap1 = session.step_instruction();
@@ -884,7 +884,7 @@ mod tests {
     fn test_stepping_with_display() {
         let env = load_core_lib();
         let mut session = DebugSession::new(
-            "(define x 42)\n(display x)\n(newline)",
+            "x := 42\ndisplay(x)\nnewline()",
             env,
         )
         .expect("valid code");
@@ -898,7 +898,7 @@ mod tests {
     #[test]
     fn test_disassembly() {
         let env = load_core_lib();
-        let session = DebugSession::new("(+ 1 2)", env).expect("valid code");
+        let session = DebugSession::new("1 + 2", env).expect("valid code");
         assert_eq!(session.chunks.len(), 1);
         let dis = disassemble_chunk(&session.chunks[0].1);
         assert!(!dis.is_empty());
@@ -910,7 +910,7 @@ mod tests {
     fn test_ast_to_graph() {
         let file_id = intern("<test>");
         let mut diags = Vec::new();
-        let asts = parse_all("(define (add a b) (+ a b))", file_id, &mut diags);
+        let asts = parse_all("add a b := a + b", file_id, &mut diags);
         assert!(diags.is_empty());
         let resolved = resolve_ast(asts[0].clone()).expect("valid resolve");
         let graph = ast_to_graph(&resolved);

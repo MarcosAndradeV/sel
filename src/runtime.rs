@@ -147,16 +147,6 @@ fn resolve_module_path(spec: &str, caller_file_id: u32, loc: Loc) -> Result<(Str
         if p.is_file() {
             candidates.push(p.clone());
         }
-        let with_scm = if spec_str.ends_with(".scm") {
-            base.join(spec_str)
-        } else {
-            base.join(format!("{spec_str}.scm"))
-        };
-        candidates.push(with_scm);
-
-        let mod_scm = base.join(spec_str).join("mod.scm");
-        candidates.push(mod_scm);
-
         let with_sel = if spec_str.ends_with(".sel") {
             base.join(spec_str)
         } else {
@@ -902,10 +892,8 @@ impl VM {
                         check_sandbox(&fp, root, loc)?;
                     }
 
-                    // Extract base module name (e.g. "tests/math" -> "math", "pkg/mod.scm" -> "pkg")
-                    let base_name = if fp.file_name().and_then(|s| s.to_str()) == Some("mod.scm")
-                        || fp.file_name().and_then(|s| s.to_str()) == Some("mod.sel")
-                    {
+                    // Extract base module name (e.g. "tests/math" -> "math", "pkg/mod.sel" -> "pkg")
+                    let base_name = if fp.file_name().and_then(|s| s.to_str()) == Some("mod.sel") {
                         fp.parent()
                             .and_then(|p| p.file_name())
                             .and_then(|s| s.to_str())
@@ -932,31 +920,10 @@ impl VM {
                         let src = read_script(&fp).map_err(|e| SelError::Internal(e.to_string()))?;
                         let mut diags = Vec::new();
                         let file_id = intern(fp.to_string_lossy().as_ref());
-                        let asts = {
-                            #[cfg(feature = "alt-syntax")]
-                            {
-                                if fp.extension().and_then(|e| e.to_str()) == Some("sel") {
-                                    crate::alt_parser::parse_all(&src, file_id, &mut diags)
-                                } else {
-                                    parse_all(&src, file_id, &mut diags)
-                                }
-                            }
-                            #[cfg(not(feature = "alt-syntax"))]
-                            {
-                                if fp.extension().and_then(|e| e.to_str()) == Some("sel") {
-                                    return Err(SelError::SyntaxError(
-                                        loc,
-                                        "Alternative syntax (.sel) requires the `alt-syntax` feature".into(),
-                                    ));
-                                }
-                                parse_all(&src, file_id, &mut diags)
-                            }
-                        };
+                        let asts = parse_all(&src, file_id, &mut diags);
                         let m_env = Rc::new(RefCell::new(Env::default()));
                         m_env.borrow_mut().parent = Some(load_core_lib());
-                        if fp.extension().and_then(|e| e.to_str()) == Some("sel") {
-                            m_env.borrow_mut().current_visibility_public = false;
-                        }
+                        m_env.borrow_mut().current_visibility_public = false;
 
                         execute_asts_sandboxed(asts, m_env.clone(), self.sandbox_root.clone())?;
                         let mut exports = Vec::new();
@@ -1324,26 +1291,7 @@ impl VM {
                             .map_err(|e| SelError::Internal(e.to_string()))?;
                         let mut diags = Vec::new();
                         let file_id = intern(target_path.to_string_lossy().as_ref());
-                        let asts = {
-                            #[cfg(feature = "alt-syntax")]
-                            {
-                                if target_path.extension().and_then(|e| e.to_str()) == Some("sel") {
-                                    crate::alt_parser::parse_all(&src, file_id, &mut diags)
-                                } else {
-                                    parse_all(&src, file_id, &mut diags)
-                                }
-                            }
-                            #[cfg(not(feature = "alt-syntax"))]
-                            {
-                                if target_path.extension().and_then(|e| e.to_str()) == Some("sel") {
-                                    return Err(SelError::SyntaxError(
-                                        loc,
-                                        "Alternative syntax (.sel) requires the `alt-syntax` feature".into(),
-                                    ));
-                                }
-                                parse_all(&src, file_id, &mut diags)
-                            }
-                        };
+                        let asts = parse_all(&src, file_id, &mut diags);
                         if !diags.is_empty() {
                             return Err(diags.remove(0));
                         }
@@ -1685,19 +1633,19 @@ mod tests {
     fn test_runtime_fast_path_arithmetic() {
         let env = create_test_env();
 
-        let res_sum = crate::eval("(+ 10 20)", env.clone()).unwrap();
+        let res_sum = crate::eval("10 + 20", env.clone()).unwrap();
         assert!(matches!(res_sum, Value::Integer(30)));
 
-        let res_sub = crate::eval("(- 100 40)", env.clone()).unwrap();
+        let res_sub = crate::eval("100 - 40", env.clone()).unwrap();
         assert!(matches!(res_sub, Value::Integer(60)));
 
-        let res_mul = crate::eval("(* 6 7)", env.clone()).unwrap();
+        let res_mul = crate::eval("6 * 7", env.clone()).unwrap();
         assert!(matches!(res_mul, Value::Integer(42)));
 
-        let res_mod = crate::eval("(mod 17 5)", env.clone()).unwrap();
+        let res_mod = crate::eval("17 % 5", env.clone()).unwrap();
         assert!(matches!(res_mod, Value::Integer(2)));
 
-        let res_variadic_sum = crate::eval("(+ 1 2 3 4 5)", env).unwrap();
+        let res_variadic_sum = crate::eval("1 + 2 + 3 + 4 + 5", env).unwrap();
         assert!(matches!(res_variadic_sum, Value::Integer(15)));
     }
 
@@ -1705,20 +1653,20 @@ mod tests {
     fn test_runtime_fast_path_comparisons() {
         let env = create_test_env();
 
-        assert!(matches!(crate::eval("(< 5 10)", env.clone()).unwrap(), Value::Boolean(true)));
-        assert!(matches!(crate::eval("(> 5 10)", env.clone()).unwrap(), Value::Boolean(false)));
-        assert!(matches!(crate::eval("(<= 10 10)", env.clone()).unwrap(), Value::Boolean(true)));
-        assert!(matches!(crate::eval("(>= 12 10)", env.clone()).unwrap(), Value::Boolean(true)));
-        assert!(matches!(crate::eval("(= 42 42)", env.clone()).unwrap(), Value::Boolean(true)));
-        assert!(matches!(crate::eval("(!= 42 10)", env.clone()).unwrap(), Value::Boolean(true)));
+        assert!(matches!(crate::eval("5 < 10", env.clone()).unwrap(), Value::Boolean(true)));
+        assert!(matches!(crate::eval("5 > 10", env.clone()).unwrap(), Value::Boolean(false)));
+        assert!(matches!(crate::eval("10 <= 10", env.clone()).unwrap(), Value::Boolean(true)));
+        assert!(matches!(crate::eval("12 >= 10", env.clone()).unwrap(), Value::Boolean(true)));
+        assert!(matches!(crate::eval("42 == 42", env.clone()).unwrap(), Value::Boolean(true)));
+        assert!(matches!(crate::eval("42 != 10", env.clone()).unwrap(), Value::Boolean(true)));
     }
 
     #[test]
     fn test_runtime_rest_params() {
         let env = create_test_env();
 
-        crate::eval("(define (len &xs) (count xs))", env.clone()).unwrap();
-        let res = crate::eval("(len 1 2 3 4)", env).unwrap();
+        crate::eval("len [x | xs] := 1 + len(xs)\nlen [] := 0", env.clone()).unwrap();
+        let res = crate::eval("len([1, 2, 3, 4])", env).unwrap();
         assert!(matches!(res, Value::Integer(4)));
     }
 
@@ -1727,7 +1675,7 @@ mod tests {
         let mut vm = VM::new();
         assert!(vm.module_cache.is_empty());
 
-        let fake_path = PathBuf::from("/fake/path/mod.scm");
+        let fake_path = PathBuf::from("/fake/path/mod.sel");
         let exports = vec![(intern("foo"), Value::Integer(42))];
         vm.module_cache.insert(fake_path.clone(), exports);
 

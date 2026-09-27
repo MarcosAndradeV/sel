@@ -1,0 +1,44 @@
+// examples/coroutines.sel
+// Cooperative coroutines in SEL
+// Demonstrates cooperative multitasking using co_create, yield, and co_resume.
+
+println("=== SEL Coroutines Demo: Producer-Consumer Generator ===")
+
+// A coroutine generator that yields squares of even numbers
+make_even_squares_generator max_num :=
+    co_create(\_ -> do
+        loop current :=
+            if current <= max_num then do
+                if is_even(current) then do
+                    sq := current * current
+                    println("  [Generator] Yielding square of ", current, " -> ", sq)
+                    yield(sq)
+                end else
+                    nil
+                loop(current + 1)
+            end else do
+                println("  [Generator] Completed!")
+                :done
+            end
+        loop(1)
+    end)
+
+gen := make_even_squares_generator(10)
+println("Generator state initially: ", co_state(gen))
+
+// Consumer loop that pulls values from the generator
+consume g :=
+    if !co_dead(g) then do
+        val := co_resume(g, nil)
+        if val != :done then do
+            println("  [Consumer] Received value from coroutine: ", val)
+            consume(g)
+        end else
+            nil
+    end else
+        nil
+
+println("Starting consumer loop:")
+consume(gen)
+
+println("Generator state after completion: ", co_state(gen))
