@@ -1554,6 +1554,16 @@ pub fn execute_asts_sandboxed(
         let loc = ast.loc();
         let expanded = macro_expand(ast, env.clone())?;
         let resolved = crate::parser::resolve_ast(expanded)?;
+
+        // Static analysis: pattern reachability and exhaustiveness warnings
+        let warnings = crate::analysis::analyze_program(std::slice::from_ref(&resolved));
+        for warning in warnings {
+            let filename = crate::types::lookup(warning.loc().file_id);
+            if filename != "<core.sel>" {
+                eprintln!("{}", warning);
+            }
+        }
+
         let mut chunk = Chunk::new();
         let mut compiler = Compiler::new(&mut chunk);
         compiler.compile(resolved)?;

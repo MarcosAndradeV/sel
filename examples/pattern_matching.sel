@@ -1,63 +1,66 @@
 // examples/pattern_matching.sel
-// Pattern matching in SEL modern syntax
-// Demonstrates structural pattern matching, multi-clause functions,
-// list destructuring with cons ([h | t]), record patterns, and guards.
+// Demonstrates advanced pattern matching features in SEL:
+// - Structural destructuring (lists, records, cons)
+// - As-patterns (var @ pattern)
+// - Parenthesized Or-patterns ((pat1 | pat2 | ...))
+// - Destructuring let bindings
+// - Multi-clause pattern functions with guards
 
-println("=== SEL Modern Pattern Matching Demo (.sel) ===")
+println("=== SEL Advanced Pattern Matching Showcase ===")
 newline()
 
-// 1. Evaluating Expression Trees with `match`
-eval_expr expr :=
-    match expr with
-    | [:add, a, b] -> eval_expr(a) + eval_expr(b)
-    | [:mul, a, b] -> eval_expr(a) * eval_expr(b)
-    | [:sub, a, b] -> eval_expr(a) - eval_expr(b)
-    | [:neg, a] -> 0 - eval_expr(a)
-    | n when is_number(n) -> n
-    | _ -> error("Invalid expression:", expr)
-    end
+// 1. As-patterns: capturing the whole container alongside its components
+inspect_batch all @ [] := "Batch is empty"
+inspect_batch all @ [single] := format("Single item batch: {}", single)
+inspect_batch all @ [head | tail] :=
+    format("Batch of {} items starting with '{}' and {} remaining", count(all), head, count(tail))
 
-math_ast := [:add, [:mul, 3, 4], [:neg, 2]]
-println("Evaluating AST:", math_ast, "=>", eval_expr(math_ast))
+println(inspect_batch([]))
+println(inspect_batch(["alpha"]))
+println(inspect_batch(["task_1", "task_2", "task_3", "task_4"]))
+newline()
 
-// 2. Processing HTTP / API Responses with Record Pattern Matching
-handle_response resp :=
-    match resp with
-    | { status: s, data: payload } when s == 200 || s == 201 ->
-        println("Success! Received payload:", payload)
-    | { status: 404 } ->
-        println("Not Found!")
-    | { status: code, message: msg } when code >= 500 ->
-        println("Server Error", code, ":", msg)
-    | _ ->
-        println("Unhandled response:", resp)
-    end
+// 2. Parenthesized Or-patterns: matching multiple alternatives
+http_status_category (200 | 201 | 204) := :success
+http_status_category (301 | 302 | 304) := :redirection
+http_status_category (400 | 401 | 403 | 404) := :client_error
+http_status_category (500 | 502 | 503) := :server_error
+http_status_category _ := :unknown
 
-handle_response({ status: 200, data: "User Profile: Alice" })
-handle_response({ status: 404, url: "/api/items" })
-handle_response({ status: 502, message: "Bad Gateway" })
+responses := [200, 404, 500, 301, 418]
+categories := responses |> map_by(\code -> [code, http_status_category(code)])
+println("HTTP Status classifications:")
+println(categories)
+newline()
 
-// 3. Multi-Clause Recursive List Processing
-sum_squares [] := 0
-sum_squares [h | t] := (h * h) + sum_squares(t)
+// 3. Destructuring let: unpacking records and tuples
+user_record := { id: 42, username: "dev_marcos", role: :admin, score: 980 }
 
-println("Sum of squares [1, 2, 3, 4]:", sum_squares([1, 2, 3, 4]))
+formatted_user :=
+    let { username, role, score } = user_record,
+        status = if score > 500 then "Veteran" else "Novice"
+    in format("User '{}' [{}] - Status: {}", username, role, status)
 
-// 4. Multi-clause List Destructuring
-describe_list [] := "empty list"
-describe_list [single] := "singleton list"
-describe_list [x, y] := "pair list"
-describe_list [first, second | rest] := "list with 3 or more elements"
+println("Destructured User Record:")
+println(formatted_user)
+newline()
 
-println("describe_list []:", describe_list([]))
-println("describe_list [1]:", describe_list([1]))
-println("describe_list [1, 2]:", describe_list([1, 2]))
-println("describe_list [1, 2, 3, 4]:", describe_list([1, 2, 3, 4]))
+// 4. Combined As-pattern with Record and Nested Or-pattern
+authorize u @ { role: (:admin | :owner), username } :=
+    format("Access granted to privileged user '{}' (id: {})", username, u.id)
+authorize { username, role } :=
+    format("Access denied for user '{}' with role '{}'", username, role)
+authorize _ :=
+    "Invalid user payload"
 
-// 5. Multi-Clause Pattern Matching on Records
-describe_shape { type: :circle, radius: r } := 3.14159 * r * r
-describe_shape { type: :rect, width: w, height: h } := w * h
-describe_shape _ := 0
+println(authorize(user_record))
+println(authorize({ id: 99, username: "guest_bob", role: :viewer, score: 10 }))
+newline()
 
-println("Area of circle:", describe_shape({ type: :circle, radius: 5 }))
-println("Area of rectangle:", describe_shape({ type: :rect, width: 4, height: 6 }))
+// 5. Destructuring combined with pipelines
+points := [[10, 20], [30, 40], [5, 12]]
+magnitudes := points |> map_by(\p ->
+    let [x, y] = p
+    in sqrt(x * x + y * y)
+)
+println("Point magnitudes:", magnitudes)

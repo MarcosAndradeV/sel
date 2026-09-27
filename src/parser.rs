@@ -37,6 +37,36 @@ struct FnClause {
     body: Ast,
 }
 
+fn unescape_string(source: &str) -> String {
+    let mut buffer = String::with_capacity(source.len());
+    let mut esc = false;
+    let s = source.strip_prefix('"').unwrap_or(source);
+    let s = s.strip_suffix('"').unwrap_or(s);
+    for ch in s.chars() {
+        if esc {
+            match ch {
+                'r' => buffer.push('\r'),
+                'n' => buffer.push('\n'),
+                't' => buffer.push('\t'),
+                '"' => buffer.push('"'),
+                '\'' => buffer.push('\''),
+                '\\' => buffer.push('\\'),
+                '0' => buffer.push('\0'),
+                other => {
+                    buffer.push('\\');
+                    buffer.push(other);
+                }
+            }
+            esc = false;
+        } else if ch == '\\' {
+            esc = true;
+        } else {
+            buffer.push(ch);
+        }
+    }
+    buffer
+}
+
 fn tokenize_source(
     source: &str,
     file_id: u32,
@@ -272,41 +302,68 @@ fn lower_clause_group(clauses: Vec<FnClause>) -> Result<Ast> {
         Ast::Define(loc, name, Box::new(lambda))
     } else {
         let arity = first.patterns.len();
-        let mut match_clauses = Vec::new();
-
-        for clause in clauses {
-            if clause.patterns.len() != arity {
-                return Err(SelError::SyntaxError(
-                    clause.loc,
-                    format!(
-                        "Clause for function `{}` has arity {}, expected {}",
-                        lookup(name),
-                        clause.patterns.len(),
-                        arity
-                    ),
-                ));
+        let (match_clauses, target, arg_ids) = if arity == 1 {
+            let mut match_clauses = Vec::with_capacity(clauses.len());
+            for mut clause in clauses {
+                if clause.patterns.len() != 1 {
+                    return Err(SelError::SyntaxError(
+                        clause.loc,
+                        format!(
+                            "Clause for function `{}` has arity {}, expected 1",
+                            lookup(name),
+                            clause.patterns.len()
+                        ),
+                    ));
+                }
+                let pat = clause.patterns.pop().unwrap();
+                match_clauses.push(MatchClause {
+                    loc: clause.loc,
+                    pattern: pat,
+                    guard: clause.guard,
+                    body: vec![clause.body],
+                });
             }
-            let pat = Pattern::List(clause.loc, clause.patterns);
-            match_clauses.push(MatchClause {
-                loc: clause.loc,
-                pattern: pat,
-                guard: clause.guard,
-                body: vec![clause.body],
-            });
-        }
+            let clean_name = lookup(name).replace(['-', ':', '\''], "_");
+            let arg_sym = intern(&format!("__sel_arg_{}_0", clean_name));
+            (match_clauses, Ast::Symbol(loc, arg_sym), vec![arg_sym])
+        } else {
+            let mut match_clauses = Vec::new();
+            for clause in clauses {
+                if clause.patterns.len() != arity {
+                    return Err(SelError::SyntaxError(
+                        clause.loc,
+                        format!(
+                            "Clause for function `{}` has arity {}, expected {}",
+                            lookup(name),
+                            clause.patterns.len(),
+                            arity
+                        ),
+                    ));
+                }
+                let pat = Pattern::List(clause.loc, clause.patterns);
+                match_clauses.push(MatchClause {
+                    loc: clause.loc,
+                    pattern: pat,
+                    guard: clause.guard,
+                    body: vec![clause.body],
+                });
+            }
 
-        let mut arg_ids = Vec::with_capacity(arity);
-        let mut arg_asts = Vec::with_capacity(arity);
-        let clean_name = lookup(name).replace(['-', ':', '\''], "_");
-        for i in 0..arity {
-            let arg_sym = intern(&format!("__sel_arg_{}_{}", clean_name, i));
-            arg_ids.push(arg_sym);
-            arg_asts.push(Ast::Symbol(loc, arg_sym));
-        }
+            let mut arg_ids = Vec::with_capacity(arity);
+            let mut arg_asts = Vec::with_capacity(arity);
+            let clean_name = lookup(name).replace(['-', ':', '\''], "_");
+            for i in 0..arity {
+                let arg_sym = intern(&format!("__sel_arg_{}_{}", clean_name, i));
+                arg_ids.push(arg_sym);
+                arg_asts.push(Ast::Symbol(loc, arg_sym));
+            }
 
-        let mut list_items = vec![Ast::Symbol(loc, intern("list"))];
-        list_items.extend(arg_asts);
-        let target = Ast::List(loc, list_items);
+            let mut list_items = vec![Ast::Symbol(loc, intern("list"))];
+            list_items.extend(arg_asts);
+            let target = Ast::List(loc, list_items);
+            (match_clauses, target, arg_ids)
+        };
+
         let match_ast = Ast::Match(loc, Box::new(target), match_clauses);
         let lambda = Ast::Lambda(loc, arg_ids, vec![match_ast]);
         Ast::Define(loc, name, Box::new(lambda))
@@ -523,8 +580,8 @@ impl<'a> AltParser<'a> {
                 break;
             }
 
-            // A function definition cannot have `(` or `.` immediately following the identifier
-            if i == idx + 1 && (tok.kind == TokenKind::OpenParen || tok.kind == TokenKind::Dot) {
+            // A function definition cannot be a record dot-mutation `rec.field := ...`
+            if i == idx + 1 && tok.kind == TokenKind::Dot {
                 return false;
             }
 
@@ -979,7 +1036,7 @@ impl<'a> AltParser<'a> {
                     Err(SelError::SyntaxError(loc, format!("Invalid float: {s}")))
                 }
             }
-            TokenKind::StringLiteral => Ok(Ast::String(loc, tok.unescape())),
+            TokenKind::StringLiteral => Ok(Ast::String(loc, unescape_string(tok.source()))),
             TokenKind::CharacterLiteral => {
                 let s = tok.unescape();
                 let c = s.chars().next().unwrap_or('\0');
@@ -1046,10 +1103,9 @@ impl<'a> AltParser<'a> {
         let loc = self.current_loc();
         self.expect_keyword("let")?;
 
-        let mut bindings = Vec::new();
+        let mut bindings: Vec<(Pattern, Ast)> = Vec::new();
         loop {
-            let var_tok = self.expect_token(TokenKind::Identifier, "variable name in let")?;
-            let var_id = intern(var_tok.source());
+            let pat = self.parse_pattern()?;
 
             if self.peek().kind == TokenKind::Assign {
                 self.advance();
@@ -1058,7 +1114,7 @@ impl<'a> AltParser<'a> {
             }
 
             let val = self.parse_expr()?;
-            bindings.push((var_id, val));
+            bindings.push((pat, val));
 
             if self.peek().kind == TokenKind::Comma {
                 self.advance();
@@ -1069,7 +1125,41 @@ impl<'a> AltParser<'a> {
 
         self.expect_keyword("in")?;
         let body = self.parse_expr()?;
-        Ok(Ast::Let(loc, bindings, vec![body]))
+
+        let mut current_body = body;
+        let mut simple_accum: Vec<(u32, Ast)> = Vec::new();
+
+        for (pat, expr) in bindings.into_iter().rev() {
+            match pat {
+                Pattern::Variable(_, id) => {
+                    simple_accum.push((id, expr));
+                }
+                complex_pat => {
+                    if !simple_accum.is_empty() {
+                        simple_accum.reverse();
+                        current_body = Ast::Let(loc, std::mem::take(&mut simple_accum), vec![current_body]);
+                    }
+                    let p_loc = complex_pat.loc();
+                    current_body = Ast::Match(
+                        p_loc,
+                        Box::new(expr),
+                        vec![MatchClause {
+                            loc: p_loc,
+                            pattern: complex_pat,
+                            guard: None,
+                            body: vec![current_body],
+                        }],
+                    );
+                }
+            }
+        }
+
+        if !simple_accum.is_empty() {
+            simple_accum.reverse();
+            current_body = Ast::Let(loc, simple_accum, vec![current_body]);
+        }
+
+        Ok(current_body)
     }
 
     fn parse_do_block(&mut self) -> Result<Ast> {
@@ -1237,12 +1327,14 @@ impl<'a> AltParser<'a> {
         matches!(
             tok.kind,
             TokenKind::Identifier
+                | TokenKind::Keyword
                 | TokenKind::Number(_)
                 | TokenKind::RealNumber
                 | TokenKind::StringLiteral
                 | TokenKind::CharacterLiteral
                 | TokenKind::OpenBracket
                 | TokenKind::OpenCurly
+                | TokenKind::OpenParen
                 | TokenKind::Colon
         )
     }
@@ -1255,8 +1347,14 @@ impl<'a> AltParser<'a> {
             TokenKind::Keyword | TokenKind::Identifier => {
                 let is_escaped = self.pos > 0 && self.escaped_tokens.contains(&(self.pos - 1));
                 if is_escaped {
-                    let sym_ast = Ast::Symbol(loc, intern(tok.source()));
-                    Ok(Pattern::Literal(loc, Box::new(Ast::Quote(loc, Box::new(sym_ast)))))
+                    let var_id = intern(tok.source());
+                    if self.peek().kind == TokenKind::At {
+                        self.advance();
+                        let sub_pat = self.parse_pattern()?;
+                        Ok(Pattern::As(loc, var_id, Box::new(sub_pat)))
+                    } else {
+                        Ok(Pattern::Variable(loc, var_id))
+                    }
                 } else if tok.source() == "_" {
                     Ok(Pattern::Wildcard(loc))
                 } else if tok.source() == "true" {
@@ -1266,7 +1364,29 @@ impl<'a> AltParser<'a> {
                 } else if tok.source() == "nil" {
                     Ok(Pattern::Literal(loc, Box::new(Ast::Nil(loc))))
                 } else {
-                    Ok(Pattern::Variable(loc, intern(tok.source())))
+                    let var_id = intern(tok.source());
+                    if self.peek().kind == TokenKind::At {
+                        self.advance();
+                        let sub_pat = self.parse_pattern()?;
+                        Ok(Pattern::As(loc, var_id, Box::new(sub_pat)))
+                    } else {
+                        Ok(Pattern::Variable(loc, var_id))
+                    }
+                }
+            }
+            TokenKind::OpenParen => {
+                let first_pat = self.parse_pattern()?;
+                if self.peek().kind == TokenKind::Pipe {
+                    let mut pats = vec![first_pat];
+                    while self.peek().kind == TokenKind::Pipe {
+                        self.advance();
+                        pats.push(self.parse_pattern()?);
+                    }
+                    self.expect_token(TokenKind::CloseParen, "`)` after or-pattern")?;
+                    Ok(Pattern::Or(loc, pats))
+                } else {
+                    self.expect_token(TokenKind::CloseParen, "`)` after pattern")?;
+                    Ok(first_pat)
                 }
             }
             TokenKind::Colon => {
@@ -1291,7 +1411,7 @@ impl<'a> AltParser<'a> {
                 }
             }
             TokenKind::StringLiteral => {
-                Ok(Pattern::Literal(loc, Box::new(Ast::String(loc, tok.unescape()))))
+                Ok(Pattern::Literal(loc, Box::new(Ast::String(loc, unescape_string(tok.source())))))
             }
             TokenKind::CharacterLiteral => {
                 let s = tok.unescape();

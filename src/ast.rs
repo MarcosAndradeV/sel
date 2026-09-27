@@ -18,6 +18,7 @@ pub enum Pattern {
     Rest(Loc, Vec<Pattern>, Box<Pattern>),
     Record(Loc, Vec<(u32, Pattern)>),
     Or(Loc, Vec<Pattern>),
+    As(Loc, u32, Box<Pattern>),
 }
 
 impl Pattern {
@@ -30,7 +31,8 @@ impl Pattern {
             | Pattern::Cons(loc, _, _)
             | Pattern::Rest(loc, _, _)
             | Pattern::Record(loc, _)
-            | Pattern::Or(loc, _) => *loc,
+            | Pattern::Or(loc, _)
+            | Pattern::As(loc, _, _) => *loc,
         }
     }
 }
@@ -444,6 +446,11 @@ pub fn pattern_to_value(pat: Pattern) -> Value {
             list.extend(pats.into_iter().map(pattern_to_value));
             Value::make_list(list)
         }
+        Pattern::As(_, id, sub_pat) => Value::make_list(vec![
+            Value::Symbol(intern("@")),
+            Value::Symbol(id),
+            pattern_to_value(*sub_pat),
+        ]),
     }
 }
 

@@ -126,15 +126,29 @@ multiply := \x y -> x * y
 nums := [1, 2, 3] |> map_by(\x -> x * 10) // [10, 20, 30]
 ```
 
-### Local Scopes (`let ... in ...`)
-`let` introduces local lexical bindings:
+### Local Scopes & Destructuring (`let ... in ...`)
+`let` introduces local lexical bindings and supports full pattern destructuring across lists, records, and as-patterns:
 
 ```sel
+// Simple binding
 hypotenuse a b :=
     let a2 = a * a,
         b2 = b * b
     in sqrt(a2 + b2)
+
+// Destructuring lists
+coordinates := [10, 20]
+dist_sq := let [x, y] = coordinates in x * x + y * y
+
+// Destructuring records with field punning
+user := { id: 101, name: "Alice", role: :admin }
+greeting := let { name, role } = user in format("{} is {}", name, role)
+
+// Destructuring with As-patterns
+summary := let all @ [h | t] = [1, 2, 3] in { head: h, count: count(all), rest: t }
 ```
+
+If a destructuring pattern fails to match the provided value at runtime, a descriptive error is raised.
 
 ### Imperative Blocks (`do ... end`)
 `do ... end` executes a sequence of expressions and yields the value of the final expression:
@@ -205,10 +219,39 @@ grade score :=
 | **Wildcard** | `_` | Matches any value without binding |
 | **Variable** | `x`, `id` | Binds matched value to variable name |
 | **Literal** | `0`, `"hello"`, `:ok` | Matches exact constant values |
+| **As-Pattern** | `var @ pat` | Binds `var` to the whole value while matching `pat` |
+| **Or-Pattern** | `(p1 \| p2 \| ...)` | Matches if any alternative matches (no bindings) |
 | **Cons** | `[h \| t]` | Deconstructs head and tail of list |
 | **List** | `[a, b, c]`, `[]` | Matches exact list structure |
 | **Rest** | `[a, b \| rest]` | Matches prefix elements and binds remaining tail |
-| **Record** | `{ id: uid, status: s }` | Matches record fields by key |
+| **Record** | `{ id: uid, status: s }` | Matches record fields by key (with punning `{ key }`) |
+
+### As-Patterns (`@`)
+Capture the composite container while matching and destructuring inner components:
+
+```sel
+inspect_list all @ [] := "Empty"
+inspect_list all @ [x] := format("Single: {}", x)
+inspect_list all @ [h | t] :=
+    format("Total {} items, head is {}", count(all), h)
+```
+
+### Parenthesized Or-Patterns (`(p1 | p2 | ...)`)
+Group multiple alternative literal patterns cleanly without duplicating handler bodies:
+
+```sel
+status_category (200 | 201 | 204) := :success
+status_category (400 | 401 | 404) := :client_error
+status_category (500 | 502 | 503) := :server_error
+status_category _ := :other
+
+// Nested or-patterns in lists or records
+match event with
+| [:http, (200 | 204)] -> "OK"
+| { role: (:admin | :owner) } -> "Authorized"
+| _ -> "Other"
+end
+```
 
 ### Record Pattern Matching
 ```sel

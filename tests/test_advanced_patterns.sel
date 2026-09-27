@@ -1,0 +1,128 @@
+// tests/test_advanced_patterns.sel
+// Verification suite for advanced pattern matching:
+// 1. As-patterns (@)
+// 2. Parenthesized Or-patterns ((p1 | p2 | ...))
+// 3. Destructuring let bindings (lists, records, cons, as-patterns)
+// 4. Multi-clause functions with advanced patterns
+
+println("=== Testing Advanced Pattern Matching Features ===")
+
+// --- 1. As-Patterns (var @ pattern) ---
+
+// As-pattern in match expression
+res1 := match [10, 20, 30] with
+| all @ [head | tail] -> { first: head, whole: all, rest: tail }
+| _ -> nil
+end
+
+assert(res1.first == 10)
+assert(res1.whole == [10, 20, 30])
+assert(res1.rest == [20, 30])
+
+// As-pattern in multi-clause function
+describe_list all @ [] := "empty"
+describe_list all @ [x] := format("singleton with {}", x)
+describe_list all @ [h | t] := format("list of {} starting with {}", count(all), h)
+
+assert(describe_list([]) == "empty")
+assert(describe_list([42]) == "singleton with 42")
+assert(describe_list([1, 2, 3, 4]) == "list of 4 starting with 1")
+
+// As-pattern with record
+user := { id: 101, name: "Alice", active: true }
+check_user u @ { name, active: true } := format("Active user {}: id {}", name, u.id)
+check_user _ := "Inactive or invalid"
+
+assert(check_user(user) == "Active user Alice: id 101")
+assert(check_user({ id: 102, name: "Bob", active: false }) == "Inactive or invalid")
+
+// --- 2. Parenthesized Or-Patterns ((pat1 | pat2 | ...)) ---
+
+// Simple scalar or-patterns
+is_admin_or_mod role :=
+    match role with
+    | (:admin | :moderator | :super_user) -> true
+    | _ -> false
+    end
+
+assert(is_admin_or_mod(:admin) == true)
+assert(is_admin_or_mod(:moderator) == true)
+assert(is_admin_or_mod(:super_user) == true)
+assert(is_admin_or_mod(:guest) == false)
+
+// Number or-patterns in multi-clause functions
+digit_type (0 | 2 | 4 | 6 | 8) := :even_digit
+digit_type (1 | 3 | 5 | 7 | 9) := :odd_digit
+digit_type _ := :not_a_digit
+
+assert(digit_type(4) == :even_digit)
+assert(digit_type(7) == :odd_digit)
+assert(digit_type(12) == :not_a_digit)
+
+// Nested or-patterns inside lists
+classify_event evt :=
+    match evt with
+    | [:http, (200 | 201 | 204)] -> :http_success
+    | [:http, (400 | 401 | 403 | 404)] -> :client_error
+    | [:http, (500 | 502 | 503)] -> :server_error
+    | _ -> :unknown_event
+    end
+
+assert(classify_event([:http, 200]) == :http_success)
+assert(classify_event([:http, 204]) == :http_success)
+assert(classify_event([:http, 404]) == :client_error)
+assert(classify_event([:http, 500]) == :server_error)
+assert(classify_event([:tcp, 200]) == :unknown_event)
+
+// Combination of as-pattern and or-pattern
+handle_status st @ (:ok | :ready | :done) := format("Status is good: {}", st)
+handle_status other := format("Status is other: {}", other)
+
+assert(handle_status(:ok) == "Status is good: ok")
+assert(handle_status(:ready) == "Status is good: ready")
+assert(handle_status(:pending) == "Status is other: pending")
+
+// --- 3. Destructuring Let Bindings ---
+
+// List destructuring in let
+coords := [15, 25]
+dist := let [x, y] = coords in x * x + y * y
+assert(dist == 850)
+
+// Head/tail cons destructuring in let
+items := ["apple", "banana", "cherry"]
+first_and_rest := let [first | remainder] = items in [first, count(remainder)]
+assert(first_and_rest == ["apple", 2])
+
+// Record destructuring in let with field punning
+person := { name: "Carol", age: 28, city: "London" }
+info := let { name, age } = person in format("{} is {} years old", name, age)
+assert(info == "Carol is 28 years old")
+
+// Mixed simple and complex let bindings
+combined :=
+    let base = 100,
+        [dx, dy] = [3, 4],
+        scale = 10
+    in base + (dx + dy) * scale
+assert(combined == 170)
+
+// Nested destructuring with As-pattern in let
+summary :=
+    let full @ [h | t] = [100, 200, 300]
+    in { head: h, total_items: count(full), tail: t }
+
+assert(summary.head == 100)
+assert(summary.total_items == 3)
+assert(summary.tail == [200, 300])
+
+// Let destructuring failure throws error (intercepted with try/catch)
+mismatch_caught :=
+    try
+        let [a, b] = [] in a + b
+    catch err ->
+        :caught_mismatch
+
+assert(mismatch_caught == :caught_mismatch)
+
+println("All advanced pattern matching tests passed successfully!")

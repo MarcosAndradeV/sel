@@ -204,3 +204,48 @@ impl SelError {
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelWarning {
+    UnreachablePattern(Loc, String),
+    InexhaustivePattern(Loc, String),
+    RedundantPattern(Loc, String),
+}
+
+impl SelWarning {
+    pub fn loc(&self) -> Loc {
+        match self {
+            Self::UnreachablePattern(loc, _)
+            | Self::InexhaustivePattern(loc, _)
+            | Self::RedundantPattern(loc, _) => *loc,
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        match self {
+            Self::UnreachablePattern(_, msg)
+            | Self::InexhaustivePattern(_, msg)
+            | Self::RedundantPattern(_, msg) => msg,
+        }
+    }
+}
+
+impl std::fmt::Display for SelWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "warning: ")?;
+        match self {
+            Self::UnreachablePattern(loc, msg) => {
+                write!(f, "unreachable pattern clause: {}", msg)?;
+                format_snippet(f, *loc)
+            }
+            Self::InexhaustivePattern(loc, msg) => {
+                write!(f, "inexhaustive pattern match: {}", msg)?;
+                format_snippet(f, *loc)
+            }
+            Self::RedundantPattern(loc, msg) => {
+                write!(f, "redundant pattern: {}", msg)?;
+                format_snippet(f, *loc)
+            }
+        }
+    }
+}

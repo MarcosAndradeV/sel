@@ -1323,9 +1323,17 @@ fn gen_match_id(prefix: &str) -> u32 {
     intern(&format!("{}_{}", prefix, id))
 }
 
-fn compile_pattern(
+#[derive(Clone, Copy, Default)]
+struct MatchContext<'a> {
+    cached_len: Option<&'a Ast>,
+    is_list_checked: bool,
+    is_record_checked: bool,
+}
+
+fn compile_pattern_with_ctx(
     pat: &Pattern,
     curr_expr: Ast,
+    ctx: MatchContext,
     conditions: &mut Vec<Ast>,
     bindings: &mut Vec<(u32, Ast)>,
 ) -> Result<()> {
@@ -1335,6 +1343,10 @@ fn compile_pattern(
             bindings.push((*id, curr_expr));
             Ok(())
         }
+        Pattern::As(_, id, sub_pat) => {
+            bindings.push((*id, curr_expr.clone()));
+            compile_pattern_with_ctx(sub_pat, curr_expr, ctx, conditions, bindings)
+        }
         Pattern::Literal(loc, ast) => {
             conditions.push(Ast::List(
                 *loc,
@@ -1343,47 +1355,86 @@ fn compile_pattern(
             Ok(())
         }
         Pattern::Cons(loc, head_pat, tail_pat) => {
-            conditions.push(Ast::List(
-                *loc,
-                vec![Ast::Symbol(*loc, intern("is_list")), curr_expr.clone()],
-            ));
-            let empty_expr = Ast::List(
-                *loc,
-                vec![Ast::Symbol(*loc, intern("is_empty")), curr_expr.clone()],
-            );
-            conditions.push(Ast::List(
-                *loc,
-                vec![Ast::Symbol(*loc, intern("not")), empty_expr],
-            ));
+            if !ctx.is_list_checked {
+                conditions.push(Ast::List(
+                    *loc,
+                    vec![Ast::Symbol(*loc, intern("is_list")), curr_expr.clone()],
+                ));
+            }
+            if let Some(len_ast) = ctx.cached_len {
+                conditions.push(Ast::List(
+                    *loc,
+                    vec![
+                        Ast::Symbol(*loc, intern(">")),
+                        len_ast.clone(),
+                        Ast::Integer(*loc, 0),
+                    ],
+                ));
+            } else {
+                let empty_expr = Ast::List(
+                    *loc,
+                    vec![Ast::Symbol(*loc, intern("is_empty")), curr_expr.clone()],
+                );
+                conditions.push(Ast::List(
+                    *loc,
+                    vec![Ast::Symbol(*loc, intern("not")), empty_expr],
+                ));
+            }
 
             let head_expr = Ast::List(
                 *loc,
                 vec![Ast::Symbol(*loc, intern("car")), curr_expr.clone()],
             );
             let tail_expr = Ast::List(*loc, vec![Ast::Symbol(*loc, intern("cdr")), curr_expr]);
-            compile_pattern(head_pat, head_expr, conditions, bindings)?;
-            compile_pattern(tail_pat, tail_expr, conditions, bindings)
+            let sub_ctx = MatchContext::default();
+            compile_pattern_with_ctx(head_pat, head_expr, sub_ctx, conditions, bindings)?;
+            compile_pattern_with_ctx(tail_pat, tail_expr, sub_ctx, conditions, bindings)
         }
         Pattern::List(loc, sub_pats) => {
-            conditions.push(Ast::List(
-                *loc,
-                vec![Ast::Symbol(*loc, intern("is_list")), curr_expr.clone()],
-            ));
+            if !ctx.is_list_checked {
+                conditions.push(Ast::List(
+                    *loc,
+                    vec![Ast::Symbol(*loc, intern("is_list")), curr_expr.clone()],
+                ));
+            }
             if sub_pats.is_empty() {
-                conditions.push(Ast::List(
-                    *loc,
-                    vec![Ast::Symbol(*loc, intern("is_empty")), curr_expr],
-                ));
+                if let Some(len_ast) = ctx.cached_len {
+                    conditions.push(Ast::List(
+                        *loc,
+                        vec![
+                            Ast::Symbol(*loc, intern("==")),
+                            len_ast.clone(),
+                            Ast::Integer(*loc, 0),
+                        ],
+                    ));
+                } else {
+                    conditions.push(Ast::List(
+                        *loc,
+                        vec![Ast::Symbol(*loc, intern("is_empty")), curr_expr],
+                    ));
+                }
             } else {
-                let count_expr = Ast::List(
-                    *loc,
-                    vec![Ast::Symbol(*loc, intern("count")), curr_expr.clone()],
-                );
                 let len_ast = Ast::Integer(*loc, sub_pats.len() as i64);
-                conditions.push(Ast::List(
-                    *loc,
-                    vec![Ast::Symbol(*loc, intern("==")), count_expr, len_ast],
-                ));
+                if let Some(cached_len) = ctx.cached_len {
+                    conditions.push(Ast::List(
+                        *loc,
+                        vec![
+                            Ast::Symbol(*loc, intern("==")),
+                            cached_len.clone(),
+                            len_ast,
+                        ],
+                    ));
+                } else {
+                    let count_expr = Ast::List(
+                        *loc,
+                        vec![Ast::Symbol(*loc, intern("count")), curr_expr.clone()],
+                    );
+                    conditions.push(Ast::List(
+                        *loc,
+                        vec![Ast::Symbol(*loc, intern("==")), count_expr, len_ast],
+                    ));
+                }
+                let sub_ctx = MatchContext::default();
                 for (i, p) in sub_pats.iter().enumerate() {
                     let elem_expr = Ast::List(
                         *loc,
@@ -1393,25 +1444,39 @@ fn compile_pattern(
                             Ast::Integer(*loc, i as i64),
                         ],
                     );
-                    compile_pattern(p, elem_expr, conditions, bindings)?;
+                    compile_pattern_with_ctx(p, elem_expr, sub_ctx, conditions, bindings)?;
                 }
             }
             Ok(())
         }
         Pattern::Rest(loc, prefix_pats, rest_pat) => {
-            conditions.push(Ast::List(
-                *loc,
-                vec![Ast::Symbol(*loc, intern("is_list")), curr_expr.clone()],
-            ));
-            let count_expr = Ast::List(
-                *loc,
-                vec![Ast::Symbol(*loc, intern("count")), curr_expr.clone()],
-            );
+            if !ctx.is_list_checked {
+                conditions.push(Ast::List(
+                    *loc,
+                    vec![Ast::Symbol(*loc, intern("is_list")), curr_expr.clone()],
+                ));
+            }
             let len_ast = Ast::Integer(*loc, prefix_pats.len() as i64);
-            conditions.push(Ast::List(
-                *loc,
-                vec![Ast::Symbol(*loc, intern(">=")), count_expr, len_ast],
-            ));
+            if let Some(cached_len) = ctx.cached_len {
+                conditions.push(Ast::List(
+                    *loc,
+                    vec![
+                        Ast::Symbol(*loc, intern(">=")),
+                        cached_len.clone(),
+                        len_ast,
+                    ],
+                ));
+            } else {
+                let count_expr = Ast::List(
+                    *loc,
+                    vec![Ast::Symbol(*loc, intern("count")), curr_expr.clone()],
+                );
+                conditions.push(Ast::List(
+                    *loc,
+                    vec![Ast::Symbol(*loc, intern(">=")), count_expr, len_ast],
+                ));
+            }
+            let sub_ctx = MatchContext::default();
             for (i, p) in prefix_pats.iter().enumerate() {
                 let elem_expr = Ast::List(
                     *loc,
@@ -1421,7 +1486,7 @@ fn compile_pattern(
                         Ast::Integer(*loc, i as i64),
                     ],
                 );
-                compile_pattern(p, elem_expr, conditions, bindings)?;
+                compile_pattern_with_ctx(p, elem_expr, sub_ctx, conditions, bindings)?;
             }
             let drop_expr = Ast::List(
                 *loc,
@@ -1431,13 +1496,16 @@ fn compile_pattern(
                     curr_expr,
                 ],
             );
-            compile_pattern(rest_pat, drop_expr, conditions, bindings)
+            compile_pattern_with_ctx(rest_pat, drop_expr, sub_ctx, conditions, bindings)
         }
         Pattern::Record(loc, fields) => {
-            conditions.push(Ast::List(
-                *loc,
-                vec![Ast::Symbol(*loc, intern("is_record")), curr_expr.clone()],
-            ));
+            if !ctx.is_record_checked {
+                conditions.push(Ast::List(
+                    *loc,
+                    vec![Ast::Symbol(*loc, intern("is_record")), curr_expr.clone()],
+                ));
+            }
+            let sub_ctx = MatchContext::default();
             for (key_sym, p) in fields {
                 let quote_key = Ast::Quote(*loc, Box::new(Ast::Symbol(*loc, *key_sym)));
                 conditions.push(Ast::List(
@@ -1456,7 +1524,7 @@ fn compile_pattern(
                         quote_key,
                     ],
                 );
-                compile_pattern(p, field_expr, conditions, bindings)?;
+                compile_pattern_with_ctx(p, field_expr, sub_ctx, conditions, bindings)?;
             }
             Ok(())
         }
@@ -1465,7 +1533,7 @@ fn compile_pattern(
             for sub_pat in sub_pats {
                 let mut sub_c = Vec::new();
                 let mut sub_b = Vec::new();
-                compile_pattern(sub_pat, curr_expr.clone(), &mut sub_c, &mut sub_b)?;
+                compile_pattern_with_ctx(sub_pat, curr_expr.clone(), ctx, &mut sub_c, &mut sub_b)?;
                 if !sub_b.is_empty() {
                     return Err(SelError::SyntaxError(
                         sub_pat.loc(),
@@ -1485,6 +1553,197 @@ fn compile_pattern(
     }
 }
 
+fn compile_single_clause(
+    clause: MatchClause,
+    target_ast: Ast,
+    ctx: MatchContext,
+    fallback: Ast,
+) -> Result<Ast> {
+    let mut conditions = Vec::new();
+    let mut bindings = Vec::new();
+    compile_pattern_with_ctx(
+        &clause.pattern,
+        target_ast,
+        ctx,
+        &mut conditions,
+        &mut bindings,
+    )?;
+
+    let pattern_cond = match conditions.len() {
+        0 => Ast::Boolean(clause.loc, true),
+        1 => conditions.pop().unwrap(),
+        _ => Ast::And(clause.loc, conditions),
+    };
+
+    let is_unconditional = matches!(&pattern_cond, Ast::Boolean(_, true));
+
+    match clause.guard {
+        None => {
+            let action = if bindings.is_empty() {
+                if clause.body.is_empty() {
+                    Ast::Nil(clause.loc)
+                } else if clause.body.len() == 1 {
+                    clause.body[0].clone()
+                } else {
+                    Ast::Begin(clause.loc, clause.body)
+                }
+            } else {
+                Ast::Let(clause.loc, bindings, clause.body)
+            };
+
+            if is_unconditional {
+                Ok(action)
+            } else {
+                Ok(Ast::If(
+                    clause.loc,
+                    Box::new(pattern_cond),
+                    Box::new(action),
+                    Some(Box::new(fallback)),
+                ))
+            }
+        }
+        Some(guard_expr) => {
+            let fail_sym = gen_match_id("_fail");
+            let fail_call = Ast::List(clause.loc, vec![Ast::Symbol(clause.loc, fail_sym)]);
+
+            let body_ast = if clause.body.is_empty() {
+                Ast::Nil(clause.loc)
+            } else if clause.body.len() == 1 {
+                clause.body[0].clone()
+            } else {
+                Ast::Begin(clause.loc, clause.body)
+            };
+
+            let guarded_body = Ast::If(
+                clause.loc,
+                Box::new(guard_expr),
+                Box::new(body_ast),
+                Some(Box::new(fail_call.clone())),
+            );
+
+            let action = if bindings.is_empty() {
+                guarded_body
+            } else {
+                Ast::Let(clause.loc, bindings, vec![guarded_body])
+            };
+
+            let test_and_run = if is_unconditional {
+                action
+            } else {
+                Ast::If(
+                    clause.loc,
+                    Box::new(pattern_cond),
+                    Box::new(action),
+                    Some(Box::new(fail_call)),
+                )
+            };
+
+            Ok(Ast::Let(
+                clause.loc,
+                vec![(
+                    fail_sym,
+                    Ast::Lambda(clause.loc, vec![], vec![fallback]),
+                )],
+                vec![test_and_run],
+            ))
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum PatternCategory {
+    List,
+    Record,
+    Literal,
+    Wildcard,
+    Other,
+}
+
+fn root_pattern(pat: &Pattern) -> &Pattern {
+    match pat {
+        Pattern::As(_, _, sub) => root_pattern(sub),
+        _ => pat,
+    }
+}
+
+fn categorize_pattern(pat: &Pattern) -> PatternCategory {
+    match root_pattern(pat) {
+        Pattern::Wildcard(_) | Pattern::Variable(..) => PatternCategory::Wildcard,
+        Pattern::List(..) | Pattern::Cons(..) | Pattern::Rest(..) => PatternCategory::List,
+        Pattern::Record(..) => PatternCategory::Record,
+        Pattern::Literal(..) => PatternCategory::Literal,
+        _ => PatternCategory::Other,
+    }
+}
+
+enum Cluster {
+    List(Vec<MatchClause>),
+    Record(Vec<MatchClause>),
+    Literals(Vec<MatchClause>),
+    General(MatchClause),
+}
+
+fn cluster_clauses(clauses: Vec<MatchClause>) -> Vec<Cluster> {
+    let mut clusters = Vec::new();
+    let mut iter = clauses.into_iter().peekable();
+
+    while let Some(first) = iter.next() {
+        let cat = categorize_pattern(&first.pattern);
+        match cat {
+            PatternCategory::List => {
+                let mut list_group = vec![first];
+                while let Some(peeked) = iter.peek() {
+                    if categorize_pattern(&peeked.pattern) == PatternCategory::List {
+                        list_group.push(iter.next().unwrap());
+                    } else {
+                        break;
+                    }
+                }
+                if list_group.len() >= 2 {
+                    clusters.push(Cluster::List(list_group));
+                } else {
+                    clusters.push(Cluster::General(list_group.pop().unwrap()));
+                }
+            }
+            PatternCategory::Record => {
+                let mut rec_group = vec![first];
+                while let Some(peeked) = iter.peek() {
+                    if categorize_pattern(&peeked.pattern) == PatternCategory::Record {
+                        rec_group.push(iter.next().unwrap());
+                    } else {
+                        break;
+                    }
+                }
+                if rec_group.len() >= 2 {
+                    clusters.push(Cluster::Record(rec_group));
+                } else {
+                    clusters.push(Cluster::General(rec_group.pop().unwrap()));
+                }
+            }
+            PatternCategory::Literal if first.guard.is_none() => {
+                let mut lit_group = vec![first];
+                while let Some(peeked) = iter.peek() {
+                    if categorize_pattern(&peeked.pattern) == PatternCategory::Literal && peeked.guard.is_none() {
+                        lit_group.push(iter.next().unwrap());
+                    } else {
+                        break;
+                    }
+                }
+                if lit_group.len() >= 2 {
+                    clusters.push(Cluster::Literals(lit_group));
+                } else {
+                    clusters.push(Cluster::General(lit_group.pop().unwrap()));
+                }
+            }
+            _ => {
+                clusters.push(Cluster::General(first));
+            }
+        }
+    }
+
+    clusters
+}
+
 pub fn lower_match(loc: Loc, target: Ast, clauses: Vec<MatchClause>) -> Result<Ast> {
     let target_sym = gen_match_id("_match_target");
     let target_ast = Ast::Symbol(loc, target_sym);
@@ -1498,92 +1757,130 @@ pub fn lower_match(loc: Loc, target: Ast, clauses: Vec<MatchClause>) -> Result<A
         ],
     );
 
-    for clause in clauses.into_iter().rev() {
-        let mut conditions = Vec::new();
-        let mut bindings = Vec::new();
-        compile_pattern(
-            &clause.pattern,
-            target_ast.clone(),
-            &mut conditions,
-            &mut bindings,
-        )?;
+    let clusters = cluster_clauses(clauses);
 
-        let pattern_cond = match conditions.len() {
-            0 => Ast::Boolean(clause.loc, true),
-            1 => conditions.pop().unwrap(),
-            _ => Ast::And(clause.loc, conditions),
-        };
-
-        let is_unconditional = matches!(&pattern_cond, Ast::Boolean(_, true));
-
-        match clause.guard {
-            None => {
-                let action = if bindings.is_empty() {
-                    if clause.body.is_empty() {
+    for cluster in clusters.into_iter().rev() {
+        match cluster {
+            Cluster::General(clause) => {
+                current_chain = compile_single_clause(
+                    clause,
+                    target_ast.clone(),
+                    MatchContext::default(),
+                    current_chain,
+                )?;
+            }
+            Cluster::Literals(lit_clauses) => {
+                let mut branches = Vec::new();
+                for clause in lit_clauses {
+                    let lit_ast = match root_pattern(&clause.pattern) {
+                        Pattern::Literal(_, ast) => (**ast).clone(),
+                        _ => unreachable!(),
+                    };
+                    let cond = Ast::List(
+                        clause.loc,
+                        vec![
+                            Ast::Symbol(clause.loc, intern("==")),
+                            target_ast.clone(),
+                            lit_ast,
+                        ],
+                    );
+                    let body_ast = if clause.body.is_empty() {
                         Ast::Nil(clause.loc)
                     } else if clause.body.len() == 1 {
                         clause.body[0].clone()
                     } else {
                         Ast::Begin(clause.loc, clause.body)
-                    }
-                } else {
-                    Ast::Let(clause.loc, bindings, clause.body)
-                };
-
-                if is_unconditional {
-                    current_chain = action;
-                } else {
-                    current_chain = Ast::If(
-                        clause.loc,
-                        Box::new(pattern_cond),
-                        Box::new(action),
-                        Some(Box::new(current_chain)),
-                    );
+                    };
+                    branches.push((cond, body_ast));
                 }
+                branches.push((Ast::Boolean(loc, true), current_chain));
+                current_chain = Ast::Cond(loc, branches);
             }
-            Some(guard_expr) => {
-                let fail_sym = gen_match_id("_fail");
-                let fail_call = Ast::List(clause.loc, vec![Ast::Symbol(clause.loc, fail_sym)]);
+            Cluster::List(list_clauses) => {
+                let fail_sym = gen_match_id("_fail_list");
+                let fail_call = Ast::List(loc, vec![Ast::Symbol(loc, fail_sym)]);
 
-                let body_ast = if clause.body.is_empty() {
-                    Ast::Nil(clause.loc)
-                } else if clause.body.len() == 1 {
-                    clause.body[0].clone()
-                } else {
-                    Ast::Begin(clause.loc, clause.body)
-                };
+                let len_sym = gen_match_id("_len");
+                let len_ast = Ast::Symbol(loc, len_sym);
 
-                let guarded_body = Ast::If(
-                    clause.loc,
-                    Box::new(guard_expr),
-                    Box::new(body_ast),
-                    Some(Box::new(fail_call.clone())),
+                let mut inner_chain = fail_call.clone();
+                for clause in list_clauses.into_iter().rev() {
+                    inner_chain = compile_single_clause(
+                        clause,
+                        target_ast.clone(),
+                        MatchContext {
+                            cached_len: Some(&len_ast),
+                            is_list_checked: true,
+                            is_record_checked: false,
+                        },
+                        inner_chain,
+                    )?;
+                }
+
+                let test_and_branch = Ast::If(
+                    loc,
+                    Box::new(Ast::List(
+                        loc,
+                        vec![Ast::Symbol(loc, intern("is_list")), target_ast.clone()],
+                    )),
+                    Box::new(Ast::Let(
+                        loc,
+                        vec![(
+                            len_sym,
+                            Ast::List(
+                                loc,
+                                vec![Ast::Symbol(loc, intern("count")), target_ast.clone()],
+                            ),
+                        )],
+                        vec![inner_chain],
+                    )),
+                    Some(Box::new(fail_call)),
                 );
 
-                let action = if bindings.is_empty() {
-                    guarded_body
-                } else {
-                    Ast::Let(clause.loc, bindings, vec![guarded_body])
-                };
-
-                let test_and_run = if is_unconditional {
-                    action
-                } else {
-                    Ast::If(
-                        clause.loc,
-                        Box::new(pattern_cond),
-                        Box::new(action),
-                        Some(Box::new(fail_call)),
-                    )
-                };
-
                 current_chain = Ast::Let(
-                    clause.loc,
+                    loc,
                     vec![(
                         fail_sym,
-                        Ast::Lambda(clause.loc, vec![], vec![current_chain]),
+                        Ast::Lambda(loc, vec![], vec![current_chain]),
                     )],
-                    vec![test_and_run],
+                    vec![test_and_branch],
+                );
+            }
+            Cluster::Record(record_clauses) => {
+                let fail_sym = gen_match_id("_fail_rec");
+                let fail_call = Ast::List(loc, vec![Ast::Symbol(loc, fail_sym)]);
+
+                let mut inner_chain = fail_call.clone();
+                for clause in record_clauses.into_iter().rev() {
+                    inner_chain = compile_single_clause(
+                        clause,
+                        target_ast.clone(),
+                        MatchContext {
+                            cached_len: None,
+                            is_list_checked: false,
+                            is_record_checked: true,
+                        },
+                        inner_chain,
+                    )?;
+                }
+
+                let test_and_branch = Ast::If(
+                    loc,
+                    Box::new(Ast::List(
+                        loc,
+                        vec![Ast::Symbol(loc, intern("is_record")), target_ast.clone()],
+                    )),
+                    Box::new(inner_chain),
+                    Some(Box::new(fail_call)),
+                );
+
+                current_chain = Ast::Let(
+                    loc,
+                    vec![(
+                        fail_sym,
+                        Ast::Lambda(loc, vec![], vec![current_chain]),
+                    )],
+                    vec![test_and_branch],
                 );
             }
         }

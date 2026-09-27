@@ -1,3 +1,4 @@
+pub mod analysis;
 pub mod ast;
 pub mod compiler;
 pub mod debugger;
@@ -11,8 +12,7 @@ pub mod value;
 
 // Re-exports
 pub use debugger::{DebugSession, DisassembledInstruction, VmSnapshot, VmStatus};
-pub use diagnostics::SelError;
-pub use diagnostics::SelErrorKind;
+pub use diagnostics::{SelError, SelErrorKind, SelWarning};
 pub use internal::load_core_lib;
 pub use lexer::Loc;
 pub use runtime::Env;

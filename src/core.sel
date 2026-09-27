@@ -104,9 +104,11 @@ is_err _ := false
 
 unwrap [:ok, val] := val
 unwrap [:err, msg] := error("Called unwrap on err value: " + to_string(msg))
+unwrap other := error("Called unwrap on non-result value: " + to_string(other))
 
 error_value [:err, msg] := msg
 error_value [:ok, _] := error("Called error_value on ok value")
+error_value other := error("Called error_value on non-result value: " + to_string(other))
 
 unwrap_or [:ok, val] _ := val
 unwrap_or _ default_val := default_val
