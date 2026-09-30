@@ -1,6 +1,12 @@
 use crate::lexer::Loc;
 use crate::types::lookup;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StackFrame {
+    pub function_name: Option<String>,
+    pub loc: Loc,
+}
+
 #[derive(Debug, Clone)]
 pub enum SelError {
     UnexpectedEOF(Loc),
@@ -20,6 +26,10 @@ pub enum SelError {
     TypeError(Loc, String),
     Trace(String),
     SandboxViolation(Loc, String),
+    WithStackTrace {
+        error: Box<SelError>,
+        backtrace: Vec<StackFrame>,
+    },
 }
 
 fn format_snippet(f: &mut std::fmt::Formatter<'_>, loc: Loc) -> std::fmt::Result {
@@ -46,6 +56,28 @@ fn format_snippet(f: &mut std::fmt::Formatter<'_>, loc: Loc) -> std::fmt::Result
 
 impl std::fmt::Display for SelError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Self::WithStackTrace { error, backtrace } = self {
+            write!(f, "{}", error)?;
+            if backtrace.len() > 1 {
+                write!(f, "\n\nstack backtrace:")?;
+                for (i, frame) in backtrace.iter().enumerate() {
+                    let name = frame.function_name.as_deref().unwrap_or("<anonymous>");
+                    let filename = lookup(frame.loc.file_id);
+                    let file_display = if filename.is_empty() {
+                        "<unknown>".to_string()
+                    } else {
+                        filename
+                    };
+                    write!(
+                        f,
+                        "\n   {}: {} at {}:{}:{}",
+                        i, name, file_display, frame.loc.line, frame.loc.col
+                    )?;
+                }
+            }
+            return Ok(());
+        }
+
         write!(f, ":- ")?;
         match &self {
             Self::UnexpectedEOF(loc) => {
@@ -130,6 +162,7 @@ impl std::fmt::Display for SelError {
             SelError::Trace(errs) => {
                 write!(f, "{errs}")
             }
+            Self::WithStackTrace { .. } => unreachable!(),
         }
     }
 }
@@ -150,6 +183,7 @@ pub enum SelErrorKind {
 impl SelError {
     pub fn kind(&self) -> SelErrorKind {
         match self {
+            Self::WithStackTrace { error, .. } => error.kind(),
             Self::UnexpectedEOF(_)
             | Self::UnexpectedToken(_, _)
             | Self::SyntaxError(_, _)
@@ -167,6 +201,7 @@ impl SelError {
 
     pub fn loc(&self) -> Option<Loc> {
         match self {
+            Self::WithStackTrace { error, .. } => error.loc(),
             Self::UnexpectedEOF(loc)
             | Self::UnexpectedToken(loc, _)
             | Self::SyntaxError(loc, _)
@@ -184,6 +219,7 @@ impl SelError {
 
     pub fn message(&self) -> String {
         match self {
+            Self::WithStackTrace { error, .. } => error.message(),
             Self::UnexpectedEOF(_) => "Unexpected EOF".to_string(),
             Self::UnexpectedToken(_, s) => format!("Unexpected token `{}`", s),
             Self::SyntaxError(_, msg) => msg.clone(),
@@ -201,6 +237,34 @@ impl SelError {
             Self::SandboxViolation(_, msg) => msg.clone(),
             Self::Internal(msg) => msg.clone(),
             Self::Trace(msg) => msg.clone(),
+        }
+    }
+
+    pub fn backtrace(&self) -> Option<&[StackFrame]> {
+        match self {
+            Self::WithStackTrace { backtrace, .. } => Some(backtrace),
+            _ => None,
+        }
+    }
+
+    pub fn unwrap_inner(&self) -> &SelError {
+        match self {
+            Self::WithStackTrace { error, .. } => error.unwrap_inner(),
+            other => other,
+        }
+    }
+
+    pub fn with_stack_trace(self, backtrace: Vec<StackFrame>) -> Self {
+        if backtrace.is_empty() {
+            return self;
+        }
+        let inner = match self {
+            Self::WithStackTrace { error, .. } => error,
+            other => Box::new(other),
+        };
+        Self::WithStackTrace {
+            error: inner,
+            backtrace,
         }
     }
 }

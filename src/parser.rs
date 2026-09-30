@@ -298,7 +298,7 @@ fn lower_clause_group(clauses: Vec<FnClause>) -> Result<Ast> {
                 _ => unreachable!(),
             })
             .collect();
-        let lambda = Ast::Lambda(loc, params, vec![clause.body]);
+        let lambda = Ast::Lambda(loc, Some(name), params, vec![clause.body]);
         Ast::Define(loc, name, Box::new(lambda))
     } else {
         let arity = first.patterns.len();
@@ -365,7 +365,7 @@ fn lower_clause_group(clauses: Vec<FnClause>) -> Result<Ast> {
         };
 
         let match_ast = Ast::Match(loc, Box::new(target), match_clauses);
-        let lambda = Ast::Lambda(loc, arg_ids, vec![match_ast]);
+        let lambda = Ast::Lambda(loc, Some(name), arg_ids, vec![match_ast]);
         Ast::Define(loc, name, Box::new(lambda))
     };
 
@@ -1082,7 +1082,7 @@ impl<'a> AltParser<'a> {
 
         self.expect_token(TokenKind::Arrow, "`->` after lambda parameters")?;
         let body = self.parse_expr()?;
-        Ok(Ast::Lambda(loc, params, vec![body]))
+        Ok(Ast::Lambda(loc, None, params, vec![body]))
     }
 
     fn parse_if(&mut self) -> Result<Ast> {

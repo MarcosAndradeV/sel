@@ -12,7 +12,7 @@ pub mod value;
 
 // Re-exports
 pub use debugger::{DebugSession, DisassembledInstruction, VmSnapshot, VmStatus};
-pub use diagnostics::{SelError, SelErrorKind, SelWarning};
+pub use diagnostics::{SelError, SelErrorKind, SelWarning, StackFrame};
 pub use internal::load_core_lib;
 pub use lexer::Loc;
 pub use runtime::Env;
@@ -193,6 +193,53 @@ mod tests {
             err_name.message(),
             "Undefined variable `non_existent_variable`"
         );
+    }
+
+    #[test]
+    fn test_stack_trace() {
+        let env = Rc::new(RefCell::new(Env::default()));
+        env.borrow_mut().parent = Some(load_core_lib());
+
+        let code = "inc i := i + 1\ninc(65)\ninc(\"Hello\")\n";
+        let res = eval(code, env.clone());
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(err.kind(), SelErrorKind::Type);
+        let bt = err.backtrace().expect("expected backtrace");
+        assert_eq!(bt.len(), 2);
+        assert_eq!(bt[0].function_name.as_deref(), Some("inc"));
+        assert_eq!(bt[1].function_name.as_deref(), Some("<main>"));
+
+        let err_str = err.to_string();
+        assert!(err_str.contains("stack backtrace:"));
+        assert!(err_str.contains("0: inc at <embedded>:1:12"));
+        assert!(err_str.contains("1: <main> at <embedded>:3:4"));
+
+        // Multi-level call stack
+        let code_multi = "inc i := i + 1\nf x := inc(x) + 0\ng y := f(y) + 0\ng(\"Hello\")\n";
+        let res_multi = eval(code_multi, env.clone());
+        let err_multi = res_multi.unwrap_err();
+        let bt_multi = err_multi.backtrace().expect("expected backtrace");
+        assert_eq!(bt_multi.len(), 4);
+        assert_eq!(bt_multi[0].function_name.as_deref(), Some("inc"));
+        assert_eq!(bt_multi[1].function_name.as_deref(), Some("f"));
+        assert_eq!(bt_multi[2].function_name.as_deref(), Some("g"));
+        assert_eq!(bt_multi[3].function_name.as_deref(), Some("<main>"));
+
+        // Anonymous lambda
+        let code_anon = "(\\x -> x + 1)(\"Hello\")\n";
+        let res_anon = eval(code_anon, env.clone());
+        let err_anon = res_anon.unwrap_err();
+        let bt_anon = err_anon.backtrace().expect("expected backtrace");
+        assert_eq!(bt_anon[0].function_name.as_deref(), None);
+
+        // Top-level failure with no function calls: backtrace has 1 frame and display doesn't show stack backtrace header
+        let code_top = "1 + \"bad\"";
+        let res_top = eval(code_top, env);
+        let err_top = res_top.unwrap_err();
+        let bt_top = err_top.backtrace().expect("expected backtrace");
+        assert_eq!(bt_top.len(), 1);
+        assert!(!err_top.to_string().contains("stack backtrace:"));
     }
 
     #[test]

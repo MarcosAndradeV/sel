@@ -548,7 +548,7 @@ pub fn analyze_ast(ast: &Ast, warnings: &mut Vec<SelWarning>) {
             analyze_ast(cond, warnings);
             analyze_ast(body, warnings);
         }
-        Ast::Lambda(_, _, body) | Ast::Begin(_, body) => {
+        Ast::Lambda(_, _, _, body) | Ast::Begin(_, body) => {
             for expr in body {
                 analyze_ast(expr, warnings);
             }
@@ -877,6 +877,7 @@ mod tests {
             intern("foo"),
             Box::new(Ast::Lambda(
                 loc,
+                Some(intern("foo")),
                 vec![intern("x")],
                 vec![Ast::Match(
                     loc,

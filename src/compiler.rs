@@ -85,11 +85,21 @@ impl<'a> Compiler<'a> {
                     self.chunk.write((loc, OpCode::LoadVar(id)));
                 }
             }
-            Ast::Define(loc, id, expr) => {
+            Ast::Define(loc, id, mut expr) => {
+                if let Ast::Lambda(_, ref mut name, _, _) = *expr {
+                    if name.is_none() {
+                        *name = Some(id);
+                    }
+                }
                 self.compile(*expr)?;
                 self.chunk.write((loc, OpCode::DefVar(id)));
             }
-            Ast::Set(loc, id, expr) => {
+            Ast::Set(loc, id, mut expr) => {
+                if let Ast::Lambda(_, ref mut name, _, _) = *expr {
+                    if name.is_none() {
+                        *name = Some(id);
+                    }
+                }
                 self.compile(*expr)?;
                 if let Some(index) = self.locals.iter().rposition(|local| local.name == id) {
                     self.chunk.write((loc, OpCode::StoreLocal(index as u8)));
@@ -292,8 +302,9 @@ impl<'a> Compiler<'a> {
                 self.locals.retain(|local| local.depth < self.scope_depth);
                 self.scope_depth -= 1;
             }
-            Ast::Lambda(loc, params, mut body_asts) => {
+            Ast::Lambda(loc, name, params, mut body_asts) => {
                 let mut child_chunk = Chunk::new();
+                child_chunk.name = name;
                 let mut child_compiler = Compiler::new(&mut child_chunk);
                 for param_id in &params {
                     child_compiler.locals.push(Local {
@@ -316,6 +327,7 @@ impl<'a> Compiler<'a> {
                 child_chunk.write((loc, OpCode::Return));
 
                 let stub = Value::Closure(Rc::new(Closure::new(
+                    name,
                     params,
                     Rc::new(child_chunk),
                     Rc::new(RefCell::new(Env::default())),
@@ -325,8 +337,9 @@ impl<'a> Compiler<'a> {
             }
             Ast::DefMacro(loc, id, expr) => {
                 // Compile the macro body as a lambda, then make it a macro
-                if let Ast::Lambda(_, params, mut body_asts) = *expr {
+                if let Ast::Lambda(_, _, params, mut body_asts) = *expr {
                     let mut child_chunk = Chunk::new();
+                    child_chunk.name = Some(id);
                     let mut child_compiler = Compiler::new(&mut child_chunk);
                     for param_id in &params {
                         child_compiler.locals.push(Local {
@@ -1057,6 +1070,7 @@ pub enum OpCode {
 
 #[derive(Debug, Clone, Default)]
 pub struct Chunk {
+    pub name: Option<u32>,
     pub code: Vec<u8>,
     pub constants: Vec<Value>,
     pub locations: Vec<(usize, Loc)>,
@@ -1065,6 +1079,7 @@ pub struct Chunk {
 impl Chunk {
     pub fn new() -> Self {
         Self {
+            name: None,
             code: Vec::new(),
             constants: Vec::new(),
             locations: Vec::new(),
@@ -1642,7 +1657,7 @@ fn compile_single_clause(
                 clause.loc,
                 vec![(
                     fail_sym,
-                    Ast::Lambda(clause.loc, vec![], vec![fallback]),
+                    Ast::Lambda(clause.loc, None, vec![], vec![fallback]),
                 )],
                 vec![test_and_run],
             ))
@@ -1841,7 +1856,7 @@ pub fn lower_match(loc: Loc, target: Ast, clauses: Vec<MatchClause>) -> Result<A
                     loc,
                     vec![(
                         fail_sym,
-                        Ast::Lambda(loc, vec![], vec![current_chain]),
+                        Ast::Lambda(loc, None, vec![], vec![current_chain]),
                     )],
                     vec![test_and_branch],
                 );
@@ -1878,7 +1893,7 @@ pub fn lower_match(loc: Loc, target: Ast, clauses: Vec<MatchClause>) -> Result<A
                     loc,
                     vec![(
                         fail_sym,
-                        Ast::Lambda(loc, vec![], vec![current_chain]),
+                        Ast::Lambda(loc, None, vec![], vec![current_chain]),
                     )],
                     vec![test_and_branch],
                 );

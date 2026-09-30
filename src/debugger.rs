@@ -389,7 +389,7 @@ pub fn ast_to_graph(ast: &Ast) -> AstGraphNode {
             loc: *loc,
             children: vec![ast_to_graph(cond), ast_to_graph(body)],
         },
-        Ast::Lambda(loc, params, body) => {
+        Ast::Lambda(loc, _name, params, body) => {
             let param_names = params.iter().map(|p| lookup(*p)).collect::<Vec<_>>().join(" ");
             let children = body.iter().map(ast_to_graph).collect();
             AstGraphNode {
@@ -650,6 +650,7 @@ impl DebugSession {
 
         let frames = if let Some((loc, chunk)) = chunks.first() {
             vec![CallFrame {
+                function_name: chunk.name.or_else(|| Some(intern("<main>"))),
                 loc: *loc,
                 chunk: chunk.clone(),
                 ip: 0,
@@ -749,6 +750,7 @@ impl DebugSession {
         if self.chunk_index < self.chunks.len() {
             let (loc, chunk) = &self.chunks[self.chunk_index];
             self.frames.push(CallFrame {
+                function_name: chunk.name.or_else(|| Some(intern("<main>"))),
                 loc: *loc,
                 chunk: chunk.clone(),
                 ip: 0,
@@ -814,7 +816,7 @@ impl DebugSession {
             .frames
             .iter()
             .map(|f| CallFrameSnapshot {
-                function_name: "<anonymous>".into(),
+                function_name: f.function_name.map(lookup).unwrap_or_else(|| "<anonymous>".into()),
                 loc: f.loc,
                 ip: f.ip,
             })

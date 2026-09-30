@@ -64,7 +64,7 @@ pub enum Ast {
     Cond(Loc, Vec<(Ast, Ast)>),
     While(Loc, Box<Ast>, Box<Ast>),
     Until(Loc, Box<Ast>, Box<Ast>),
-    Lambda(Loc, Vec<u32>, Vec<Ast>),
+    Lambda(Loc, Option<u32>, Vec<u32>, Vec<Ast>),
     Begin(Loc, Vec<Ast>),
     Quote(Loc, Box<Ast>),
     Quasiquote(Loc, Box<Ast>),
@@ -287,7 +287,7 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
             ];
             (loc, Value::make_list(list))
         }
-        Ast::Lambda(loc, params, body) => {
+        Ast::Lambda(loc, _name, params, body) => {
             let mut list = vec![
                 Value::Symbol(intern("lambda")),
                 Value::make_list(params.into_iter().map(Value::Symbol).collect()),

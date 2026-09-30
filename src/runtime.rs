@@ -82,8 +82,7 @@ impl Env {
 
 #[derive(Debug, Clone)]
 pub struct CallFrame {
-    #[allow(unused)]
-    // Location of call, we need also a name
+    pub function_name: Option<u32>,
     pub loc: Loc,
     pub chunk: Rc<Chunk>,
     pub ip: usize,
@@ -217,6 +216,33 @@ impl VM {
         }
     }
 
+    pub fn build_error_with_backtrace(&self, frames: &[CallFrame], err: SelError) -> SelError {
+        if frames.is_empty() {
+            return err;
+        }
+
+        let mut backtrace = Vec::with_capacity(frames.len());
+
+        let top_frame = &frames[frames.len() - 1];
+        let top_name = top_frame.function_name.map(lookup);
+        let top_loc = err.loc().unwrap_or(top_frame.loc);
+        backtrace.push(StackFrame {
+            function_name: top_name,
+            loc: top_loc,
+        });
+
+        for i in (0..frames.len() - 1).rev() {
+            let caller_name = frames[i].function_name.map(lookup);
+            let call_loc = frames[i + 1].loc;
+            backtrace.push(StackFrame {
+                function_name: caller_name,
+                loc: call_loc,
+            });
+        }
+
+        err.with_stack_trace(backtrace)
+    }
+
     pub fn run(
         &mut self,
         loc: Loc,
@@ -224,7 +250,9 @@ impl VM {
         env: Rc<RefCell<Env>>,
         locals: Vec<Value>,
     ) -> Result<Value> {
+        let root_name = chunk.name.or_else(|| Some(intern("<main>")));
         let mut frames = vec![CallFrame {
+            function_name: root_name,
             loc,
             chunk,
             ip: 0,
@@ -235,7 +263,7 @@ impl VM {
             match self.run_internal(&mut frames) {
                 Err(e) => {
                     if self.catch_handlers.is_empty() {
-                        return Err(e);
+                        return Err(self.build_error_with_backtrace(&frames, e));
                     } else {
                         self.handle_error(&mut frames, e)?;
                     }
@@ -430,6 +458,7 @@ impl VM {
                                 self.stack.pop(); // pop callee
                             }
                             frames.push(CallFrame {
+                                function_name: c.name,
                                 loc,
                                 chunk,
                                 ip: 0,
@@ -582,6 +611,7 @@ impl VM {
                                 self.stack.truncate(stack_start);
                                 self.stack.pop(); // pop callee
                             }
+                            frame.function_name = c.name;
                             frame.chunk = chunk;
                             frame.ip = 0;
                             frame.env = Rc::new(RefCell::new(call_env));
@@ -716,6 +746,7 @@ impl VM {
                     let idx = read_usize(frame);
                     if let Value::Closure(c) = &frame.chunk.constants[idx] {
                         let closure = Value::Closure(Rc::new(Closure {
+                            name: c.name,
                             params: c.params.clone(),
                             rest_param: c.rest_param,
                             chunk: c.chunk.clone(),
@@ -837,6 +868,7 @@ impl VM {
                                 }
                             }
                             co_frames.push(CallFrame {
+                                function_name: co.closure.name,
                                 loc: frame.loc,
                                 chunk: co.closure.chunk.clone(),
                                 ip: 0,
@@ -1466,12 +1498,12 @@ pub fn macro_expand(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
             }
             Ok(Ast::Let(loc, exp_b, exp_body))
         }
-        Ast::Lambda(loc, params, body) => {
+        Ast::Lambda(loc, name, params, body) => {
             let mut exp_body = Vec::new();
             for b in body {
                 exp_body.push(macro_expand(b, env.clone())?);
             }
-            Ok(Ast::Lambda(loc, params, exp_body))
+            Ok(Ast::Lambda(loc, name, params, exp_body))
         }
         Ast::DefMacro(loc, id, expr) => {
             Ok(Ast::DefMacro(loc, id, Box::new(macro_expand(*expr, env)?)))

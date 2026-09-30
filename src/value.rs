@@ -13,6 +13,7 @@ type Result<T> = std::result::Result<T, SelError>;
 
 #[derive(Debug, Clone)]
 pub struct Closure {
+    pub name: Option<u32>,
     pub params: Vec<u32>,
     pub rest_param: Option<(usize, u32)>,
     pub chunk: Rc<Chunk>,
@@ -20,7 +21,7 @@ pub struct Closure {
 }
 
 impl Closure {
-    pub fn new(params: Vec<u32>, chunk: Rc<Chunk>, env: Rc<RefCell<Env>>) -> Self {
+    pub fn new(name: Option<u32>, params: Vec<u32>, chunk: Rc<Chunk>, env: Rc<RefCell<Env>>) -> Self {
         let mut rest_param = None;
         for (i, &pid) in params.iter().enumerate() {
             let name = lookup(pid);
@@ -31,6 +32,7 @@ impl Closure {
             }
         }
         Self {
+            name,
             params,
             rest_param,
             chunk,
