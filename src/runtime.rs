@@ -522,7 +522,7 @@ impl VM {
                         Value::Symbol(sym) => match arg_count {
                             1 => {
                                 let r = self.stack.pop().unwrap();
-                                if let Value::Record(_) = r {
+                                if matches!(r, Value::Record(_) | Value::Nominal(_)) {
                                     let value = internal::rget(loc, vec![r, Value::Symbol(sym)])?;
                                     self.stack.pop(); // pop callee (the symbol)
                                     self.stack.push(value);
@@ -536,7 +536,7 @@ impl VM {
                             2 => {
                                 let v = self.stack.pop().unwrap();
                                 let r = self.stack.pop().unwrap();
-                                if let Value::Record(_) = r {
+                                if matches!(r, Value::Record(_) | Value::Nominal(_)) {
                                     let value =
                                         internal::rset(loc, vec![r, Value::Symbol(sym), v])?;
                                     self.stack.pop(); // pop callee (the symbol)
@@ -698,7 +698,7 @@ impl VM {
                             let res = match arg_count {
                                 1 => {
                                     let r = self.stack.pop().unwrap();
-                                    if let Value::Record(_) = r {
+                                    if matches!(r, Value::Record(_) | Value::Nominal(_)) {
                                         internal::rget(loc, vec![r, Value::Symbol(sym)])?
                                     } else {
                                         return Err(SelError::Runtime(
@@ -710,7 +710,7 @@ impl VM {
                                 2 => {
                                     let v = self.stack.pop().unwrap();
                                     let r = self.stack.pop().unwrap();
-                                    if let Value::Record(_) = r {
+                                    if matches!(r, Value::Record(_) | Value::Nominal(_)) {
                                         internal::rset(loc, vec![r, Value::Symbol(sym), v])?
                                     } else {
                                         return Err(SelError::Runtime(
@@ -1357,6 +1357,23 @@ impl VM {
                                 ));
                             }
                         }
+                        Value::Nominal(nom) => {
+                            if let Value::Record(rec) = &nom.inner {
+                                if let Some(v) = rec.fields().get(&sym) {
+                                    self.stack.push(v.clone());
+                                } else {
+                                    return Err(SelError::Runtime(
+                                        frame.loc,
+                                        format!("Nominal `{}` has no field `{}`", lookup(nom.type_id), lookup(sym)),
+                                    ));
+                                }
+                            } else {
+                                return Err(SelError::TypeError(
+                                    frame.loc,
+                                    format!("Cannot access field `{}` on non-record nominal `{}`", lookup(sym), lookup(nom.type_id)),
+                                ));
+                            }
+                        }
                         other => {
                             return Err(SelError::TypeError(
                                 frame.loc,
@@ -1364,6 +1381,25 @@ impl VM {
                             ));
                         }
                     }
+                }
+                55 => {
+                    let type_id = read_u32(frame);
+                    let val = self.stack.pop().ok_or_else(|| {
+                        SelError::Runtime(frame.loc, "Stack underflow in MakeNominal".into())
+                    })?;
+                    let nom = Value::Nominal(Rc::new(crate::value::NominalValue {
+                        type_id,
+                        inner: val,
+                    }));
+                    self.stack.push(nom);
+                }
+                56 => {
+                    let type_name = read_u32(frame);
+                    let trait_name = read_u32(frame);
+                    let handler = self.stack.pop().ok_or_else(|| {
+                        SelError::Runtime(frame.loc, "Stack underflow in RegisterImpl".into())
+                    })?;
+                    register_trait_impl(type_name, trait_name, handler);
                 }
                 _ => unreachable!(),
             }
@@ -1377,6 +1413,60 @@ impl VM {
             }
         }
     }
+}
+
+thread_local! {
+    pub static TRAIT_IMPLS: RefCell<FxHashMap<(u32, u32), Value>> = RefCell::new(FxHashMap::default());
+}
+
+pub fn register_trait_impl(type_id: u32, trait_id: u32, handler: Value) {
+    TRAIT_IMPLS.with(|m| {
+        m.borrow_mut().insert((type_id, trait_id), handler);
+    });
+}
+
+pub fn get_trait_impl(type_id: u32, trait_id: u32) -> Option<Value> {
+    TRAIT_IMPLS.with(|m| {
+        m.borrow().get(&(type_id, trait_id)).cloned()
+    })
+}
+
+pub fn call_closure(loc: Loc, closure: &Rc<Closure>, args: Vec<Value>) -> Result<Value> {
+    let mut vm = VM::new();
+    let mut call_env = Env::new(Some(closure.env.clone()));
+    let params = &closure.params;
+    let mut locals = Vec::with_capacity(args.len());
+    for (param, arg) in params.iter().zip(args.into_iter()) {
+        call_env.insert(*param, arg.clone());
+        locals.push(arg);
+    }
+    let frame = CallFrame {
+        function_name: closure.name,
+        loc,
+        chunk: closure.chunk.clone(),
+        ip: 0,
+        env: Rc::new(RefCell::new(call_env)),
+        locals,
+    };
+    let mut frames = vec![frame];
+    vm.run_internal(&mut frames)
+}
+
+pub fn format_value_with_traits(loc: Loc, val: &Value) -> Result<String> {
+    if let Value::Nominal(nom) = val {
+        let showable_sym = intern("showable");
+        if let Some(handler) = get_trait_impl(nom.type_id, showable_sym) {
+            if let Value::Closure(closure) = handler {
+                let res = call_closure(loc, &closure, vec![val.clone()])?;
+                if let Some(s) = res.to_string_lossy() {
+                    return Ok(s);
+                } else {
+                    return Ok(format!("{res}"));
+                }
+            }
+        }
+    }
+    Ok(format!("{val}"))
 }
 
 pub fn macro_expand(ast: Ast, env: Rc<RefCell<Env>>) -> Result<Ast> {
@@ -1579,23 +1669,30 @@ pub fn execute_asts_sandboxed(
     env: Rc<RefCell<Env>>,
     sandbox_root: Option<PathBuf>,
 ) -> Result<Value> {
+    let mut expanded_asts = Vec::with_capacity(asts.len());
+    for ast in asts {
+        let expanded = macro_expand(ast, env.clone())?;
+        let resolved = crate::parser::resolve_ast(expanded)?;
+        expanded_asts.push(resolved);
+    }
+
+    // Static Type Checker Gate (Option 1A)
+    crate::typecheck::typecheck_program(&expanded_asts)?;
+
+    // Static analysis: pattern reachability and exhaustiveness warnings
+    let warnings = crate::analysis::analyze_program(&expanded_asts);
+    for warning in warnings {
+        let filename = crate::types::lookup(warning.loc().file_id);
+        if filename != "<core.sel>" {
+            eprintln!("{}", warning);
+        }
+    }
+
     let mut last_val = Value::Nil;
     let mut vm = VM::new();
     vm.sandbox_root = sandbox_root;
-    for ast in asts {
-        let loc = ast.loc();
-        let expanded = macro_expand(ast, env.clone())?;
-        let resolved = crate::parser::resolve_ast(expanded)?;
-
-        // Static analysis: pattern reachability and exhaustiveness warnings
-        let warnings = crate::analysis::analyze_program(std::slice::from_ref(&resolved));
-        for warning in warnings {
-            let filename = crate::types::lookup(warning.loc().file_id);
-            if filename != "<core.sel>" {
-                eprintln!("{}", warning);
-            }
-        }
-
+    for resolved in expanded_asts {
+        let loc = resolved.loc();
         let mut chunk = Chunk::new();
         let mut compiler = Compiler::new(&mut chunk);
         compiler.compile(resolved)?;

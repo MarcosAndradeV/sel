@@ -10,7 +10,10 @@ assert test :=
         nil
 
 // --- 2. Type Predicates & Introspection ---
+is_even :: int -> bool
 is_even x := (x % 2) == 0
+
+is_odd :: int -> bool
 is_odd x := (x % 2) != 0
 
 is_int x := type_of(x) == :int

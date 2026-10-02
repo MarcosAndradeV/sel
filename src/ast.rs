@@ -51,8 +51,133 @@ pub enum PipelineKind {
     ThreadLast,  // |>>
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BaseTypeKind {
+    Int,
+    Float,
+    Bool,
+    String,
+    Char,
+    Symbol,
+    Nil,
+    Any,
+    Record,
+    List,
+    Fn,
+}
+
+impl std::fmt::Display for BaseTypeKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BaseTypeKind::Int => write!(f, "int"),
+            BaseTypeKind::Float => write!(f, "float"),
+            BaseTypeKind::Bool => write!(f, "bool"),
+            BaseTypeKind::String => write!(f, "string"),
+            BaseTypeKind::Char => write!(f, "char"),
+            BaseTypeKind::Symbol => write!(f, "symbol"),
+            BaseTypeKind::Nil => write!(f, "nil"),
+            BaseTypeKind::Any => write!(f, "any"),
+            BaseTypeKind::Record => write!(f, "record"),
+            BaseTypeKind::List => write!(f, "list"),
+            BaseTypeKind::Fn => write!(f, "fn"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeExpr {
+    Base(Loc, BaseTypeKind),
+    Var(Loc, u32),                       // A, B, T
+    Nominal(Loc, u32),                   // Foo, Person
+    List(Loc, Box<TypeExpr>),            // [A]
+    Record(Loc, Vec<(u32, TypeExpr)>),   // { c: int }
+    Function(Loc, Vec<TypeExpr>, Box<TypeExpr>), // (A -> bool), [A] -> [A]
+    Union(Loc, Vec<TypeExpr>),           // A | B
+}
+
+impl TypeExpr {
+    pub fn loc(&self) -> Loc {
+        match self {
+            TypeExpr::Base(loc, _)
+            | TypeExpr::Var(loc, _)
+            | TypeExpr::Nominal(loc, _)
+            | TypeExpr::List(loc, _)
+            | TypeExpr::Record(loc, _)
+            | TypeExpr::Function(loc, _, _)
+            | TypeExpr::Union(loc, _) => *loc,
+        }
+    }
+}
+
+impl std::fmt::Display for TypeExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypeExpr::Base(_, base) => write!(f, "{}", base),
+            TypeExpr::Var(_, var) => write!(f, "{}", lookup(*var)),
+            TypeExpr::Nominal(_, name) => write!(f, "{}", lookup(*name)),
+            TypeExpr::List(_, elem) => write!(f, "[{}]", elem),
+            TypeExpr::Record(_, fields) => {
+                write!(f, "{{")?;
+                for (i, (key, ty)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}: {}", lookup(*key), ty)?;
+                }
+                write!(f, "}}")
+            }
+            TypeExpr::Function(_, params, ret) => {
+                if params.is_empty() {
+                    write!(f, "() -> {}", ret)
+                } else {
+                    for (i, p) in params.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        if matches!(p, TypeExpr::Function(..)) {
+                            write!(f, "({})", p)?;
+                        } else {
+                            write!(f, "{}", p)?;
+                        }
+                    }
+                    write!(f, " -> {}", ret)
+                }
+            }
+            TypeExpr::Union(_, tys) => {
+                for (i, t) in tys.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, " | ")?;
+                    }
+                    write!(f, "{}", t)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitConstraint {
+    pub loc: Loc,
+    pub type_var: u32,
+    pub trait_name: u32, // atom ID e.g. :comparable
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeSignature {
+    pub loc: Loc,
+    pub forany_vars: Vec<u32>,
+    pub constraints: Vec<TraitConstraint>,
+    pub fn_type: TypeExpr,
+}
+
 #[derive(Debug, Clone)]
 pub enum Ast {
+    TypeSignature(Loc, u32, TypeSignature),
+    TypeAssert(Loc, Box<Ast>, TypeExpr),
+    Newtype(Loc, u32, TypeExpr),
+    Derive(Loc, u32, u32),
+    Implements(Loc, u32, u32, Box<Ast>),
     Define(Loc, u32, Box<Ast>),
     DefMacro(Loc, u32, Box<Ast>),
     Import(Loc, u32, Option<u32>),
@@ -132,6 +257,11 @@ impl Ast {
             Ast::VisibilityDirective(loc, ..) => *loc,
             Ast::Load(loc, ..) => *loc,
             Ast::Match(loc, ..) => *loc,
+            Ast::TypeSignature(loc, ..) => *loc,
+            Ast::TypeAssert(loc, ..) => *loc,
+            Ast::Newtype(loc, ..) => *loc,
+            Ast::Derive(loc, ..) => *loc,
+            Ast::Implements(loc, ..) => *loc,
         }
     }
 }
@@ -184,6 +314,13 @@ impl std::fmt::Display for Ast {
             }
             Ast::Load(..) => write!(f, "load"),
             Ast::Match(..) => write!(f, "match"),
+            Ast::TypeSignature(_, name, sig) => write!(f, "{} :: {}", lookup(*name), sig.fn_type),
+            Ast::TypeAssert(_, expr, ty) => write!(f, "{} :: {}", expr, ty),
+            Ast::Newtype(_, name, ty) => write!(f, "newtype {} := {}", lookup(*name), ty),
+            Ast::Derive(_, name, tr) => write!(f, "derive({}, :{})", lookup(*name), lookup(*tr)),
+            Ast::Implements(_, name, tr, _) => {
+                write!(f, "implements({}, :{}, ...)", lookup(*name), lookup(*tr))
+            }
         }
     }
 }
@@ -410,6 +547,47 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
             Value::make_list(vec![
                 ast_to_value(*right).1,
                 ast_to_value(*left).1,
+            ]),
+        ),
+        Ast::TypeSignature(loc, id, sig) => (
+            loc,
+            Value::make_list(vec![
+                Value::Symbol(intern("type-sig")),
+                Value::Symbol(id),
+                Value::make_string(&sig.fn_type.to_string()),
+            ]),
+        ),
+        Ast::TypeAssert(loc, expr, ty) => (
+            loc,
+            Value::make_list(vec![
+                Value::Symbol(intern("type-assert")),
+                ast_to_value(*expr).1,
+                Value::make_string(&ty.to_string()),
+            ]),
+        ),
+        Ast::Newtype(loc, id, ty) => (
+            loc,
+            Value::make_list(vec![
+                Value::Symbol(intern("newtype")),
+                Value::Symbol(id),
+                Value::make_string(&ty.to_string()),
+            ]),
+        ),
+        Ast::Derive(loc, id, tr) => (
+            loc,
+            Value::make_list(vec![
+                Value::Symbol(intern("derive")),
+                Value::Symbol(id),
+                Value::Symbol(tr),
+            ]),
+        ),
+        Ast::Implements(loc, id, tr, handler) => (
+            loc,
+            Value::make_list(vec![
+                Value::Symbol(intern("implements")),
+                Value::Symbol(id),
+                Value::Symbol(tr),
+                ast_to_value(*handler).1,
             ]),
         ),
     }

@@ -15,7 +15,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::{Ast, MatchClause, Pattern, PipelineKind};
+use crate::ast::{
+    Ast, BaseTypeKind, MatchClause, Pattern, PipelineKind, TraitConstraint, TypeExpr, TypeSignature,
+};
 use crate::diagnostics::SelError;
 use crate::lexer::Loc;
 use crate::types::{intern, lookup};
@@ -26,6 +28,7 @@ type Result<T> = std::result::Result<T, SelError>;
 const KEYWORDS: &[&str] = &[
     "let", "in", "do", "end", "if", "then", "else", "match", "with", "when",
     "try", "catch", "yield", "pub", "import", "as", "true", "false", "nil",
+    "newtype", "derive", "implements", "forany", "where",
 ];
 
 struct FnClause {
@@ -549,6 +552,86 @@ impl<'a> AltParser<'a> {
         }
     }
 
+    fn is_at_colon_colon(&self) -> bool {
+        self.peek().kind == TokenKind::DoubleColon
+            || (self.pos + 1 < self.tokens.len()
+                && self.peek().kind == TokenKind::Colon
+                && self.peek_ahead(1).kind == TokenKind::Colon)
+    }
+
+    fn eat_colon_colon(&mut self) -> bool {
+        if self.peek().kind == TokenKind::DoubleColon {
+            self.advance();
+            true
+        } else if self.pos + 1 < self.tokens.len()
+            && self.peek().kind == TokenKind::Colon
+            && self.peek_ahead(1).kind == TokenKind::Colon
+        {
+            self.advance();
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn is_at_type_signature(&self) -> bool {
+        let mut idx = self.pos;
+        if idx >= self.tokens.len() {
+            return false;
+        }
+        if (self.tokens[idx].kind == TokenKind::Keyword || self.tokens[idx].kind == TokenKind::Identifier)
+            && self.tokens[idx].source() == "pub"
+        {
+            idx += 1;
+        }
+        if idx >= self.tokens.len() {
+            return false;
+        }
+        let first = &self.tokens[idx];
+        if first.kind != TokenKind::Identifier || KEYWORDS.contains(&first.source()) {
+            return false;
+        }
+        idx += 1;
+        if idx < self.tokens.len() {
+            if self.tokens[idx].kind == TokenKind::DoubleColon {
+                return true;
+            }
+            if idx + 1 < self.tokens.len()
+                && self.tokens[idx].kind == TokenKind::Colon
+                && self.tokens[idx + 1].kind == TokenKind::Colon
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn is_at_newtype(&self) -> bool {
+        let mut idx = self.pos;
+        if idx < self.tokens.len()
+            && (self.tokens[idx].kind == TokenKind::Keyword || self.tokens[idx].kind == TokenKind::Identifier)
+            && self.tokens[idx].source() == "pub"
+        {
+            idx += 1;
+        }
+        idx < self.tokens.len()
+            && (self.tokens[idx].kind == TokenKind::Keyword || self.tokens[idx].kind == TokenKind::Identifier)
+            && self.tokens[idx].source() == "newtype"
+    }
+
+    fn is_at_derive(&self) -> bool {
+        (self.peek().kind == TokenKind::Keyword || self.peek().kind == TokenKind::Identifier)
+            && self.peek().source() == "derive"
+            && self.peek_ahead(1).kind == TokenKind::OpenParen
+    }
+
+    fn is_at_implements(&self) -> bool {
+        (self.peek().kind == TokenKind::Keyword || self.peek().kind == TokenKind::Identifier)
+            && self.peek().source() == "implements"
+            && self.peek_ahead(1).kind == TokenKind::OpenParen
+    }
+
     fn is_at_def_clause(&self) -> bool {
         let mut idx = self.pos;
         if idx >= self.tokens.len() {
@@ -682,8 +765,273 @@ impl<'a> AltParser<'a> {
         }
     }
 
+    fn parse_type_signature_def(&mut self) -> Result<Ast> {
+        let loc = self.current_loc();
+        let is_pub = self.eat_keyword("pub");
+        let name_tok = self.expect_token(TokenKind::Identifier, "signature name")?;
+        let name = intern(name_tok.source());
+        self.eat_colon_colon();
+        let sig = self.parse_type_signature_body(loc)?;
+        let ast = Ast::TypeSignature(loc, name, sig);
+        if is_pub {
+            Ok(Ast::Begin(
+                loc,
+                vec![
+                    Ast::VisibilityDirective(loc, true),
+                    ast,
+                    Ast::VisibilityDirective(loc, false),
+                ],
+            ))
+        } else {
+            Ok(ast)
+        }
+    }
+
+    fn parse_type_signature_body(&mut self, loc: Loc) -> Result<TypeSignature> {
+        let mut forany_vars = Vec::new();
+        let mut constraints = Vec::new();
+
+        if self.match_keyword("forany") {
+            self.advance();
+            self.expect_token(TokenKind::OpenParen, "`(` after forany")?;
+            loop {
+                let var_tok = self.expect_token(TokenKind::Identifier, "type variable in forany")?;
+                forany_vars.push(intern(var_tok.source()));
+                if self.peek().kind == TokenKind::Comma {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect_token(TokenKind::CloseParen, "`)` after forany")?;
+
+            if self.match_keyword("where") {
+                self.advance();
+                loop {
+                    let c_loc = self.current_loc();
+                    self.expect_keyword("implements")?;
+                    self.expect_token(TokenKind::OpenParen, "`(` after implements in constraint")?;
+                    let var_tok = self.expect_token(TokenKind::Identifier, "type variable in implements")?;
+                    self.expect_token(TokenKind::Comma, "`,` after type variable in implements")?;
+                    let trait_name = self.parse_atom_sym()?;
+                    self.expect_token(TokenKind::CloseParen, "`)` after implements constraint")?;
+                    constraints.push(TraitConstraint {
+                        loc: c_loc,
+                        type_var: intern(var_tok.source()),
+                        trait_name,
+                    });
+                    if self.peek().kind == TokenKind::Comma {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            if self.peek().kind == TokenKind::Colon {
+                self.advance();
+            }
+        }
+
+        let fn_type = self.parse_fn_type(&forany_vars)?;
+        Ok(TypeSignature {
+            loc,
+            forany_vars,
+            constraints,
+            fn_type,
+        })
+    }
+
+    fn parse_fn_type(&mut self, forany_vars: &[u32]) -> Result<TypeExpr> {
+        let loc = self.current_loc();
+
+        if self.peek().kind == TokenKind::OpenParen && self.peek_ahead(1).kind == TokenKind::CloseParen {
+            self.advance(); // (
+            self.advance(); // )
+            if self.peek().kind == TokenKind::Arrow {
+                self.advance();
+                let ret = self.parse_type_expr_scoped(forany_vars)?;
+                return Ok(TypeExpr::Function(loc, vec![], Box::new(ret)));
+            } else {
+                return Err(SelError::SyntaxError(loc, "Expected `->` after `()` in function type".into()));
+            }
+        }
+
+        let first = self.parse_type_expr_scoped(forany_vars)?;
+        let mut params = vec![first];
+
+        while self.peek().kind == TokenKind::Comma {
+            self.advance();
+            params.push(self.parse_type_expr_scoped(forany_vars)?);
+        }
+
+        if self.peek().kind == TokenKind::Arrow {
+            self.advance();
+            let ret = self.parse_type_expr_scoped(forany_vars)?;
+            Ok(TypeExpr::Function(loc, params, Box::new(ret)))
+        } else if params.len() == 1 {
+            Ok(params.remove(0))
+        } else {
+            Err(SelError::SyntaxError(
+                loc,
+                "Expected `->` after function parameter types".into(),
+            ))
+        }
+    }
+
+    pub fn parse_type_expr(&mut self) -> Result<TypeExpr> {
+        self.parse_type_expr_scoped(&[])
+    }
+
+    fn parse_type_expr_scoped(&mut self, forany_vars: &[u32]) -> Result<TypeExpr> {
+        let loc = self.current_loc();
+        let mut ty = self.parse_primary_type_scoped(forany_vars)?;
+
+        if self.peek().kind == TokenKind::Pipe && self.peek_ahead(1).kind != TokenKind::Gt {
+            let mut union_types = vec![ty];
+            while self.peek().kind == TokenKind::Pipe && self.peek_ahead(1).kind != TokenKind::Gt {
+                self.advance();
+                union_types.push(self.parse_primary_type_scoped(forany_vars)?);
+            }
+            ty = TypeExpr::Union(loc, union_types);
+        }
+        Ok(ty)
+    }
+
+    fn parse_primary_type_scoped(&mut self, forany_vars: &[u32]) -> Result<TypeExpr> {
+        let loc = self.current_loc();
+        let tok = self.peek().clone();
+
+        match tok.kind {
+            TokenKind::OpenBracket => {
+                self.advance();
+                let inner = self.parse_type_expr_scoped(forany_vars)?;
+                self.expect_token(TokenKind::CloseBracket, "`]` after list type")?;
+                Ok(TypeExpr::List(loc, Box::new(inner)))
+            }
+            TokenKind::OpenCurly => {
+                self.advance();
+                let mut fields = Vec::new();
+                while self.peek().kind != TokenKind::CloseCurly && !self.at_eof() {
+                    let key_tok = self.expect_token(TokenKind::Identifier, "record field name in type")?;
+                    let key_sym = intern(key_tok.source());
+                    if self.peek().kind == TokenKind::Colon {
+                        self.advance();
+                    }
+                    let val_type = self.parse_type_expr_scoped(forany_vars)?;
+                    fields.push((key_sym, val_type));
+                    if self.peek().kind == TokenKind::Comma {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect_token(TokenKind::CloseCurly, "`}` after record type")?;
+                Ok(TypeExpr::Record(loc, fields))
+            }
+            TokenKind::OpenParen => {
+                self.advance();
+                let inner = self.parse_fn_type(forany_vars)?;
+                self.expect_token(TokenKind::CloseParen, "`)` after type expression")?;
+                Ok(inner)
+            }
+            TokenKind::Keyword | TokenKind::Identifier => {
+                self.advance();
+                let name = tok.source();
+                match name {
+                    "int" => Ok(TypeExpr::Base(loc, BaseTypeKind::Int)),
+                    "float" => Ok(TypeExpr::Base(loc, BaseTypeKind::Float)),
+                    "bool" => Ok(TypeExpr::Base(loc, BaseTypeKind::Bool)),
+                    "string" => Ok(TypeExpr::Base(loc, BaseTypeKind::String)),
+                    "char" => Ok(TypeExpr::Base(loc, BaseTypeKind::Char)),
+                    "symbol" => Ok(TypeExpr::Base(loc, BaseTypeKind::Symbol)),
+                    "nil" => Ok(TypeExpr::Base(loc, BaseTypeKind::Nil)),
+                    "any" => Ok(TypeExpr::Base(loc, BaseTypeKind::Any)),
+                    "record" => Ok(TypeExpr::Base(loc, BaseTypeKind::Record)),
+                    "list" => Ok(TypeExpr::Base(loc, BaseTypeKind::List)),
+                    "fn" => Ok(TypeExpr::Base(loc, BaseTypeKind::Fn)),
+                    _ => {
+                        let sym = intern(name);
+                        if forany_vars.contains(&sym) {
+                            Ok(TypeExpr::Var(loc, sym))
+                        } else {
+                            Ok(TypeExpr::Nominal(loc, sym))
+                        }
+                    }
+                }
+            }
+            _ => Err(SelError::SyntaxError(
+                loc,
+                format!("Unexpected token `{}` in type expression", tok.source()),
+            )),
+        }
+    }
+
+    fn parse_newtype(&mut self) -> Result<Ast> {
+        let loc = self.current_loc();
+        let is_pub = self.eat_keyword("pub");
+        self.expect_keyword("newtype")?;
+        let name_tok = self.expect_token(TokenKind::Identifier, "newtype name")?;
+        let name = intern(name_tok.source());
+        self.expect_token(TokenKind::Assign, "`:=` after newtype name")?;
+        let ty = self.parse_type_expr()?;
+        let ast = Ast::Newtype(loc, name, ty);
+        if is_pub {
+            Ok(Ast::Begin(
+                loc,
+                vec![
+                    Ast::VisibilityDirective(loc, true),
+                    ast,
+                    Ast::VisibilityDirective(loc, false),
+                ],
+            ))
+        } else {
+            Ok(ast)
+        }
+    }
+
+    fn parse_derive(&mut self) -> Result<Ast> {
+        let loc = self.current_loc();
+        self.expect_keyword("derive")?;
+        self.expect_token(TokenKind::OpenParen, "`(` after derive")?;
+        let name_tok = self.expect_token(TokenKind::Identifier, "type name in derive")?;
+        let name = intern(name_tok.source());
+        self.expect_token(TokenKind::Comma, "`,` after type name in derive")?;
+        let trait_name = self.parse_atom_sym()?;
+        self.expect_token(TokenKind::CloseParen, "`)` after trait name in derive")?;
+        Ok(Ast::Derive(loc, name, trait_name))
+    }
+
+    fn parse_implements(&mut self) -> Result<Ast> {
+        let loc = self.current_loc();
+        self.expect_keyword("implements")?;
+        self.expect_token(TokenKind::OpenParen, "`(` after implements")?;
+        let name_tok = self.expect_token(TokenKind::Identifier, "type name in implements")?;
+        let name = intern(name_tok.source());
+        self.expect_token(TokenKind::Comma, "`,` after type name in implements")?;
+        let trait_name = self.parse_atom_sym()?;
+        self.expect_token(TokenKind::Comma, "`,` after trait name in implements")?;
+        let handler = self.parse_expr()?;
+        self.expect_token(TokenKind::CloseParen, "`)` after handler in implements")?;
+        Ok(Ast::Implements(loc, name, trait_name, Box::new(handler)))
+    }
+
+    fn parse_atom_sym(&mut self) -> Result<u32> {
+        self.expect_token(TokenKind::Colon, "`:` for trait atom")?;
+        let id_tok = self.expect_token(TokenKind::Identifier, "identifier after `:`")?;
+        Ok(intern(id_tok.source()))
+    }
+
     pub fn parse_statement(&mut self) -> Result<Ast> {
-        if self.is_at_def_clause() {
+        if self.is_at_type_signature() {
+            self.parse_type_signature_def()
+        } else if self.is_at_newtype() {
+            self.parse_newtype()
+        } else if self.is_at_derive() {
+            self.parse_derive()
+        } else if self.is_at_implements() {
+            self.parse_implements()
+        } else if self.is_at_def_clause() {
             let first = self.parse_def_clause()?;
             let mut clauses = vec![first];
             self.skip_semicolons();
@@ -785,7 +1133,14 @@ impl<'a> AltParser<'a> {
     }
 
     pub fn parse_expr(&mut self) -> Result<Ast> {
-        self.parse_logical_or()
+        let mut expr = self.parse_logical_or()?;
+        while self.is_at_colon_colon() {
+            let loc = self.current_loc();
+            self.eat_colon_colon();
+            let ty = self.parse_type_expr()?;
+            expr = Ast::TypeAssert(loc, Box::new(expr), ty);
+        }
+        Ok(expr)
     }
 
     fn parse_logical_or(&mut self) -> Result<Ast> {
@@ -1217,6 +1572,9 @@ impl<'a> AltParser<'a> {
                 }
             }
         }
+        if self.peek().kind == TokenKind::Comma {
+            self.advance();
+        }
         self.expect_token(TokenKind::CloseBracket, "`]`")?;
 
         if let Some(tail) = tail_expr {
@@ -1263,6 +1621,9 @@ impl<'a> AltParser<'a> {
                     break;
                 }
             }
+        }
+        if self.peek().kind == TokenKind::Comma {
+            self.advance();
         }
         self.expect_token(TokenKind::CloseCurly, "`}`")?;
         Ok(Ast::Record(loc, fields))
@@ -1901,7 +2262,7 @@ mod tests {
             [fib(0), fib(1), fib(6), fact(1), fact(5)]
         "#;
         let val = eval_alt(code).expect("evaluation failed");
-        assert_eq!(format!("{val}"), "(0 1 8 1 120)");
+        assert_eq!(format!("{val}"), "[0, 1, 8, 1, 120]");
     }
 
     #[test]

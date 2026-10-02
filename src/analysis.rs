@@ -614,7 +614,16 @@ pub fn analyze_ast(ast: &Ast, warnings: &mut Vec<SelWarning>) {
                 }
             }
         }
-        Ast::Import(..)
+        Ast::TypeAssert(_, expr, _) => {
+            analyze_ast(expr, warnings);
+        }
+        Ast::Implements(_, _, _, handler) => {
+            analyze_ast(handler, warnings);
+        }
+        Ast::TypeSignature(..)
+        | Ast::Newtype(..)
+        | Ast::Derive(..)
+        | Ast::Import(..)
         | Ast::Bind(..)
         | Ast::Nil(..)
         | Ast::Symbol(..)

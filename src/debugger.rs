@@ -234,6 +234,15 @@ pub fn disassemble_chunk(chunk: &Chunk) -> Vec<DisassembledInstruction> {
                 let sym = read_u32(&mut ip);
                 ("RecordGet", format!("field: '{}'", lookup(sym)))
             }
+            55 => {
+                let sym = read_u32(&mut ip);
+                ("MakeNominal", format!("type: '{}'", lookup(sym)))
+            }
+            56 => {
+                let type_name = read_u32(&mut ip);
+                let trait_name = read_u32(&mut ip);
+                ("RegisterImpl", format!("type: '{}', trait: ':{}'", lookup(type_name), lookup(trait_name)))
+            }
             other => ("Unknown", format!("tag: {}", other)),
         };
 
@@ -572,6 +581,36 @@ pub fn ast_to_graph(ast: &Ast) -> AstGraphNode {
             }),
             loc: *loc,
             children: vec![ast_to_graph(left), ast_to_graph(right)],
+        },
+        Ast::TypeSignature(loc, name, sig) => AstGraphNode {
+            name: "TypeSignature".into(),
+            detail: Some(format!("{} :: {}", lookup(*name), sig.fn_type)),
+            loc: *loc,
+            children: vec![],
+        },
+        Ast::TypeAssert(loc, expr, ty) => AstGraphNode {
+            name: "TypeAssert".into(),
+            detail: Some(format!(":: {}", ty)),
+            loc: *loc,
+            children: vec![ast_to_graph(expr)],
+        },
+        Ast::Newtype(loc, name, ty) => AstGraphNode {
+            name: "Newtype".into(),
+            detail: Some(format!("newtype {} := {}", lookup(*name), ty)),
+            loc: *loc,
+            children: vec![],
+        },
+        Ast::Derive(loc, name, tr) => AstGraphNode {
+            name: "Derive".into(),
+            detail: Some(format!("derive({}, :{})", lookup(*name), lookup(*tr))),
+            loc: *loc,
+            children: vec![],
+        },
+        Ast::Implements(loc, name, tr, handler) => AstGraphNode {
+            name: "Implements".into(),
+            detail: Some(format!("implements({}, :{})", lookup(*name), lookup(*tr))),
+            loc: *loc,
+            children: vec![ast_to_graph(handler)],
         },
     }
 }

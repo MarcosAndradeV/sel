@@ -332,6 +332,22 @@ fn is_value_equal(first: &Value, arg: &Value) -> bool {
                     .all(|((ka, va), (kb, vb))| *ka == *kb && is_value_equal(va, vb))
         }
         (Value::Char(a), Value::Char(b)) => a == b,
+        (Value::Nominal(a), Value::Nominal(b)) => {
+            if a.type_id != b.type_id {
+                return false;
+            }
+            let comparable_sym = intern("comparable");
+            if let Some(handler) = crate::runtime::get_trait_impl(a.type_id, comparable_sym) {
+                if let Value::Closure(closure) = handler {
+                    if let Ok(res) = crate::runtime::call_closure(Loc::default(), &closure, vec![first.clone(), arg.clone()]) {
+                        if let Value::Boolean(eq) = res {
+                            return eq;
+                        }
+                    }
+                }
+            }
+            is_value_equal(&a.inner, &b.inner)
+        }
         _ => false,
     }
 }
@@ -419,6 +435,7 @@ pub fn value_type_name(v: &Value) -> &str {
         Value::Record(_) => "record",
         Value::Coroutine(_) => "coroutine",
         Value::Char(_) => "char",
+        Value::Nominal(_) => "nominal",
     }
 }
 
@@ -473,13 +490,14 @@ pub fn display_newline(loc: Loc, args: Vec<Value>) -> Result<Value> {
     newline(loc, Vec::new())
 }
 
-pub fn display(_loc: Loc, args: Vec<Value>) -> Result<Value> {
+pub fn display(loc: Loc, args: Vec<Value>) -> Result<Value> {
     let mut out = String::new();
     for (i, arg) in args.into_iter().enumerate() {
         if i > 0 {
             out.push(' ');
         }
-        out.push_str(&arg.to_string());
+        let s = crate::runtime::format_value_with_traits(loc, &arg)?;
+        out.push_str(&s);
     }
     emit_stdout(&out);
     Ok(Value::Nil)
@@ -1516,6 +1534,17 @@ pub fn rget(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
             }),
             _ => Err(SelError::Runtime(loc, "rget requires a symbol".into())),
         },
+        Value::Nominal(nom) => match &nom.inner {
+            Value::Record(r) => match index {
+                Value::Symbol(sym) => Ok(if let Some(v) = r.fields().get(&sym).cloned() {
+                    v
+                } else {
+                    Value::Nil
+                }),
+                _ => Err(SelError::Runtime(loc, "rget requires a symbol".into())),
+            },
+            _ => Err(SelError::Runtime(loc, "rget requires a record or record-backed nominal".into())),
+        },
         _ => Err(SelError::Runtime(loc, "rget requires a record".into())),
     }
 }
@@ -1538,6 +1567,20 @@ pub fn rset(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
                 Ok(Value::Record(Rc::new(new_r)))
             }
             _ => Err(SelError::Runtime(loc, "rset requires a symbol".into())),
+        },
+        Value::Nominal(nom) => match &nom.inner {
+            Value::Record(r) => match index {
+                Value::Symbol(sym) => {
+                    let mut new_r = (**r).clone();
+                    new_r.fields_mut().insert(sym, value);
+                    Ok(Value::Nominal(Rc::new(crate::value::NominalValue {
+                        type_id: nom.type_id,
+                        inner: Value::Record(Rc::new(new_r)),
+                    })))
+                }
+                _ => Err(SelError::Runtime(loc, "rset requires a symbol".into())),
+            },
+            _ => Err(SelError::Runtime(loc, "rset requires a record or record-backed nominal".into())),
         },
         _ => Err(SelError::Runtime(loc, "rset requires a record".into())),
     }
@@ -1845,7 +1888,10 @@ pub fn type_of(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
         ));
     }
     let v = args.pop().unwrap();
-    Ok(Value::Symbol(intern(value_type_name(&v))))
+    match v {
+        Value::Nominal(nom) => Ok(Value::Symbol(nom.type_id)),
+        _ => Ok(Value::Symbol(intern(value_type_name(&v)))),
+    }
 }
 
 pub fn newline(loc: Loc, args: Vec<Value>) -> Result<Value> {
@@ -2764,11 +2810,8 @@ pub fn to_string(loc: Loc, args: Vec<Value>) -> Result<Value> {
         });
     }
     let val = &args[0];
-    if val.to_string_lossy().is_some() {
-        Ok(val.clone())
-    } else {
-        Ok(Value::make_string(&format!("{val}")))
-    }
+    let s = crate::runtime::format_value_with_traits(loc, val)?;
+    Ok(Value::make_string(&s))
 }
 
 pub fn to_int(loc: Loc, args: Vec<Value>) -> Result<Value> {

@@ -926,6 +926,46 @@ impl<'a> Compiler<'a> {
                     "unexpected & binding in normal expression".into(),
                 ));
             }
+            Ast::TypeSignature(loc, ..) => {
+                let idx = self.chunk.add_constant(Value::Nil);
+                self.chunk.write((loc, OpCode::Constant(idx)));
+            }
+            Ast::TypeAssert(_, expr, _) => {
+                self.compile_expr(*expr, is_tail)?;
+            }
+            Ast::Newtype(loc, name, _) => {
+                let mut child_chunk = Chunk::new();
+                child_chunk.name = Some(name);
+                let mut child_compiler = Compiler::new(&mut child_chunk);
+                let arg_sym = intern("arg");
+                child_compiler.locals.push(Local {
+                    name: arg_sym,
+                    depth: 0,
+                });
+                child_compiler.chunk.write((loc, OpCode::LoadLocal(0)));
+                child_compiler.chunk.write((loc, OpCode::MakeNominal(name)));
+                child_compiler.chunk.write((loc, OpCode::Return));
+
+                let stub = Value::Closure(Rc::new(Closure::new(
+                    Some(name),
+                    vec![arg_sym],
+                    Rc::new(child_chunk),
+                    Rc::new(RefCell::new(Env::default())),
+                )));
+                let idx = self.chunk.add_constant(stub);
+                self.chunk.write((loc, OpCode::MakeClosure(idx)));
+                self.chunk.write((loc, OpCode::DefVar(name)));
+            }
+            Ast::Derive(loc, ..) => {
+                let idx = self.chunk.add_constant(Value::Nil);
+                self.chunk.write((loc, OpCode::Constant(idx)));
+            }
+            Ast::Implements(loc, type_name, trait_name, handler) => {
+                self.compile_expr(*handler, false)?;
+                self.chunk.write((loc, OpCode::RegisterImpl(type_name, trait_name)));
+                let idx = self.chunk.add_constant(Value::Nil);
+                self.chunk.write((loc, OpCode::Constant(idx)));
+            }
         }
         Ok(())
     }
@@ -1066,6 +1106,8 @@ pub enum OpCode {
     Not(u32),
     Load,
     RecordGet(u32),
+    MakeNominal(u32),
+    RegisterImpl(u32, u32),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1300,6 +1342,15 @@ impl Chunk {
             OpCode::RecordGet(sym) => {
                 self.code.push(54);
                 self.code.extend_from_slice(&sym.to_le_bytes());
+            }
+            OpCode::MakeNominal(sym) => {
+                self.code.push(55);
+                self.code.extend_from_slice(&sym.to_le_bytes());
+            }
+            OpCode::RegisterImpl(type_name, trait_name) => {
+                self.code.push(56);
+                self.code.extend_from_slice(&type_name.to_le_bytes());
+                self.code.extend_from_slice(&trait_name.to_le_bytes());
             }
         }
     }

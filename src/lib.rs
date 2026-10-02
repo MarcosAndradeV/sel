@@ -7,6 +7,7 @@ pub mod internal;
 pub mod lexer;
 pub mod parser;
 pub mod runtime;
+pub mod typecheck;
 pub mod types;
 pub mod value;
 
@@ -249,16 +250,16 @@ mod tests {
 
         // Test list rest and drop
         let res1 = eval("rest([1, 2, 3])", env.clone()).unwrap();
-        assert_eq!(format!("{res1}"), "(2 3)");
+        assert_eq!(format!("{res1}"), "[2, 3]");
 
         let res2 = eval("rest(rest([1, 2, 3]))", env.clone()).unwrap();
-        assert_eq!(format!("{res2}"), "(3)");
+        assert_eq!(format!("{res2}"), "[3]");
 
         let res3 = eval("rest(rest(rest([1, 2, 3])))", env.clone()).unwrap();
-        assert_eq!(format!("{res3}"), "()");
+        assert_eq!(format!("{res3}"), "nil");
 
         let res4 = eval("drop(2, [10, 20, 30, 40])", env.clone()).unwrap();
-        assert_eq!(format!("{res4}"), "(30 40)");
+        assert_eq!(format!("{res4}"), "[30, 40]");
 
         let res5 = eval("nth(rest([10, 20, 30, 40]), 1)", env.clone()).unwrap();
         assert!(matches!(res5, Value::Integer(30)));

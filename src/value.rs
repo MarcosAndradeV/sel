@@ -172,6 +172,12 @@ impl std::fmt::Display for StringSlice {
 }
 
 #[derive(Debug, Clone)]
+pub struct NominalValue {
+    pub type_id: u32,
+    pub inner: Value,
+}
+
+#[derive(Debug, Clone)]
 pub enum Value {
     Nil,
     Integer(i64),
@@ -191,6 +197,7 @@ pub enum Value {
     Library(Rc<libloading::Library>),
     Coroutine(Rc<Coroutine>),
     Char(char),
+    Nominal(Rc<NominalValue>),
 }
 
 impl Value {
@@ -246,14 +253,14 @@ impl Value {
 
 fn format_value(val: &Value) -> String {
     match val {
-        Value::Nil => "()".to_string(),
+        Value::Nil => "nil".to_string(),
         Value::Integer(i) => i.to_string(),
         Value::Float(f) => f.to_string(),
         Value::Boolean(b) => {
             if *b {
-                "#t".to_string()
+                "true".to_string()
             } else {
-                "#f".to_string()
+                "false".to_string()
             }
         }
         Value::Symbol(id) => lookup(*id),
@@ -274,29 +281,33 @@ fn format_value(val: &Value) -> String {
                     })
                     .collect()
             } else {
-                let mut s = String::from("(");
+                let mut s = String::from("[");
                 for (i, v) in l.iter().enumerate() {
                     if i > 0 {
-                        s.push(' ');
+                        s.push_str(", ");
                     }
                     s.push_str(&format_value(v));
                 }
-                s.push(')');
+                s.push(']');
                 s
             }
         }
         Value::Record(r) => {
-            let mut s = String::from("{");
-            for (i, (k, v)) in r.fields().iter().enumerate() {
-                if i > 0 {
-                    s.push(' ');
+            if r.fields().is_empty() {
+                "{}".to_string()
+            } else {
+                let mut s = String::from("{ ");
+                for (i, (k, v)) in r.fields().iter().enumerate() {
+                    if i > 0 {
+                        s.push_str(", ");
+                    }
+                    s.push_str(&lookup(*k));
+                    s.push_str(": ");
+                    s.push_str(&format_value(v));
                 }
-                s.push_str(&lookup(*k));
-                s.push(' ');
-                s.push_str(&format_value(v));
+                s.push_str(" }");
+                s
             }
-            s.push('}');
-            s
         }
         Value::Closure(_) => "<closure>".to_string(),
         Value::NativeClosure(_) => "<native-closure>".to_string(),
@@ -306,6 +317,7 @@ fn format_value(val: &Value) -> String {
         #[cfg(feature = "ffi")]
         Value::Library(_) => "<library>".to_string(),
         Value::Coroutine(_) => "<coroutine>".to_string(),
+        Value::Nominal(nom) => format!("{}({})", lookup(nom.type_id), format_value(&nom.inner)),
     }
 }
 

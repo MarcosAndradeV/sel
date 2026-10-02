@@ -328,7 +328,8 @@ fn repl(prompt: &str, env: Rc<RefCell<Env>>) -> Result<(), SelError> {
                 }
                 match execute_asts(asts, env.clone()) {
                     Ok(val) => {
-                        println!("{val}");
+                        let s = sel::runtime::format_value_with_traits(sel::lexer::Loc::default(), &val).unwrap_or_else(|_| format!("{val}"));
+                        println!("{s}");
                     }
                     Err(e) => {
                         println!("{e}");
