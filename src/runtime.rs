@@ -49,7 +49,7 @@ impl Env {
         }
     }
 
-    fn get(&self, id: u32) -> Option<Value> {
+    pub fn get(&self, id: u32) -> Option<Value> {
         if let Some(val) = self.bindings.get(&id) {
             Some(val.clone())
         } else if let Some(parent) = &self.parent {
@@ -466,7 +466,7 @@ impl VM {
                                 locals,
                             });
                         }
-                        Value::NativeFunction(f) => {
+                        Value::NativeFunction(f, _) => {
                             let mut args = Vec::with_capacity(arg_count);
                             let start = self.stack.len() - arg_count;
                             args.extend(self.stack.drain(start..));
@@ -617,7 +617,7 @@ impl VM {
                             frame.env = Rc::new(RefCell::new(call_env));
                             frame.locals = locals;
                         }
-                        Value::NativeFunction(f) => {
+                        Value::NativeFunction(f, _) => {
                             let mut args = Vec::with_capacity(arg_count);
                             let start = self.stack.len() - arg_count;
                             args.extend(self.stack.drain(start..));

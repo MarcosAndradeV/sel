@@ -225,10 +225,11 @@ pub fn div(loc: Loc, args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn modulo_slice(loc: Loc, args: &[Value]) -> Result<Value> {
     if args.len() != 2 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected 2 arguments for mod".into(),
-        ));
+            expected: 2,
+            actual: args.len(),
+        });
     }
     let a = match args[0] {
         Value::Integer(i) => i,
@@ -427,7 +428,7 @@ pub fn value_type_name(v: &Value) -> &str {
                 "list"
             }
         }
-        Value::NativeClosure(_) | Value::Closure(_) | Value::NativeFunction(_) => "function",
+        Value::NativeClosure(_) | Value::Closure(_) | Value::NativeFunction(..) => "function",
         Value::Macro { .. } => "macro",
         Value::Pointer(_) => "pointer",
         #[cfg(feature = "ffi")]
@@ -440,7 +441,14 @@ pub fn value_type_name(v: &Value) -> &str {
 }
 
 #[inline]
-pub fn not(_loc: Loc, args: Vec<Value>) -> Result<Value> {
+pub fn not(loc: Loc, args: Vec<Value>) -> Result<Value> {
+    if args.len() != 1 {
+        return Err(SelError::ArityMismatch {
+            loc,
+            expected: 1,
+            actual: args.len(),
+        });
+    }
     match args[0] {
         Value::Boolean(false) => Ok(Value::Boolean(true)),
         _ => Ok(Value::Boolean(false)),
@@ -506,10 +514,11 @@ pub fn display(loc: Loc, args: Vec<Value>) -> Result<Value> {
 #[cfg(feature = "ffi")]
 pub fn ffi_dlopen(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 arguments for ffi-dlopen".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     if let Some(s) = args[0].to_string_lossy() {
         unsafe {
@@ -529,10 +538,11 @@ pub fn ffi_dlopen(loc: Loc, args: Vec<Value>) -> Result<Value> {
 #[cfg(feature = "ffi")]
 pub fn ffi_dlsym(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 2 arguments for ffi-dlsym".into(),
-        ));
+            expected: 2,
+            actual: args.len(),
+        });
     }
     let lib = match &args[0] {
         Value::Library(l) => l,
@@ -1071,10 +1081,11 @@ unsafe fn deserialize_value(ty: &FfiType, ptr: *const u8) -> Value {
 #[cfg(feature = "ffi")]
 pub fn ffi_call(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() != 4 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 4 arguments for ffi-call".into(),
-        ));
+            expected: 4,
+            actual: args.len(),
+        });
     }
     let ptr = match args[0] {
         Value::Pointer(p) => p,
@@ -1245,10 +1256,11 @@ pub fn ffi_func(loc: Loc, args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn cons(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
-        return Err(SelError::SyntaxError(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 2 arguments for cons".into(),
-        ));
+            expected: 2,
+            actual: args.len(),
+        });
     }
     let tail = args.pop().unwrap();
     let head = args.pop().unwrap();
@@ -1281,10 +1293,11 @@ pub fn cons(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn car(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 arguments for car".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     match args.pop().unwrap() {
         Value::List(mut l) => Ok(l.pop_front().unwrap_or(Value::Nil)),
@@ -1302,10 +1315,11 @@ pub fn car(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn cdr(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 arguments for cdr".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     match args.pop().unwrap() {
         Value::List(mut l) => {
@@ -1331,10 +1345,11 @@ pub fn cdr(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn nth(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 2 arguments for nth".into(),
-        ));
+            expected: 2,
+            actual: args.len(),
+        });
     }
     let index = args.pop().unwrap();
     match args.pop().unwrap() {
@@ -1367,10 +1382,11 @@ pub fn nth(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn drop(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 2 arguments for drop".into(),
-        ));
+            expected: 2,
+            actual: args.len(),
+        });
     }
     let arg2 = args.pop().unwrap();
     let arg1 = args.pop().unwrap();
@@ -1419,10 +1435,11 @@ pub fn drop(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn take(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 2 arguments for take".into(),
-        ));
+            expected: 2,
+            actual: args.len(),
+        });
     }
     let arg2 = args.pop().unwrap();
     let arg1 = args.pop().unwrap();
@@ -1448,8 +1465,10 @@ pub fn take(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     };
     match list_val {
         Value::List(mut l) => {
-            if n == 0 {
+            if n == 0 || l.is_empty() {
                 Ok(Value::Nil)
+            } else if n >= l.len() {
+                Ok(Value::List(l))
             } else {
                 *l = l.take(n);
                 if l.is_empty() {
@@ -1460,14 +1479,14 @@ pub fn take(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
             }
         }
         Value::String(s) => {
-            if n == 0 {
+            if n == 0 || s.is_empty() {
                 Ok(Value::Nil)
             } else {
                 let taken: String = s.as_str().chars().take(n).collect();
                 if taken.is_empty() {
                     Ok(Value::Nil)
                 } else {
-                    Ok(Value::String(Box::new(StringSlice::new(&taken))))
+                    Ok(Value::make_string(&taken))
                 }
             }
         }
@@ -1479,10 +1498,11 @@ pub fn take(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn count(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 arguments for count".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     match args.pop().unwrap() {
         Value::List(l) => Ok(Value::Integer(l.len() as _)),
@@ -1500,10 +1520,11 @@ pub fn list(_loc: Loc, args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn empty(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::SyntaxError(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 arguments for empty?".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     match args.pop().unwrap() {
         Value::List(l) => Ok(Value::Boolean(l.is_empty())),
@@ -1519,10 +1540,11 @@ pub fn empty(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn rget(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 2 arguments for rget".into(),
-        ));
+            expected: 2,
+            actual: args.len(),
+        });
     }
     let index = args.pop().unwrap();
     match args.pop().unwrap() {
@@ -1552,10 +1574,11 @@ pub fn rget(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn rset(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 3 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 3 arguments for rset".into(),
-        ));
+            expected: 3,
+            actual: args.len(),
+        });
     }
     let value = args.pop().unwrap();
     let index = args.pop().unwrap();
@@ -1589,10 +1612,11 @@ pub fn rset(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn rdel(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 2 arguments for rdel".into(),
-        ));
+            expected: 2,
+            actual: args.len(),
+        });
     }
     let index = args.pop().unwrap();
     match args.pop().unwrap() {
@@ -1611,10 +1635,11 @@ pub fn rdel(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn rkeys(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 argument for rkeys".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     match args.pop().unwrap() {
         Value::Record(r) => {
@@ -1628,10 +1653,11 @@ pub fn rkeys(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn rvals(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 argument for rvals".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     match args.pop().unwrap() {
         Value::Record(r) => {
@@ -1645,10 +1671,11 @@ pub fn rvals(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn rcontains(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 2 arguments for rcontains?".into(),
-        ));
+            expected: 2,
+            actual: args.len(),
+        });
     }
     let index = args.pop().unwrap();
     match args.pop().unwrap() {
@@ -1669,10 +1696,11 @@ pub fn rcontains(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn is_nil(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 arguments for nil?".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     match args.pop().unwrap() {
         Value::Nil => Ok(Value::Boolean(true)),
@@ -1683,10 +1711,11 @@ pub fn is_nil(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn is_list(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 arguments for list?".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     match args.pop().unwrap() {
         Value::List(..) | Value::String(..) | Value::Nil => Ok(Value::Boolean(true)),
@@ -1697,10 +1726,11 @@ pub fn is_list(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn is_number(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 arguments for number?".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     match args.pop().unwrap() {
         Value::Integer(_) => Ok(Value::Boolean(true)),
@@ -1712,10 +1742,11 @@ pub fn is_number(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn is_string(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 arguments for string?".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     match args.pop().unwrap() {
         Value::String(..) => Ok(Value::Boolean(true)),
@@ -1729,10 +1760,11 @@ pub fn is_string(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn string_contains(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if args.len() != 2 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 2 arguments for string-contains?".into(),
-        ));
+            expected: 2,
+            actual: args.len(),
+        });
     }
     if let (Some(s_str), Some(sub_str)) = (args[0].to_string_lossy(), args[1].to_string_lossy()) {
         Ok(Value::Boolean(s_str.contains(&sub_str)))
@@ -1744,10 +1776,11 @@ pub fn string_contains(loc: Loc, args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn is_symbol(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 arguments for symbol?".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     match args.pop().unwrap() {
         Value::Symbol(_) => Ok(Value::Boolean(true)),
@@ -1790,10 +1823,11 @@ pub fn gensym(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn is_record(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 arguments for record?".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     match args.pop().unwrap() {
         Value::Record(_) => Ok(Value::Boolean(true)),
@@ -1804,14 +1838,15 @@ pub fn is_record(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn is_function(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 arguments for function?".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     match args.pop().unwrap() {
         Value::Closure(_) => Ok(Value::Boolean(true)),
-        Value::NativeFunction(_) => Ok(Value::Boolean(true)),
+        Value::NativeFunction(..) => Ok(Value::Boolean(true)),
         _ => Ok(Value::Boolean(false)),
     }
 }
@@ -1819,10 +1854,11 @@ pub fn is_function(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn is_char(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 arguments for char?".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     match args.pop().unwrap() {
         Value::Char(_) => Ok(Value::Boolean(true)),
@@ -1833,10 +1869,11 @@ pub fn is_char(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn char_to_integer(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 argument for char->integer".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     match args.pop().unwrap() {
         Value::Char(c) => Ok(Value::Integer(c as i64)),
@@ -1853,10 +1890,11 @@ pub fn char_to_integer(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn integer_to_char(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 argument for integer->char".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     match args.pop().unwrap() {
         Value::Integer(i) => {
@@ -1882,10 +1920,11 @@ pub fn integer_to_char(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 #[inline]
 pub fn type_of(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 arguments for type-of".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     let v = args.pop().unwrap();
     match v {
@@ -1896,10 +1935,11 @@ pub fn type_of(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 
 pub fn newline(loc: Loc, args: Vec<Value>) -> Result<Value> {
     if !args.is_empty() {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 arguments for newline".into(),
-        ));
+            expected: 0,
+            actual: args.len(),
+        });
     }
     emit_stdout("\n");
     Ok(Value::Nil)
@@ -1917,10 +1957,11 @@ pub fn file_system(loc: Loc, mut call_args: Vec<Value>) -> Result<Value> {
         match lookup(sym).as_str() {
             "exists?" | "exists" => {
                 if args.len() != 1 {
-                    return Err(SelError::SyntaxError(
+                    return Err(SelError::ArityMismatch {
                         loc,
-                        "Expected exactly 1 arguments for file-exists?".into(),
-                    ));
+                        expected: 1,
+                        actual: args.len(),
+                    });
                 }
                 return if let Some(path) = args[0].to_string_lossy() {
                     Ok(Value::Boolean(std::path::Path::new(&path).exists()))
@@ -1946,10 +1987,11 @@ pub fn file_system(loc: Loc, mut call_args: Vec<Value>) -> Result<Value> {
 
 fn fs_write(loc: Loc, args: &[Value]) -> Result<Value> {
     if args.len() != 2 {
-        return Err(SelError::SyntaxError(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 2 arguments for write".into(),
-        ));
+            expected: 2,
+            actual: args.len(),
+        });
     }
     if let (Some(path), Some(content)) = (args[0].to_string_lossy(), args[1].to_string_lossy()) {
         match std::fs::write(&path, &content) {
@@ -1966,10 +2008,11 @@ fn fs_write(loc: Loc, args: &[Value]) -> Result<Value> {
 
 fn fs_read(loc: Loc, args: &[Value]) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::SyntaxError(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 arguments for read".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     if let Some(path) = args[0].to_string_lossy() {
         match std::fs::read_to_string(&path) {
@@ -1986,10 +2029,11 @@ fn fs_read(loc: Loc, args: &[Value]) -> Result<Value> {
 
 fn fs_list(loc: Loc, args: &[Value]) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::SyntaxError(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 argument for list".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     if let Some(path) = args[0].to_string_lossy() {
         match std::fs::read_dir(&path) {
@@ -2014,10 +2058,11 @@ fn fs_list(loc: Loc, args: &[Value]) -> Result<Value> {
 
 fn fs_delete(loc: Loc, args: &[Value]) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::SyntaxError(
+        return Err(SelError::ArityMismatch {
             loc,
-            "Expected exactly 1 argument for delete".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     if let Some(path) = args[0].to_string_lossy() {
         let p = std::path::Path::new(&path);
@@ -2055,10 +2100,11 @@ pub fn system(loc: Loc, mut system_args: Vec<Value>) -> Result<Value> {
         match lookup(sym).as_str() {
             "args" => {
                 if !args.is_empty() {
-                    return Err(SelError::SyntaxError(
+                    return Err(SelError::ArityMismatch {
                         loc,
-                        "Expected exactly 0 arguments for args".into(),
-                    ));
+                        expected: 0,
+                        actual: args.len(),
+                    });
                 }
                 let args_vec = std::env::args()
                     .skip(1)
@@ -2068,10 +2114,11 @@ pub fn system(loc: Loc, mut system_args: Vec<Value>) -> Result<Value> {
             }
             "getenv" => {
                 if args.len() != 1 {
-                    return Err(SelError::SyntaxError(
+                    return Err(SelError::ArityMismatch {
                         loc,
-                        "Expected exactly 1 arguments for getenv".into(),
-                    ));
+                        expected: 1,
+                        actual: args.len(),
+                    });
                 }
                 return if let Some(key) = args[0].to_string_lossy() {
                     match std::env::var(&key) {
@@ -2100,10 +2147,11 @@ pub fn system(loc: Loc, mut system_args: Vec<Value>) -> Result<Value> {
             }
             "sleep" => {
                 if args.len() != 1 {
-                    return Err(SelError::SyntaxError(
+                    return Err(SelError::ArityMismatch {
                         loc,
-                        "Expected exactly 1 arguments for sleep".into(),
-                    ));
+                        expected: 1,
+                        actual: args.len(),
+                    });
                 }
                 return if let Value::Integer(d) = &args[0] {
                     std::thread::sleep(std::time::Duration::from_secs(*d as _));
@@ -2126,10 +2174,11 @@ pub fn system(loc: Loc, mut system_args: Vec<Value>) -> Result<Value> {
 
 pub fn co_create(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "co-create requires exactly 1 argument".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     match args.pop().unwrap() {
         Value::Closure(closure) => {
@@ -2150,10 +2199,11 @@ pub fn co_create(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 
 pub fn co_state(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "co-state requires exactly 1 argument".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     match args.pop().unwrap() {
         Value::Coroutine(co) => {
@@ -2173,10 +2223,11 @@ pub fn co_state(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
 
 pub fn co_dead_p(loc: Loc, mut args: Vec<Value>) -> Result<Value> {
     if args.len() != 1 {
-        return Err(SelError::Runtime(
+        return Err(SelError::ArityMismatch {
             loc,
-            "co-dead? requires exactly 1 argument".into(),
-        ));
+            expected: 1,
+            actual: args.len(),
+        });
     }
     match args.pop().unwrap() {
         Value::Coroutine(co) => Ok(Value::Boolean(co.state.get() == CoroutineState::Dead)),
@@ -2999,124 +3050,124 @@ pub fn sleep_ms(loc: Loc, args: Vec<Value>) -> Result<Value> {
 
 pub fn load(env: Rc<RefCell<Env>>) {
     let mut e = env.borrow_mut();
-    e.insert(intern("+"), Value::NativeFunction(sum));
-    e.insert(intern("-"), Value::NativeFunction(sub));
-    e.insert(intern("*"), Value::NativeFunction(mul));
-    e.insert(intern("/"), Value::NativeFunction(div));
-    e.insert(intern("mod"), Value::NativeFunction(modulo));
+    e.insert(intern("+"), Value::NativeFunction(sum, Arity::Variadic));
+    e.insert(intern("-"), Value::NativeFunction(sub, Arity::Variadic));
+    e.insert(intern("*"), Value::NativeFunction(mul, Arity::Variadic));
+    e.insert(intern("/"), Value::NativeFunction(div, Arity::Variadic));
+    e.insert(intern("mod"), Value::NativeFunction(modulo, Arity::Arity(2)));
 
-    e.insert(intern("not"), Value::NativeFunction(not));
-    e.insert(intern("=="), Value::NativeFunction(is_equal));
-    e.insert(intern("="), Value::NativeFunction(num_eq));
-    e.insert(intern("!="), Value::NativeFunction(num_noteq));
-    e.insert(intern("<"), Value::NativeFunction(num_lt));
-    e.insert(intern(">"), Value::NativeFunction(num_gt));
-    e.insert(intern("<="), Value::NativeFunction(num_lte));
-    e.insert(intern(">="), Value::NativeFunction(num_gte));
+    e.insert(intern("not"), Value::NativeFunction(not, Arity::Arity(1)));
+    e.insert(intern("=="), Value::NativeFunction(is_equal, Arity::Variadic));
+    e.insert(intern("="), Value::NativeFunction(num_eq, Arity::Variadic));
+    e.insert(intern("!="), Value::NativeFunction(num_noteq, Arity::Variadic));
+    e.insert(intern("<"), Value::NativeFunction(num_lt, Arity::Variadic));
+    e.insert(intern(">"), Value::NativeFunction(num_gt, Arity::Variadic));
+    e.insert(intern("<="), Value::NativeFunction(num_lte, Arity::Variadic));
+    e.insert(intern(">="), Value::NativeFunction(num_gte, Arity::Variadic));
 
-    e.insert(intern("cons"), Value::NativeFunction(cons));
-    e.insert(intern("car"), Value::NativeFunction(car));
-    e.insert(intern("cdr"), Value::NativeFunction(cdr));
-    e.insert(intern("nth"), Value::NativeFunction(nth));
-    e.insert(intern("drop"), Value::NativeFunction(drop));
-    e.insert(intern("take"), Value::NativeFunction(take));
-    e.insert(intern("count"), Value::NativeFunction(count));
-    e.insert(intern("list"), Value::NativeFunction(list));
-    e.insert(intern("is_empty"), Value::NativeFunction(empty));
+    e.insert(intern("cons"), Value::NativeFunction(cons, Arity::Arity(2)));
+    e.insert(intern("car"), Value::NativeFunction(car, Arity::Arity(1)));
+    e.insert(intern("cdr"), Value::NativeFunction(cdr, Arity::Arity(1)));
+    e.insert(intern("nth"), Value::NativeFunction(nth, Arity::Arity(2)));
+    e.insert(intern("drop"), Value::NativeFunction(drop, Arity::Arity(2)));
+    e.insert(intern("take"), Value::NativeFunction(take, Arity::Arity(2)));
+    e.insert(intern("count"), Value::NativeFunction(count, Arity::Arity(1)));
+    e.insert(intern("list"), Value::NativeFunction(list, Arity::Variadic));
+    e.insert(intern("is_empty"), Value::NativeFunction(empty, Arity::Arity(1)));
 
-    e.insert(intern("rget"), Value::NativeFunction(rget));
-    e.insert(intern("rset"), Value::NativeFunction(rset));
-    e.insert(intern("rdel"), Value::NativeFunction(rdel));
-    e.insert(intern("rkeys"), Value::NativeFunction(rkeys));
-    e.insert(intern("rvals"), Value::NativeFunction(rvals));
-    e.insert(intern("rcontains"), Value::NativeFunction(rcontains));
+    e.insert(intern("rget"), Value::NativeFunction(rget, Arity::Arity(2)));
+    e.insert(intern("rset"), Value::NativeFunction(rset, Arity::Arity(3)));
+    e.insert(intern("rdel"), Value::NativeFunction(rdel, Arity::Arity(2)));
+    e.insert(intern("rkeys"), Value::NativeFunction(rkeys, Arity::Arity(1)));
+    e.insert(intern("rvals"), Value::NativeFunction(rvals, Arity::Arity(1)));
+    e.insert(intern("rcontains"), Value::NativeFunction(rcontains, Arity::Arity(2)));
 
-    e.insert(intern("is_nil"), Value::NativeFunction(is_nil));
-    e.insert(intern("is_list"), Value::NativeFunction(is_list));
-    e.insert(intern("is_number"), Value::NativeFunction(is_number));
-    e.insert(intern("is_string"), Value::NativeFunction(is_string));
+    e.insert(intern("is_nil"), Value::NativeFunction(is_nil, Arity::Arity(1)));
+    e.insert(intern("is_list"), Value::NativeFunction(is_list, Arity::Arity(1)));
+    e.insert(intern("is_number"), Value::NativeFunction(is_number, Arity::Arity(1)));
+    e.insert(intern("is_string"), Value::NativeFunction(is_string, Arity::Arity(1)));
     e.insert(
         intern("string_contains"),
-        Value::NativeFunction(string_contains),
+        Value::NativeFunction(string_contains, Arity::Arity(2)),
     );
-    e.insert(intern("is_symbol"), Value::NativeFunction(is_symbol));
-    e.insert(intern("gensym"), Value::NativeFunction(gensym));
-    e.insert(intern("is_function"), Value::NativeFunction(is_function));
-    e.insert(intern("is_record"), Value::NativeFunction(is_record));
-    e.insert(intern("is_char"), Value::NativeFunction(is_char));
+    e.insert(intern("is_symbol"), Value::NativeFunction(is_symbol, Arity::Arity(1)));
+    e.insert(intern("gensym"), Value::NativeFunction(gensym, Arity::Variadic));
+    e.insert(intern("is_function"), Value::NativeFunction(is_function, Arity::Arity(1)));
+    e.insert(intern("is_record"), Value::NativeFunction(is_record, Arity::Arity(1)));
+    e.insert(intern("is_char"), Value::NativeFunction(is_char, Arity::Arity(1)));
     e.insert(
         intern("char_to_integer"),
-        Value::NativeFunction(char_to_integer),
+        Value::NativeFunction(char_to_integer, Arity::Arity(1)),
     );
     e.insert(
         intern("integer_to_char"),
-        Value::NativeFunction(integer_to_char),
+        Value::NativeFunction(integer_to_char, Arity::Arity(1)),
     );
 
-    e.insert(intern("type_of"), Value::NativeFunction(type_of));
+    e.insert(intern("type_of"), Value::NativeFunction(type_of, Arity::Arity(1)));
 
-    e.insert(intern("error"), Value::NativeFunction(error));
-    e.insert(intern("display"), Value::NativeFunction(display));
-    e.insert(intern("println"), Value::NativeFunction(display_newline));
-    e.insert(intern("newline"), Value::NativeFunction(newline));
+    e.insert(intern("error"), Value::NativeFunction(error, Arity::Variadic));
+    e.insert(intern("display"), Value::NativeFunction(display, Arity::Variadic));
+    e.insert(intern("println"), Value::NativeFunction(display_newline, Arity::Variadic));
+    e.insert(intern("newline"), Value::NativeFunction(newline, Arity::Arity(0)));
 
     #[cfg(feature = "ffi")]
     {
-        e.insert(intern("ffi_dlopen"), Value::NativeFunction(ffi_dlopen));
-        e.insert(intern("ffi_dlsym"), Value::NativeFunction(ffi_dlsym));
-        e.insert(intern("ffi_call"), Value::NativeFunction(ffi_call));
-        e.insert(intern("ffi_func"), Value::NativeFunction(ffi_func));
+        e.insert(intern("ffi_dlopen"), Value::NativeFunction(ffi_dlopen, Arity::Arity(1)));
+        e.insert(intern("ffi_dlsym"), Value::NativeFunction(ffi_dlsym, Arity::Arity(2)));
+        e.insert(intern("ffi_call"), Value::NativeFunction(ffi_call, Arity::Arity(4)));
+        e.insert(intern("ffi_func"), Value::NativeFunction(ffi_func, Arity::Arity(3)));
     }
 
-    e.insert(intern("system"), Value::NativeFunction(system));
-    e.insert(intern("file_system"), Value::NativeFunction(file_system));
+    e.insert(intern("system"), Value::NativeFunction(system, Arity::Variadic));
+    e.insert(intern("file_system"), Value::NativeFunction(file_system, Arity::Variadic));
 
-    e.insert(intern("abs"), Value::NativeFunction(math_abs));
-    e.insert(intern("min"), Value::NativeFunction(math_min));
-    e.insert(intern("max"), Value::NativeFunction(math_max));
-    e.insert(intern("sqrt"), Value::NativeFunction(math_sqrt));
-    e.insert(intern("pow"), Value::NativeFunction(math_pow));
-    e.insert(intern("floor"), Value::NativeFunction(math_floor));
-    e.insert(intern("ceil"), Value::NativeFunction(math_ceil));
-    e.insert(intern("round"), Value::NativeFunction(math_round));
-    e.insert(intern("sin"), Value::NativeFunction(math_sin));
-    e.insert(intern("cos"), Value::NativeFunction(math_cos));
-    e.insert(intern("tan"), Value::NativeFunction(math_tan));
-    e.insert(intern("bit_and"), Value::NativeFunction(bit_and));
-    e.insert(intern("bit_or"), Value::NativeFunction(bit_or));
-    e.insert(intern("bit_xor"), Value::NativeFunction(bit_xor));
-    e.insert(intern("bit_not"), Value::NativeFunction(bit_not));
-    e.insert(intern("bit_shl"), Value::NativeFunction(bit_shl));
-    e.insert(intern("bit_shr"), Value::NativeFunction(bit_shr));
+    e.insert(intern("abs"), Value::NativeFunction(math_abs, Arity::Arity(1)));
+    e.insert(intern("min"), Value::NativeFunction(math_min, Arity::Variadic));
+    e.insert(intern("max"), Value::NativeFunction(math_max, Arity::Variadic));
+    e.insert(intern("sqrt"), Value::NativeFunction(math_sqrt, Arity::Arity(1)));
+    e.insert(intern("pow"), Value::NativeFunction(math_pow, Arity::Arity(2)));
+    e.insert(intern("floor"), Value::NativeFunction(math_floor, Arity::Arity(1)));
+    e.insert(intern("ceil"), Value::NativeFunction(math_ceil, Arity::Arity(1)));
+    e.insert(intern("round"), Value::NativeFunction(math_round, Arity::Arity(1)));
+    e.insert(intern("sin"), Value::NativeFunction(math_sin, Arity::Arity(1)));
+    e.insert(intern("cos"), Value::NativeFunction(math_cos, Arity::Arity(1)));
+    e.insert(intern("tan"), Value::NativeFunction(math_tan, Arity::Arity(1)));
+    e.insert(intern("bit_and"), Value::NativeFunction(bit_and, Arity::Variadic));
+    e.insert(intern("bit_or"), Value::NativeFunction(bit_or, Arity::Variadic));
+    e.insert(intern("bit_xor"), Value::NativeFunction(bit_xor, Arity::Variadic));
+    e.insert(intern("bit_not"), Value::NativeFunction(bit_not, Arity::Arity(1)));
+    e.insert(intern("bit_shl"), Value::NativeFunction(bit_shl, Arity::Arity(2)));
+    e.insert(intern("bit_shr"), Value::NativeFunction(bit_shr, Arity::Arity(2)));
 
-    e.insert(intern("string_split"), Value::NativeFunction(string_split));
-    e.insert(intern("string_join"), Value::NativeFunction(string_join));
-    e.insert(intern("string_trim"), Value::NativeFunction(string_trim));
+    e.insert(intern("string_split"), Value::NativeFunction(string_split, Arity::Arity(2)));
+    e.insert(intern("string_join"), Value::NativeFunction(string_join, Arity::Arity(2)));
+    e.insert(intern("string_trim"), Value::NativeFunction(string_trim, Arity::Arity(1)));
     e.insert(
         intern("string_replace"),
-        Value::NativeFunction(string_replace),
+        Value::NativeFunction(string_replace, Arity::Arity(3)),
     );
     e.insert(
         intern("string_upcase"),
-        Value::NativeFunction(string_upcase),
+        Value::NativeFunction(string_upcase, Arity::Arity(1)),
     );
     e.insert(
         intern("string_downcase"),
-        Value::NativeFunction(string_downcase),
+        Value::NativeFunction(string_downcase, Arity::Arity(1)),
     );
-    e.insert(intern("to_string"), Value::NativeFunction(to_string));
-    e.insert(intern("to_int"), Value::NativeFunction(to_int));
-    e.insert(intern("to_float"), Value::NativeFunction(to_float));
-    e.insert(intern("format"), Value::NativeFunction(string_format));
+    e.insert(intern("to_string"), Value::NativeFunction(to_string, Arity::Arity(1)));
+    e.insert(intern("to_int"), Value::NativeFunction(to_int, Arity::Arity(1)));
+    e.insert(intern("to_float"), Value::NativeFunction(to_float, Arity::Arity(1)));
+    e.insert(intern("format"), Value::NativeFunction(string_format, Arity::Variadic));
 
-    e.insert(intern("get_env"), Value::NativeFunction(sys_get_env));
-    e.insert(intern("set_env"), Value::NativeFunction(sys_set_env));
-    e.insert(intern("time_now_ms"), Value::NativeFunction(time_now_ms));
-    e.insert(intern("sleep_ms"), Value::NativeFunction(sleep_ms));
+    e.insert(intern("get_env"), Value::NativeFunction(sys_get_env, Arity::Arity(1)));
+    e.insert(intern("set_env"), Value::NativeFunction(sys_set_env, Arity::Arity(2)));
+    e.insert(intern("time_now_ms"), Value::NativeFunction(time_now_ms, Arity::Arity(0)));
+    e.insert(intern("sleep_ms"), Value::NativeFunction(sleep_ms, Arity::Arity(1)));
 
-    e.insert(intern("co_create"), Value::NativeFunction(co_create));
-    e.insert(intern("co_state"), Value::NativeFunction(co_state));
-    e.insert(intern("co_dead"), Value::NativeFunction(co_dead_p));
+    e.insert(intern("co_create"), Value::NativeFunction(co_create, Arity::Arity(1)));
+    e.insert(intern("co_state"), Value::NativeFunction(co_state, Arity::Arity(1)));
+    e.insert(intern("co_dead"), Value::NativeFunction(co_dead_p, Arity::Arity(1)));
 }
 
 pub fn read_script<P>(script_path: P) -> Result<String>

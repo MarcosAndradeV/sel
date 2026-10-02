@@ -96,7 +96,9 @@ pub fn load_file_sandboxed(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::value::Arity;
+
+use super::*;
 
     #[test]
     fn test_co_yield_colosures() {
@@ -133,7 +135,7 @@ mod tests {
         }
 
         env.borrow_mut()
-            .insert(intern("custom_sum"), Value::NativeFunction(custom_sum));
+            .insert(intern("custom_sum"), Value::NativeFunction(custom_sum, Arity::Variadic));
 
         let res3 = eval("custom_sum(10, 20, 30)", env).unwrap();
         assert!(matches!(res3, Value::Integer(60)));

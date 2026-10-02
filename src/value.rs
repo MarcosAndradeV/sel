@@ -178,6 +178,12 @@ pub struct NominalValue {
 }
 
 #[derive(Debug, Clone)]
+pub enum Arity {
+    Arity(u8),
+    Variadic,
+}
+
+#[derive(Debug, Clone)]
 pub enum Value {
     Nil,
     Integer(i64),
@@ -188,7 +194,7 @@ pub enum Value {
     List(Box<imbl::Vector<Self>>),
     Record(Rc<Record<Self>>),
     Closure(Rc<Closure>),
-    NativeFunction(fn(loc: Loc, args: Vec<Value>) -> Result<Value>),
+    NativeFunction(fn(loc: Loc, args: Vec<Value>) -> Result<Value>, Arity),
     #[allow(unused)]
     NativeClosure(Rc<NativeClosureFn>),
     Macro(Rc<Macro>),
@@ -311,7 +317,8 @@ fn format_value(val: &Value) -> String {
         }
         Value::Closure(_) => "<closure>".to_string(),
         Value::NativeClosure(_) => "<native-closure>".to_string(),
-        Value::NativeFunction { .. } => "<function>".to_string(),
+        Value::NativeFunction(_, Arity::Arity(n)) => format!("<function {n}>"),
+        Value::NativeFunction(_, Arity::Variadic) => "<function ...>".to_string(),
         Value::Macro(_) => "<macro>".to_string(),
         Value::Pointer(p) => format!("<pointer: {:#x}>", p),
         #[cfg(feature = "ffi")]
