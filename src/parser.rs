@@ -28,7 +28,7 @@ type Result<T> = std::result::Result<T, SelError>;
 const KEYWORDS: &[&str] = &[
     "let", "in", "do", "end", "if", "then", "else", "match", "with", "when",
     "try", "catch", "yield", "pub", "import", "as", "true", "false", "nil",
-    "newtype", "derive", "implements", "forany", "where",
+    "newtype", "derive", "implements", "forany", "forall", "where", "trait",
 ];
 
 struct FnClause {
@@ -791,9 +791,11 @@ impl<'a> AltParser<'a> {
         let mut forany_vars = Vec::new();
         let mut constraints = Vec::new();
 
-        if self.match_keyword("forany") {
+        if self.match_keyword("forany")||self.match_keyword("forall") {
             self.advance();
-            self.expect_token(TokenKind::OpenParen, "`(` after forany")?;
+            if self.peek().kind == TokenKind::OpenParen {
+                self.expect_token(TokenKind::OpenParen, "`(` after forany")?;
+            }
             loop {
                 let var_tok = self.expect_token(TokenKind::Identifier, "type variable in forany")?;
                 forany_vars.push(intern(var_tok.source()));
@@ -803,7 +805,9 @@ impl<'a> AltParser<'a> {
                     break;
                 }
             }
-            self.expect_token(TokenKind::CloseParen, "`)` after forany")?;
+            if self.peek().kind == TokenKind::CloseParen {
+                self.expect_token(TokenKind::CloseParen, "`)` after forany")?;
+            }
 
             if self.match_keyword("where") {
                 self.advance();
@@ -952,7 +956,7 @@ impl<'a> AltParser<'a> {
                     "fn" => Ok(TypeExpr::Base(loc, BaseTypeKind::Fn)),
                     _ => {
                         let sym = intern(name);
-                        if forany_vars.contains(&sym) {
+                        if sym == intern("Self") || forany_vars.contains(&sym) {
                             Ok(TypeExpr::Var(loc, sym))
                         } else {
                             Ok(TypeExpr::Nominal(loc, sym))
@@ -1022,11 +1026,57 @@ impl<'a> AltParser<'a> {
         Ok(intern(id_tok.source()))
     }
 
+    fn is_at_trait(&self) -> bool {
+        let mut idx = self.pos;
+        if idx < self.tokens.len() && self.tokens[idx].source() == "pub" {
+            idx += 1;
+        }
+        idx < self.tokens.len() && self.tokens[idx].source() == "trait"
+    }
+
+    fn parse_trait(&mut self) -> Result<Ast> {
+        let loc = self.current_loc();
+        let is_pub = self.eat_keyword("pub");
+        self.expect_keyword("trait")?;
+        let trait_name = self.parse_atom_sym()?;
+        self.expect_token(TokenKind::Assign, "`:=` after trait name")?;
+        self.expect_token(TokenKind::OpenCurly, "`{` for trait methods")?;
+        let mut methods = Vec::new();
+        while self.peek().kind != TokenKind::CloseCurly && !self.at_eof() {
+            let m_name_tok = self.expect_token(TokenKind::Identifier, "trait method name")?;
+            let m_name = intern(m_name_tok.source());
+            self.expect_token(TokenKind::Colon, "`:` after method name")?;
+            let m_ty = self.parse_fn_type(&[])?;
+            methods.push((m_name, m_ty));
+            if self.peek().kind == TokenKind::Comma {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        self.expect_token(TokenKind::CloseCurly, "`}` after trait methods")?;
+        let ast = Ast::Trait(loc, trait_name, methods);
+        if is_pub {
+            Ok(Ast::Begin(
+                loc,
+                vec![
+                    Ast::VisibilityDirective(loc, true),
+                    ast,
+                    Ast::VisibilityDirective(loc, false),
+                ],
+            ))
+        } else {
+            Ok(ast)
+        }
+    }
+
     pub fn parse_statement(&mut self) -> Result<Ast> {
         if self.is_at_type_signature() {
             self.parse_type_signature_def()
         } else if self.is_at_newtype() {
             self.parse_newtype()
+        } else if self.is_at_trait() {
+            self.parse_trait()
         } else if self.is_at_derive() {
             self.parse_derive()
         } else if self.is_at_implements() {

@@ -40,3 +40,37 @@ println("Nominal equality f1 == f3:", f1 == f3)
 // Passing Foo instances into trait-bounded generic function `unique`
 unique_foos := unique([f1, f2, f3])
 println("Unique Foo count:", count(unique_foos))
+
+// 4. User-Defined Traits with multi-method dispatch & pipelines
+pub trait :geometry := {
+    area: Self -> float,
+    perimeter: Self -> float
+}
+
+newtype Circle := { radius: float }
+newtype Rectangle := { width: float, height: float }
+
+implements(Circle, :geometry, {
+    area: \c -> 3.14159 * c.radius * c.radius,
+    perimeter: \c -> 2.0 * 3.14159 * c.radius
+})
+
+implements(Rectangle, :geometry, {
+    area: \r -> r.width * r.height,
+    perimeter: \r -> 2.0 * (r.width + r.height)
+})
+
+c := Circle({ radius: 5.0 })
+r := Rectangle({ width: 4.0, height: 6.0 })
+
+println("Circle area:", area(c))
+println("Rectangle area:", area(r))
+println("Circle perimeter via pipeline:", c |> perimeter)
+println("Rectangle perimeter via pipeline:", r |> perimeter)
+
+// Generic function bounded by user-defined trait
+describe_shape :: forany(A) where implements(A, :geometry) : A -> string
+describe_shape shape := format("Shape area={}, perimeter={}", area(shape), perimeter(shape))
+
+println(describe_shape(c))
+println(describe_shape(r))

@@ -966,6 +966,46 @@ impl<'a> Compiler<'a> {
                 let idx = self.chunk.add_constant(Value::Nil);
                 self.chunk.write((loc, OpCode::Constant(idx)));
             }
+            Ast::Trait(loc, trait_name, methods) => {
+                for (method_sym, method_ty) in &methods {
+                    let arity = if let TypeExpr::Function(_, params, _) = method_ty {
+                        params.len() as u8
+                    } else {
+                        1u8
+                    };
+
+                    let mut child_chunk = Chunk::new();
+                    child_chunk.name = Some(*method_sym);
+                    let mut child_compiler = Compiler::new(&mut child_chunk);
+                    let mut param_syms = Vec::with_capacity(arity as usize);
+
+                    for i in 0..arity {
+                        let arg_sym = intern(&format!("arg_{}", i));
+                        param_syms.push(arg_sym);
+                        child_compiler.locals.push(Local {
+                            name: arg_sym,
+                            depth: 0,
+                        });
+                        child_compiler.chunk.write((loc, OpCode::LoadLocal(i)));
+                    }
+
+                    child_compiler.chunk.write((loc, OpCode::DispatchTraitMethod(trait_name, *method_sym, arity)));
+                    child_compiler.chunk.write((loc, OpCode::Return));
+
+                    let stub = Value::Closure(Rc::new(Closure::new(
+                        Some(*method_sym),
+                        param_syms,
+                        Rc::new(child_chunk),
+                        Rc::new(RefCell::new(Env::default())),
+                    )));
+                    let idx = self.chunk.add_constant(stub);
+                    self.chunk.write((loc, OpCode::MakeClosure(idx)));
+                    self.chunk.write((loc, OpCode::DefVar(*method_sym)));
+                }
+
+                let idx = self.chunk.add_constant(Value::Nil);
+                self.chunk.write((loc, OpCode::Constant(idx)));
+            }
         }
         Ok(())
     }
@@ -1108,6 +1148,7 @@ pub enum OpCode {
     RecordGet(u32),
     MakeNominal(u32),
     RegisterImpl(u32, u32),
+    DispatchTraitMethod(u32, u32, u8),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1351,6 +1392,12 @@ impl Chunk {
                 self.code.push(56);
                 self.code.extend_from_slice(&type_name.to_le_bytes());
                 self.code.extend_from_slice(&trait_name.to_le_bytes());
+            }
+            OpCode::DispatchTraitMethod(trait_name, method_name, arity) => {
+                self.code.push(57);
+                self.code.extend_from_slice(&trait_name.to_le_bytes());
+                self.code.extend_from_slice(&method_name.to_le_bytes());
+                self.code.push(arity);
             }
         }
     }

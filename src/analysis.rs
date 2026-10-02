@@ -623,6 +623,7 @@ pub fn analyze_ast(ast: &Ast, warnings: &mut Vec<SelWarning>) {
         Ast::TypeSignature(..)
         | Ast::Newtype(..)
         | Ast::Derive(..)
+        | Ast::Trait(..)
         | Ast::Import(..)
         | Ast::Bind(..)
         | Ast::Nil(..)

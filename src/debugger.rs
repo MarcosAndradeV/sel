@@ -612,6 +612,12 @@ pub fn ast_to_graph(ast: &Ast) -> AstGraphNode {
             loc: *loc,
             children: vec![ast_to_graph(handler)],
         },
+        Ast::Trait(loc, name, _) => AstGraphNode {
+            name: "Trait".into(),
+            detail: Some(format!("trait :{}", lookup(*name))),
+            loc: *loc,
+            children: vec![],
+        },
     }
 }
 

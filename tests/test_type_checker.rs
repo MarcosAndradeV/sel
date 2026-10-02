@@ -176,3 +176,134 @@ x := "string" :: int
         panic!("Expected TypeError, got {:?}", res);
     }
 }
+
+#[test]
+fn test_user_trait_definition_and_valid_implementation() {
+    let src = r#"
+trait :geometry := {
+    area: Self -> float,
+    perimeter: Self -> float
+}
+
+newtype Circle := { radius: float }
+
+implements(Circle, :geometry, {
+    area: \c -> 3.14159 * c.radius * c.radius,
+    perimeter: \c -> 2.0 * 3.14159 * c.radius
+})
+
+c := Circle({ radius: 10.0 })
+res := area(c)
+"#;
+    assert!(check_code(src).is_ok());
+}
+
+#[test]
+fn test_user_trait_missing_method_fails() {
+    let src = r#"
+trait :geometry := {
+    area: Self -> float,
+    perimeter: Self -> float
+}
+
+newtype Circle := { radius: float }
+
+implements(Circle, :geometry, {
+    area: \c -> 3.14159 * c.radius * c.radius
+})
+"#;
+    let res = check_code(src);
+    assert!(res.is_err());
+    if let Err(SelError::TypeError(_, msg)) = res {
+        assert!(msg.contains("missing required method `perimeter`"));
+    } else {
+        panic!("Expected TypeError, got {:?}", res);
+    }
+}
+
+#[test]
+fn test_user_trait_extra_method_fails() {
+    let src = r#"
+trait :geometry := {
+    area: Self -> float
+}
+
+newtype Circle := { radius: float }
+
+implements(Circle, :geometry, {
+    area: \c -> 3.14159 * c.radius * c.radius,
+    volume: \c -> 0.0
+})
+"#;
+    let res = check_code(src);
+    assert!(res.is_err());
+    if let Err(SelError::TypeError(_, msg)) = res {
+        assert!(msg.contains("not declared in trait :geometry"));
+    } else {
+        panic!("Expected TypeError, got {:?}", res);
+    }
+}
+
+#[test]
+fn test_user_trait_non_implementing_type_call_fails() {
+    let src = r#"
+trait :geometry := {
+    area: Self -> float
+}
+
+newtype Circle := { radius: float }
+
+implements(Circle, :geometry, {
+    area: \c -> 3.14159 * c.radius * c.radius
+})
+
+newtype Person := { name: string }
+
+res := area(Person({ name: "Alice" }))
+"#;
+    let res = check_code(src);
+    assert!(res.is_err());
+    if let Err(SelError::TypeError(_, msg)) = res {
+        assert!(msg.contains("does not implement required trait `:geometry`"), "actual msg: {}", msg);
+    } else {
+        panic!("Expected TypeError, got {:?}", res);
+    }
+}
+
+#[test]
+fn test_user_trait_single_method_shorthand_success() {
+    let src = r#"
+trait :printable := {
+    to_string: Self -> string
+}
+
+newtype User := { name: string }
+
+implements(User, :printable, \u -> u.name)
+
+u := User({ name: "Alice" })
+res := to_string(u)
+"#;
+    assert!(check_code(src).is_ok());
+}
+
+#[test]
+fn test_user_trait_single_method_shorthand_on_multi_method_trait_fails() {
+    let src = r#"
+trait :geometry := {
+    area: Self -> float,
+    perimeter: Self -> float
+}
+
+newtype Circle := { radius: float }
+
+implements(Circle, :geometry, \c -> 1.0)
+"#;
+    let res = check_code(src);
+    assert!(res.is_err());
+    if let Err(SelError::TypeError(_, msg)) = res {
+        assert!(msg.contains("must provide a record of methods"));
+    } else {
+        panic!("Expected TypeError, got {:?}", res);
+    }
+}

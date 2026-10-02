@@ -175,13 +175,23 @@ impl Type {
     }
 }
 
+/// Trait definition in SEL.
+#[derive(Debug, Clone)]
+pub struct TraitDef {
+    pub loc: Loc,
+    pub name: u32,
+    pub methods: Vec<(u32, TypeExpr)>,
+}
+
 /// Static Type Environment for a module compilation unit.
 #[derive(Debug, Clone, Default)]
 pub struct TypeEnv {
     pub newtypes: FxHashMap<u32, Type>,
     pub signatures: FxHashMap<u32, TypeSignature>,
+    pub traits: FxHashMap<u32, TraitDef>,
     pub trait_derives: FxHashSet<(u32, u32)>,
     pub trait_impls: FxHashMap<(u32, u32), Ast>,
+    pub type_var_bounds: FxHashMap<u32, FxHashSet<u32>>,
     pub scopes: Vec<FxHashMap<u32, Type>>,
     pub is_typed_module: bool,
 }
@@ -231,8 +241,29 @@ impl TypeEnv {
     pub fn implements_trait(&self, ty: &Type, trait_name: u32) -> bool {
         let tr_name = lookup(trait_name);
         match ty {
+            Type::Var(id) => {
+                if let Some(bounds) = self.type_var_bounds.get(id) {
+                    bounds.contains(&trait_name)
+                } else {
+                    false
+                }
+            }
             Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Symbol | Type::Nil => {
-                tr_name == "comparable" || tr_name == "showable" || tr_name == "hashable"
+                let sym_name = match ty {
+                    Type::Int => "int",
+                    Type::Float => "float",
+                    Type::Bool => "bool",
+                    Type::String => "string",
+                    Type::Char => "char",
+                    Type::Symbol => "symbol",
+                    Type::Nil => "nil",
+                    _ => unreachable!(),
+                };
+                let sym_id = crate::types::intern(sym_name);
+                self.trait_impls.contains_key(&(sym_id, trait_name))
+                    || tr_name == "comparable"
+                    || tr_name == "showable"
+                    || tr_name == "hashable"
             }
             Type::List(elem) => {
                 if tr_name == "comparable" {
@@ -298,7 +329,8 @@ fn scan_has_types(ast: &Ast, has_types: &mut bool) {
         | Ast::TypeAssert(..)
         | Ast::Newtype(..)
         | Ast::Derive(..)
-        | Ast::Implements(..) => {
+        | Ast::Implements(..)
+        | Ast::Trait(..) => {
             *has_types = true;
         }
         Ast::Define(_, _, val)
@@ -396,6 +428,29 @@ fn collect_declarations(ast: &Ast, env: &mut TypeEnv) -> Result<(), SelError> {
         Ast::Derive(_, name, tr) => {
             env.trait_derives.insert((*name, *tr));
         }
+        Ast::Trait(loc, name, methods) => {
+            env.traits.insert(
+                *name,
+                TraitDef {
+                    loc: *loc,
+                    name: *name,
+                    methods: methods.clone(),
+                },
+            );
+            for (m_name, m_ty) in methods {
+                let sig = TypeSignature {
+                    loc: *loc,
+                    forany_vars: vec![crate::types::intern("Self")],
+                    constraints: vec![TraitConstraint {
+                        loc: *loc,
+                        type_var: crate::types::intern("Self"),
+                        trait_name: *name,
+                    }],
+                    fn_type: m_ty.clone(),
+                };
+                env.signatures.insert(*m_name, sig);
+            }
+        }
         Ast::Implements(_, name, tr, handler) => {
             env.trait_impls.insert((*name, *tr), *handler.clone());
         }
@@ -439,9 +494,14 @@ pub fn typecheck_ast(ast: &Ast, env: &mut TypeEnv) -> Result<Type, SelError> {
         Ast::TypeSignature(..)
         | Ast::Newtype(..)
         | Ast::Derive(..)
-        | Ast::Implements(..)
+        | Ast::Trait(..)
         | Ast::Import(..)
         | Ast::VisibilityDirective(..) => Ok(Type::Nil),
+
+        Ast::Implements(loc, type_name, trait_name, handler) => {
+            validate_implements(*loc, *type_name, *trait_name, handler, env)?;
+            Ok(Type::Nil)
+        }
 
         Ast::Integer(..) => Ok(Type::Int),
         Ast::Float(..) => Ok(Type::Float),
@@ -738,8 +798,7 @@ fn bind_pattern_types(pat: &Pattern, env: &mut TypeEnv) {
     }
 }
 
-fn check_with_signature(ast: &Ast, sig: &TypeSignature, env: &mut TypeEnv) -> Result<(), SelError> {
-    let fn_ty = Type::from_ast(&sig.fn_type);
+fn check_with_function_type(ast: &Ast, fn_ty: &Type, env: &mut TypeEnv) -> Result<(), SelError> {
     if let Type::Function(expected_params, expected_ret) = fn_ty {
         match ast {
             Ast::Lambda(loc, _, params, body) => {
@@ -763,7 +822,7 @@ fn check_with_signature(ast: &Ast, sig: &TypeSignature, env: &mut TypeEnv) -> Re
                 }
                 env.exit_scope();
 
-                if !actual_ret.is_assignable_to(&expected_ret, env) {
+                if !actual_ret.is_assignable_to(expected_ret, env) {
                     return Err(SelError::TypeError(
                         *loc,
                         format!(
@@ -775,7 +834,7 @@ fn check_with_signature(ast: &Ast, sig: &TypeSignature, env: &mut TypeEnv) -> Re
             }
             _ => {
                 let actual = typecheck_ast(ast, env)?;
-                if !actual.is_assignable_to(&Type::Function(expected_params, expected_ret.clone()), env) {
+                if !actual.is_assignable_to(fn_ty, env) {
                     return Err(SelError::TypeError(
                         ast.loc(),
                         format!(
@@ -784,6 +843,101 @@ fn check_with_signature(ast: &Ast, sig: &TypeSignature, env: &mut TypeEnv) -> Re
                         ),
                     ));
                 }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_with_signature(ast: &Ast, sig: &TypeSignature, env: &mut TypeEnv) -> Result<(), SelError> {
+    let fn_ty = Type::from_ast(&sig.fn_type);
+    let old_bounds = env.type_var_bounds.clone();
+    for c in &sig.constraints {
+        env.type_var_bounds
+            .entry(c.type_var)
+            .or_default()
+            .insert(c.trait_name);
+    }
+    let res = check_with_function_type(ast, &fn_ty, env);
+    env.type_var_bounds = old_bounds;
+    res
+}
+
+fn validate_implements(
+    loc: Loc,
+    type_name: u32,
+    trait_name: u32,
+    handler: &Ast,
+    env: &mut TypeEnv,
+) -> Result<(), SelError> {
+    let target_ty = if env.newtypes.contains_key(&type_name) {
+        Type::Nominal(type_name)
+    } else {
+        match lookup(type_name).as_str() {
+            "int" => Type::Int,
+            "float" => Type::Float,
+            "bool" => Type::Bool,
+            "string" => Type::String,
+            "char" => Type::Char,
+            "symbol" => Type::Symbol,
+            "nil" => Type::Nil,
+            _ => Type::Nominal(type_name),
+        }
+    };
+
+    if let Some(trait_def) = env.traits.get(&trait_name).cloned() {
+        match handler {
+            Ast::Record(rec_loc, fields) => {
+                for (expected_m_name, expected_m_ty_expr) in &trait_def.methods {
+                    if let Some((_, m_ast)) = fields.iter().find(|(k, _)| k == expected_m_name) {
+                        let expected_fn_ty = Type::from_ast(expected_m_ty_expr);
+                        let mut subs = FxHashMap::default();
+                        subs.insert(crate::types::intern("Self"), target_ty.clone());
+                        let substituted_ty = substitute(&expected_fn_ty, &subs);
+                        check_with_function_type(m_ast, &substituted_ty, env)?;
+                    } else {
+                        return Err(SelError::TypeError(
+                            loc,
+                            format!(
+                                "Implementation of :{} for {} is missing required method `{}`",
+                                lookup(trait_name),
+                                lookup(type_name),
+                                lookup(*expected_m_name)
+                            ),
+                        ));
+                    }
+                }
+
+                for (f_name, _) in fields {
+                    if !trait_def.methods.iter().any(|(m, _)| m == f_name) {
+                        return Err(SelError::TypeError(
+                            *rec_loc,
+                            format!(
+                                "Method `{}` is not declared in trait :{}",
+                                lookup(*f_name),
+                                lookup(trait_name)
+                            ),
+                        ));
+                    }
+                }
+            }
+            _ => {
+                if trait_def.methods.len() != 1 {
+                    return Err(SelError::TypeError(
+                        loc,
+                        format!(
+                            "Trait :{} defines {} methods; implementation must provide a record of methods",
+                            lookup(trait_name),
+                            trait_def.methods.len()
+                        ),
+                    ));
+                }
+                let (_, expected_m_ty_expr) = &trait_def.methods[0];
+                let expected_fn_ty = Type::from_ast(expected_m_ty_expr);
+                let mut subs = FxHashMap::default();
+                subs.insert(crate::types::intern("Self"), target_ty);
+                let substituted_ty = substitute(&expected_fn_ty, &subs);
+                check_with_function_type(handler, &substituted_ty, env)?;
             }
         }
     }

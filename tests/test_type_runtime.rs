@@ -162,3 +162,112 @@ fn test_modern_value_formatting() {
     assert_eq!(format!("{res}"), "[nil, true, false, [1, 2, 3], { c: 10 }]");
 }
 
+#[test]
+fn test_runtime_user_trait_single_and_multi_methods() {
+    let env = test_env();
+    let src = r#"
+trait :geometry := {
+    area: Self -> float,
+    perimeter: Self -> float
+}
+
+newtype Circle := { radius: float }
+
+implements(Circle, :geometry, {
+    area: \c -> 3.14159 * c.radius * c.radius,
+    perimeter: \c -> 2.0 * 3.14159 * c.radius
+})
+
+c := Circle({ radius: 10.0 })
+[area(c), perimeter(c), c |> area]
+"#;
+    let res = eval(src, env).expect("eval should succeed");
+    if let Value::List(vec) = res {
+        assert_eq!(vec.len(), 3);
+        if let Value::Float(a) = vec[0] {
+            assert!((a - 314.159).abs() < 1e-4);
+        } else {
+            panic!("Expected float area, got {:?}", vec[0]);
+        }
+        if let Value::Float(p) = vec[1] {
+            assert!((p - 62.8318).abs() < 1e-4);
+        } else {
+            panic!("Expected float perimeter, got {:?}", vec[1]);
+        }
+        if let Value::Float(pipe_a) = vec[2] {
+            assert!((pipe_a - 314.159).abs() < 1e-4);
+        } else {
+            panic!("Expected float pipeline area, got {:?}", vec[2]);
+        }
+    } else {
+        panic!("Expected list, got {:?}", res);
+    }
+}
+
+#[test]
+fn test_runtime_user_trait_polymorphic_dispatch() {
+    let env = test_env();
+    let src = r#"
+trait :geometry := {
+    area: Self -> float,
+    perimeter: Self -> float
+}
+
+newtype Circle := { radius: float }
+newtype Rectangle := { width: float, height: float }
+
+implements(Circle, :geometry, {
+    area: \c -> 3.14159 * c.radius * c.radius,
+    perimeter: \c -> 2.0 * 3.14159 * c.radius
+})
+
+implements(Rectangle, :geometry, {
+    area: \r -> r.width * r.height,
+    perimeter: \r -> 2.0 * (r.width + r.height)
+})
+
+c := Circle({ radius: 10.0 })
+r := Rectangle({ width: 5.0, height: 4.0 })
+
+[area(c), area(r), perimeter(c), perimeter(r)]
+"#;
+    let res = eval(src, env).expect("eval should succeed");
+    if let Value::List(vec) = res {
+        assert_eq!(vec.len(), 4);
+        if let Value::Float(a_c) = vec[0] {
+            assert!((a_c - 314.159).abs() < 1e-4);
+        }
+        if let Value::Float(a_r) = vec[1] {
+            assert!((a_r - 20.0).abs() < 1e-4);
+        }
+        if let Value::Float(p_c) = vec[2] {
+            assert!((p_c - 62.8318).abs() < 1e-4);
+        }
+        if let Value::Float(p_r) = vec[3] {
+            assert!((p_r - 18.0).abs() < 1e-4);
+        }
+    } else {
+        panic!("Expected list, got {:?}", res);
+    }
+}
+
+#[test]
+fn test_runtime_user_trait_single_method_shorthand() {
+    let env = test_env();
+    let src = r#"
+trait :printable := {
+    to_string: Self -> string
+}
+
+newtype User := { name: string }
+
+implements(User, :printable, \u -> format("User({})", u.name))
+
+u := User({ name: "Alice" })
+to_string(u)
+"#;
+    let res = eval(src, env).expect("eval should succeed");
+    assert_eq!(res.to_string_lossy(), Some("User(Alice)".to_string()));
+}
+
+

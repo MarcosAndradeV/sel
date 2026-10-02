@@ -1401,6 +1401,60 @@ impl VM {
                     })?;
                     register_trait_impl(type_name, trait_name, handler);
                 }
+                57 => {
+                    let trait_name = read_u32(frame);
+                    let method_name = read_u32(frame);
+                    let arity = read_u8(frame) as usize;
+                    if self.stack.len() < arity {
+                        return Err(SelError::Runtime(frame.loc, "Stack underflow in DispatchTraitMethod".into()));
+                    }
+                    let mut args = Vec::with_capacity(arity);
+                    for _ in 0..arity {
+                        args.push(self.stack.pop().unwrap());
+                    }
+                    args.reverse();
+
+                    let receiver = &args[0];
+                    let type_id = match receiver {
+                        Value::Nominal(nom) => nom.type_id,
+                        Value::Integer(_) => intern("int"),
+                        Value::Float(_) => intern("float"),
+                        Value::Boolean(_) => intern("bool"),
+                        Value::String(_) => intern("string"),
+                        Value::Char(_) => intern("char"),
+                        Value::Symbol(_) => intern("symbol"),
+                        Value::List(_) => intern("list"),
+                        Value::Record(_) => intern("record"),
+                        Value::Nil => intern("nil"),
+                        _ => intern("any"),
+                    };
+
+                    let method_handler = get_trait_method(type_id, trait_name, method_name)
+                        .or_else(|| get_trait_impl(type_id, trait_name));
+
+                    if let Some(handler) = method_handler {
+                        match handler {
+                            Value::Closure(closure) => {
+                                let res = call_closure(frame.loc, &closure, args)?;
+                                self.stack.push(res);
+                            }
+                            _ => return Err(SelError::TypeError(
+                                frame.loc,
+                                format!("Trait method `{}` is not a function", lookup(method_name)),
+                            )),
+                        }
+                    } else {
+                        return Err(SelError::Runtime(
+                            frame.loc,
+                            format!(
+                                "Type `{}` does not implement method `{}` of trait `:{}`",
+                                lookup(type_id),
+                                lookup(method_name),
+                                lookup(trait_name)
+                            ),
+                        ));
+                    }
+                }
                 _ => unreachable!(),
             }
         Ok(None)
@@ -1417,9 +1471,27 @@ impl VM {
 
 thread_local! {
     pub static TRAIT_IMPLS: RefCell<FxHashMap<(u32, u32), Value>> = RefCell::new(FxHashMap::default());
+    pub static TRAIT_METHODS: RefCell<FxHashMap<(u32, u32, u32), Value>> = RefCell::new(FxHashMap::default());
+}
+
+pub fn register_trait_method(type_id: u32, trait_id: u32, method_id: u32, handler: Value) {
+    TRAIT_METHODS.with(|m| {
+        m.borrow_mut().insert((type_id, trait_id, method_id), handler);
+    });
+}
+
+pub fn get_trait_method(type_id: u32, trait_id: u32, method_id: u32) -> Option<Value> {
+    TRAIT_METHODS.with(|m| {
+        m.borrow().get(&(type_id, trait_id, method_id)).cloned()
+    })
 }
 
 pub fn register_trait_impl(type_id: u32, trait_id: u32, handler: Value) {
+    if let Value::Record(ref rec) = handler {
+        for (&sym, val) in rec.fields().iter() {
+            register_trait_method(type_id, trait_id, sym, val.clone());
+        }
+    }
     TRAIT_IMPLS.with(|m| {
         m.borrow_mut().insert((type_id, trait_id), handler);
     });
@@ -1455,7 +1527,10 @@ pub fn call_closure(loc: Loc, closure: &Rc<Closure>, args: Vec<Value>) -> Result
 pub fn format_value_with_traits(loc: Loc, val: &Value) -> Result<String> {
     if let Value::Nominal(nom) = val {
         let showable_sym = intern("showable");
-        if let Some(handler) = get_trait_impl(nom.type_id, showable_sym) {
+        let handler = get_trait_impl(nom.type_id, showable_sym)
+            .or_else(|| get_trait_method(nom.type_id, intern("printable"), intern("to_string")))
+            .or_else(|| get_trait_impl(nom.type_id, intern("printable")));
+        if let Some(handler) = handler {
             if let Value::Closure(closure) = handler {
                 let res = call_closure(loc, &closure, vec![val.clone()])?;
                 if let Some(s) = res.to_string_lossy() {

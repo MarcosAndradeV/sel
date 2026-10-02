@@ -178,6 +178,7 @@ pub enum Ast {
     Newtype(Loc, u32, TypeExpr),
     Derive(Loc, u32, u32),
     Implements(Loc, u32, u32, Box<Ast>),
+    Trait(Loc, u32, Vec<(u32, TypeExpr)>),
     Define(Loc, u32, Box<Ast>),
     DefMacro(Loc, u32, Box<Ast>),
     Import(Loc, u32, Option<u32>),
@@ -262,6 +263,7 @@ impl Ast {
             Ast::Newtype(loc, ..) => *loc,
             Ast::Derive(loc, ..) => *loc,
             Ast::Implements(loc, ..) => *loc,
+            Ast::Trait(loc, ..) => *loc,
         }
     }
 }
@@ -320,6 +322,9 @@ impl std::fmt::Display for Ast {
             Ast::Derive(_, name, tr) => write!(f, "derive({}, :{})", lookup(*name), lookup(*tr)),
             Ast::Implements(_, name, tr, _) => {
                 write!(f, "implements({}, :{}, ...)", lookup(*name), lookup(*tr))
+            }
+            Ast::Trait(_, name, _) => {
+                write!(f, "trait :{} := {{ ... }}", lookup(*name))
             }
         }
     }
@@ -590,6 +595,16 @@ pub fn ast_to_value(ast: Ast) -> (Loc, Value) {
                 ast_to_value(*handler).1,
             ]),
         ),
+        Ast::Trait(loc, id, methods) => {
+            let mut list = vec![Value::Symbol(intern("trait")), Value::Symbol(id)];
+            for (m_name, m_ty) in methods {
+                list.push(Value::make_list(vec![
+                    Value::Symbol(m_name),
+                    Value::make_string(&m_ty.to_string()),
+                ]));
+            }
+            (loc, Value::make_list(list))
+        }
     }
 }
 

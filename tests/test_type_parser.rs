@@ -154,3 +154,56 @@ fn test_parse_inline_type_assert() {
         panic!("Expected Define, got {:?}", asts[0]);
     }
 }
+
+#[test]
+fn test_parse_single_and_multi_method_traits() {
+    let mut diags = Vec::new();
+    let src = r#"
+trait :printable := {
+    to_string: Self -> string
+}
+
+pub trait :geometry := {
+    area: Self -> float,
+    perimeter: Self -> float
+}
+"#;
+    let asts = parse_all(src, intern("<test>"), &mut diags);
+    assert!(diags.is_empty(), "diags: {:?}", diags);
+    assert_eq!(asts.len(), 2);
+
+    // 1. trait :printable := { to_string: Self -> string }
+    if let Ast::Trait(_, name, methods) = &asts[0] {
+        assert_eq!(lookup(*name), "printable");
+        assert_eq!(methods.len(), 1);
+        assert_eq!(lookup(methods[0].0), "to_string");
+        if let TypeExpr::Function(_, params, ret) = &methods[0].1 {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0], TypeExpr::Var(params[0].loc(), intern("Self")));
+            assert_eq!(&**ret, &TypeExpr::Base(ret.loc(), BaseTypeKind::String));
+        } else {
+            panic!("Expected function type for method, got {:?}", methods[0].1);
+        }
+    } else {
+        panic!("Expected Ast::Trait, got {:?}", asts[0]);
+    }
+
+    // 2. pub trait :geometry := { area: Self -> float, perimeter: Self -> float }
+    // Wrapped in Ast::Begin with VisibilityDirective
+    if let Ast::Begin(_, items) = &asts[1] {
+        assert_eq!(items.len(), 3);
+        assert!(matches!(items[0], Ast::VisibilityDirective(_, true)));
+        if let Ast::Trait(_, name, methods) = &items[1] {
+            assert_eq!(lookup(*name), "geometry");
+            assert_eq!(methods.len(), 2);
+            assert_eq!(lookup(methods[0].0), "area");
+            assert_eq!(lookup(methods[1].0), "perimeter");
+        } else {
+            panic!("Expected Ast::Trait inside pub Begin, got {:?}", items[1]);
+        }
+        assert!(matches!(items[2], Ast::VisibilityDirective(_, false)));
+    } else {
+        panic!("Expected Ast::Begin for pub trait, got {:?}", asts[1]);
+    }
+}
+
